@@ -6,7 +6,7 @@
     "strict": true,
     "isolatedModules": true,
     "skipLibCheck": true,
-    "types": [],
+    "types": ["jest"],
     // Built only for the api's compiled runtime; api tests and mobile read src
     "declaration": true,
     "rootDir": "src",
