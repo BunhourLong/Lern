@@ -13,7 +13,8 @@ concurrency:
 
 jobs:
   checks:
-    runs-on: ubuntu-latest
+    # Pinned so runner OS upgrades land in a commit, not silently via ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     steps:
       # Actions pinned by commit SHA so a moved tag can't change what runs
