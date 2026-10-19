@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { PostgreSqlContainer } from '@testcontainers/postgresql';
@@ -20,6 +21,7 @@ export default async function globalSetup(): Promise<void> {
   process.env.DATABASE_URL = pg.getConnectionUri();
   process.env.REDIS_URL = redis.getConnectionUrl();
   process.env.OTP_PROVIDER = 'dev';
+  process.env.JWT_SECRET = randomBytes(48).toString('base64');
 
   const ds = await createDataSource(process.env.DATABASE_URL).initialize();
   try {

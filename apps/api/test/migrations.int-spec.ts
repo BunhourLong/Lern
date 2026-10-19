@@ -23,15 +23,21 @@ it('runs every migration up, down and up again', async () => {
   const ds = await createDataSource(url.toString()).initialize();
   const hasPostgis = async () =>
     (await ds.query<unknown[]>(`SELECT 1 FROM pg_extension WHERE extname = 'postgis'`)).length === 1;
+  const tables = async () =>
+    (await ds.query<{ t: string }[]>(`SELECT to_regclass(t)::text AS t FROM unnest($1::text[]) t`, [['users', 'refresh_tokens']]))
+      .map((r) => r.t)
+      .filter(Boolean);
 
   try {
     expect(ds.migrations.length).toBeGreaterThan(0);
 
     await ds.runMigrations();
     expect(await hasPostgis()).toBe(true);
+    expect(await tables()).toEqual(['users', 'refresh_tokens']);
 
     for (let i = 0; i < ds.migrations.length; i++) await ds.undoLastMigration();
     expect(await hasPostgis()).toBe(false);
+    expect(await tables()).toEqual([]);
 
     await ds.runMigrations();
     expect(await hasPostgis()).toBe(true);

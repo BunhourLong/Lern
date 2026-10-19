@@ -5,3 +5,6 @@ export const phoneSchema = z.string().regex(/^\+855[1-9]\d{7,8}$/, 'Expected a C
 
 export const requestOtpSchema = z.object({ phone: phoneSchema });
 export type RequestOtp = z.infer<typeof requestOtpSchema>;
+
+export const verifyOtpSchema = z.object({ phone: phoneSchema, code: z.string().regex(/^\d{6}$/) });
+export type VerifyOtp = z.infer<typeof verifyOtpSchema>;

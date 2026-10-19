@@ -21,7 +21,7 @@ export class AppModule {
         TypeOrmModule.forRoot(dataSourceOptions(config.DATABASE_URL)),
         RedisModule.forRoot(config.REDIS_URL),
         HealthModule,
-        AuthModule,
+        AuthModule.forRoot(config.JWT_SECRET),
       ],
       // Request DTOs are validated, and @ZodSerializerDto responses checked, against packages/contracts
       providers: [
