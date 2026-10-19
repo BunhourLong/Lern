@@ -1,0 +1,14 @@
+# Private planning docs: kept local, graphed by graphify (see .graphifyignore)
+CLAUDE.md
+PLAN.md
+MEMORY.md
+
+# graph.json embeds the private docs above, so the graph stays local too
+graphify-out/
+
+node_modules/
+dist/
+coverage/
+.env*
+!.env.example
+.DS_Store

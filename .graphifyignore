@@ -1,0 +1,14 @@
+# Native/vendor scaffolding and build output — keep the graph on app + API source
+Lern/ios/
+Lern/android/
+Lern/vendor/
+*.lock
+package-lock.json
+pnpm-lock.yaml
+
+# Secrets never go into the graph
+.env*
+
+# Re-include planning docs that .gitignore hides from git
+!CLAUDE.md
+!PLAN.md
