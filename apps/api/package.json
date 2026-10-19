@@ -5,21 +5,25 @@
   "scripts": {
     "test": "jest --selectProjects unit --passWithNoTests",
     "test:integration": "jest --selectProjects integration",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint ."
   },
   "dependencies": {
     "ioredis": "6.0.0",
     "pg": "8.23.1"
   },
   "devDependencies": {
+    "@eslint/js": "10.0.1",
     "@testcontainers/postgresql": "12.2.1",
     "@testcontainers/redis": "12.2.1",
     "@types/jest": "30.0.0",
     "@types/node": "24.19.2",
     "@types/pg": "8.23.1",
+    "eslint": "10.13.0",
     "jest": "30.5.2",
     "testcontainers": "12.2.1",
     "ts-jest": "29.4.15",
-    "typescript": "6.0.3"
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.71.2"
   }
 }
