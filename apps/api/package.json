@@ -17,6 +17,7 @@
     "@lern/contracts": "workspace:*",
     "@nestjs/common": "11.2.7",
     "@nestjs/core": "11.2.7",
+    "@nestjs/jwt": "11.0.2",
     "@nestjs/platform-express": "11.2.7",
     "@nestjs/typeorm": "11.0.3",
     "ioredis": "6.0.0",

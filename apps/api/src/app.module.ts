@@ -3,10 +3,11 @@ import { APP_INTERCEPTOR, APP_PIPE } from '@nestjs/core';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { LoggerModule } from 'nestjs-pino';
 import { ZodSerializerInterceptor, ZodValidationPipe } from 'nestjs-zod';
+import { AuthModule } from './auth/auth.module';
 import { HealthModule } from './health/health.module';
 import type { Config } from './shared/config/env';
 import { dataSourceOptions } from './shared/database/database';
-import { requestId } from './shared/logging/request-id';
+import { httpLoggerOptions } from './shared/logging/http-logger';
 import { RedisModule } from './shared/redis/redis.module';
 
 // Composition only: wires infrastructure and feature modules, holds no logic
@@ -16,10 +17,11 @@ export class AppModule {
     return {
       module: AppModule,
       imports: [
-        LoggerModule.forRoot({ pinoHttp: { level: config.LOG_LEVEL, genReqId: requestId } }),
+        LoggerModule.forRoot({ pinoHttp: httpLoggerOptions(config.LOG_LEVEL) }),
         TypeOrmModule.forRoot(dataSourceOptions(config.DATABASE_URL)),
         RedisModule.forRoot(config.REDIS_URL),
         HealthModule,
+        AuthModule.forRoot(config.JWT_SECRET),
       ],
       // Request DTOs are validated, and @ZodSerializerDto responses checked, against packages/contracts
       providers: [

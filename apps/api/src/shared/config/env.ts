@@ -5,6 +5,10 @@ const Env = z.object({
   REDIS_URL: z.url({ protocol: /^rediss?$/ }),
   PORT: z.coerce.number().int().min(1).max(65535).default(3000),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
+  // No default: the dev provider accepts a fixed code for every phone, so each deploy must choose it
+  OTP_PROVIDER: z.enum(['dev']),
+  // HS256 key: at least 256 bits; generate with `openssl rand -base64 48`
+  JWT_SECRET: z.string().min(32),
 });
 
 export type Config = z.infer<typeof Env>;
