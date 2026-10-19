@@ -1,23 +1,13 @@
 import type { INestApplication } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import { Test } from '@nestjs/testing';
 import { io, type Socket } from 'socket.io-client';
-import request from 'supertest';
 import type { App } from 'supertest/types';
-import { AppModule } from '../src/app.module';
 import { RealtimeGateway } from '../src/realtime/realtime.gateway';
-import { parseEnv } from '../src/shared/config/env';
+import { bootApp, signIn } from './support/actors';
 
 let app: INestApplication<App>;
 let url: string;
-let nextPhone = 0;
-// Own number range: test files share one database
-const phone = () => `+8553${String(nextPhone++).padStart(7, '0')}`;
-const login = async () =>
-  (
-    (await request(app.getHttpServer()).post('/auth/otp/verify').send({ phone: phone(), code: '000000' }).expect(200))
-      .body as { accessToken: string }
-  ).accessToken;
+const login = async () => (await signIn(app)).tokens.accessToken;
 
 const sockets: Socket[] = [];
 const connect = (token?: string) => {
@@ -33,9 +23,7 @@ const handshake = (socket: Socket) =>
   });
 
 beforeAll(async () => {
-  const config = { ...parseEnv(process.env), LOG_LEVEL: 'silent' as const };
-  const moduleRef = await Test.createTestingModule({ imports: [AppModule.forRoot(config)] }).compile();
-  app = moduleRef.createNestApplication<INestApplication<App>>({ logger: false });
+  app = await bootApp();
   await app.listen(0, '127.0.0.1');
   url = await app.getUrl();
 });

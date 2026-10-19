@@ -1,12 +1,10 @@
 import { Controller, Get, HttpStatus, type INestApplication, Module } from '@nestjs/common';
-import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import type { App } from 'supertest/types';
 import { DataSource } from 'typeorm';
-import { AppModule } from '../src/app.module';
 import { DriversModule } from '../src/drivers/drivers.module';
 import { VerifiedDriver } from '../src/drivers/verified-driver.guard';
-import { parseEnv } from '../src/shared/config/env';
+import { bootApp, signIn } from './support/actors';
 
 type Tokens = { accessToken: string; refreshToken: string };
 
@@ -24,13 +22,9 @@ class ProbeController {
 class ProbeModule {}
 
 let app: INestApplication<App>;
-let nextPhone = 0;
-// Own number range: test files share one database
-const phone = () => `+8556${String(nextPhone++).padStart(7, '0')}`;
 const http = () => request(app.getHttpServer());
 const auth = (t: Tokens) => ({ authorization: `Bearer ${t.accessToken}` });
-const login = async () =>
-  (await http().post('/auth/otp/verify').send({ phone: phone(), code: '000000' }).expect(200)).body as Tokens;
+const login = async () => (await signIn(app)).tokens;
 const refresh = async (t: Tokens) =>
   (await http().post('/auth/refresh').send({ refreshToken: t.refreshToken }).expect(200)).body as Tokens;
 const apply = (t: Tokens, body: object = { vehicleType: 'remork', plate: 'PP 2A-1234' }) =>
@@ -41,9 +35,7 @@ const setVerification = async (t: Tokens, status: string) => {
 };
 
 beforeAll(async () => {
-  const config = { ...parseEnv(process.env), LOG_LEVEL: 'silent' as const };
-  const moduleRef = await Test.createTestingModule({ imports: [AppModule.forRoot(config), ProbeModule] }).compile();
-  app = await moduleRef.createNestApplication<INestApplication<App>>({ logger: false }).init();
+  app = await (await bootApp({ imports: [ProbeModule] })).init();
 });
 
 afterAll(() => app.close());
@@ -108,5 +100,23 @@ describe('@VerifiedDriver', () => {
   it('is 403 for a rider who is not a driver', async () => {
     const rider = await login();
     expect((await probe(rider)).status).toBe(HttpStatus.FORBIDDEN);
+  });
+});
+
+// IDOR template (see test/support/actors.ts): A owns, B probes; B must see 404 (no hint that A's data exists)
+describe('ownership', () => {
+  it("never lets one user read or write another user's driver profile", async () => {
+    const [a, b] = [await signIn(app), await signIn(app)];
+    await apply(a.tokens).expect(HttpStatus.CREATED);
+    expect((await http().get('/drivers/me').set(b.auth)).status).toBe(HttpStatus.NOT_FOUND);
+
+    // A userId smuggled into the body is stripped by the schema; the caller always comes from the token
+    const smuggled = await http()
+      .post('/drivers/me')
+      .set(b.auth)
+      .send({ userId: a.id, vehicleType: 'moto', plate: 'PP 9Z-9999' });
+    expect(smuggled.status).toBe(HttpStatus.CREATED);
+    expect((await http().get('/drivers/me').set(a.auth)).body).toMatchObject({ vehicleType: 'remork' });
+    expect((await http().get('/drivers/me').set(b.auth)).body).toMatchObject({ vehicleType: 'moto' });
   });
 });
