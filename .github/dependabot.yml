@@ -1,0 +1,14 @@
+# Snyk can't see GitHub Actions, and SHA-pinned actions never update on their own.
+# npm dependencies are Snyk's job, so Dependabot only watches workflows.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    # Let a fresh release age a week before we run it (compromised tags get caught in that window)
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns: ['*']

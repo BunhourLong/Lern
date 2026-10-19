@@ -21,7 +21,7 @@ export class OtpService {
   ) {}
 
   // Each window is checked only after the previous passed, so a blocked request doesn't use up later ones
-  async request(phone: string, ip: string): Promise<void> {
+  async sendCode(phone: string, ip: string): Promise<void> {
     const limits: [key: string, limit: number, windowSeconds: number][] = [
       // High on purpose: carrier-grade NAT puts many Cambodian mobile users behind one IP
       [`rl:otp:ip:${ip}`, 100, HOUR],

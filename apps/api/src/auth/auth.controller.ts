@@ -21,7 +21,7 @@ export class AuthController {
   @Post('otp/request')
   @HttpCode(HttpStatus.NO_CONTENT)
   requestOtp(@Body() body: RequestOtpDto, @Ip() ip: string): Promise<void> {
-    return this.otp.request(body.phone, ip);
+    return this.otp.sendCode(body.phone, ip);
   }
 
   @Post('otp/verify')

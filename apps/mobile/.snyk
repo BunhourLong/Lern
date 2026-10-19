@@ -1,0 +1,30 @@
+# Snyk (https://snyk.io) policy file: recorded risk acceptances, reviewed in PRs (PLAN.md §2.6).
+# Every entry needs a reason and an expiry. `snyk ignore` rewrites this file and drops comments,
+# so the full analysis lives in each `reason`.
+version: v1.25.0
+ignore:
+  SNYK-JS-BRACES-19963945:
+    - '*':
+        reason: >-
+          WHAT: braces <=3.0.3 has recursive AST walkers with no depth guard. A deeply nested
+          brace pattern (still under the length limit) overflows the call stack and crashes the
+          Node process with a RangeError. Availability only: no data read or changed.
+          NO FIX: 3.0.3 (May 2024) is the newest braces release, so there is nothing to
+          upgrade, patch or pnpm-override to.
+          HOW IT REACHES US: only apps/mobile, and only through build and test tooling:
+          react-native > @react-native/community-cli-plugin > metro > metro-file-map >
+          micromatch > braces, plus jest / babel-jest / eslint-plugin-jest > micromatch > braces.
+          Metro is the bundler that runs on a developer machine or CI; it is not part of the JS
+          bundle shipped in the app, and Jest/ESLint never run on a phone.
+          EXPLOITABILITY: an attacker would need to control a glob pattern passed to micromatch.
+          Ours come only from repo config (metro.config.js, Jest and ESLint config), never from
+          network or user input. Worst case, a malicious commit crashes a local build, and a
+          malicious commit can already run arbitrary code at build time anyway.
+          API NOT AFFECTED: apps/api has no path to braces (`pnpm why braces --filter @lern/api`
+          is empty as of 2026-10-19). The '*' path also covers future paths, so if the api ever
+          pulls braces in, re-check before renewing.
+          REVISIT: at expiry; sooner if braces publishes a fix (upgrade, delete this entry) or if
+          any server code starts passing user input to micromatch/braces (then it's a real DoS).
+        expires: 2027-01-17T00:00:00.000Z
+        created: 2026-10-19T00:00:00.000Z
+patch: {}
