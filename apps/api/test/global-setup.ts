@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { PostgreSqlContainer } from '@testcontainers/postgresql';
 import { RedisContainer } from '@testcontainers/redis';
-import { createDataSource } from '../src/database';
+import { createDataSource } from '../src/shared/database/database';
 
 // Same images as the dev stack: compose.yml is the single source of truth
 const compose = readFileSync(join(__dirname, '../../../infra/docker/compose.yml'), 'utf8');

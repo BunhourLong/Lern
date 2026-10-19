@@ -4,7 +4,7 @@ import { Logger } from 'nestjs-pino';
 import request from 'supertest';
 import type { App } from 'supertest/types';
 import { AppModule } from '../src/app.module';
-import { parseEnv } from '../src/config';
+import { parseEnv } from '../src/shared/config/env';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 let app: INestApplication<App>;

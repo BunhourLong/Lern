@@ -1,7 +1,7 @@
 import { NestFactory } from '@nestjs/core';
 import { Logger } from 'nestjs-pino';
 import { AppModule } from './app.module';
-import { parseEnv } from './config';
+import { parseEnv } from './shared/config/env';
 
 async function bootstrap(): Promise<void> {
   const config = parseEnv(process.env);

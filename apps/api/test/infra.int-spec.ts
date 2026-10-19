@@ -1,6 +1,6 @@
 import { Client } from 'pg';
 import { Redis } from 'ioredis';
-import { createDataSource } from '../src/database';
+import { createDataSource } from '../src/shared/database/database';
 import { requireEnv } from './env';
 
 it('provides PostGIS 3.6 and Redis', async () => {

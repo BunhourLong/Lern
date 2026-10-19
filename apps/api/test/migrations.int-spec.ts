@@ -1,5 +1,5 @@
 import { Client } from 'pg';
-import { createDataSource } from '../src/database';
+import { createDataSource } from '../src/shared/database/database';
 import { requireEnv } from './env';
 
 // A fresh database built from template1, which (unlike the image's default db) has no PostGIS,

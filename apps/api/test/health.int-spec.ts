@@ -4,7 +4,7 @@ import request from 'supertest';
 import type { App } from 'supertest/types';
 import { DataSource } from 'typeorm';
 import { AppModule } from '../src/app.module';
-import { type Config, parseEnv } from '../src/config';
+import { type Config, parseEnv } from '../src/shared/config/env';
 
 async function boot(overrides: Partial<Config> = {}): Promise<INestApplication<App>> {
   const config = { ...parseEnv(process.env), LOG_LEVEL: 'silent' as const, ...overrides };

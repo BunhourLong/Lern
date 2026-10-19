@@ -1,4 +1,4 @@
-import { parseEnv } from './config';
+import { parseEnv } from './env';
 
 const valid = { DATABASE_URL: 'postgres://lern:lern@127.0.0.1:5432/lern', REDIS_URL: 'redis://127.0.0.1:6379' };
 
