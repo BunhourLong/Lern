@@ -2,6 +2,7 @@ import { DynamicModule, Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { JwtModule } from '@nestjs/jwt';
 import { UsersModule } from '../users/users.module';
+import { AccessTokenService } from './access-token.service';
 import { AuthController } from './auth.controller';
 import { AuthGuard } from './auth.guard';
 import { DevOtpProvider } from './dev-otp.provider';
@@ -16,6 +17,8 @@ export class AuthModule {
   static forRoot(jwtSecret: string): DynamicModule {
     return {
       module: AuthModule,
+      // Global so the realtime gateway (and later ones) verify tokens with the same service
+      global: true,
       imports: [
         UsersModule,
         // Pinned algorithm: verify() then rejects tokens signed any other way (e.g. alg "none")
@@ -27,6 +30,7 @@ export class AuthModule {
       ],
       controllers: [AuthController],
       providers: [
+        AccessTokenService,
         OtpService,
         SessionsRepository,
         SessionsService,
@@ -34,6 +38,7 @@ export class AuthModule {
         // Global guard lives here because it needs this module's JwtService
         { provide: APP_GUARD, useClass: AuthGuard },
       ],
+      exports: [AccessTokenService],
     };
   }
 }

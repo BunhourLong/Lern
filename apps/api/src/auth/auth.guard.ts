@@ -7,9 +7,9 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { JwtService } from '@nestjs/jwt';
 import type { IncomingMessage } from 'node:http';
-import { type AccessClaims, type AuthUser, IS_PUBLIC, ROLES } from './auth.decorators';
+import { AccessTokenService } from './access-token.service';
+import { type AuthUser, IS_PUBLIC, ROLES } from './auth.decorators';
 
 const BEARER = /^Bearer ([\w-]+\.[\w-]+\.[\w-]+)$/;
 
@@ -17,7 +17,7 @@ const BEARER = /^Bearer ([\w-]+\.[\w-]+\.[\w-]+)$/;
 @Injectable()
 export class AuthGuard implements CanActivate {
   constructor(
-    private readonly jwt: JwtService,
+    private readonly tokens: AccessTokenService,
     private readonly reflector: Reflector,
   ) {}
 
@@ -28,11 +28,9 @@ export class AuthGuard implements CanActivate {
     const req = ctx.switchToHttp().getRequest<IncomingMessage & { user?: AuthUser }>();
     const token = BEARER.exec(req.headers.authorization ?? '')?.[1];
     if (!token) throw new UnauthorizedException();
-    const claims = await this.jwt.verifyAsync<AccessClaims>(token).catch(() => {
+    const { user } = await this.tokens.verify(token).catch(() => {
       throw new UnauthorizedException();
     });
-    // Tokens issued before roles were added carry none; treat as no roles rather than crash
-    const user: AuthUser = { id: claims.sub, roles: claims.roles ?? [] };
     req.user = user;
 
     const required = this.reflector.getAllAndOverride<Role[] | undefined>(ROLES, targets);
