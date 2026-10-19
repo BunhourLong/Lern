@@ -8,7 +8,10 @@
     "test": "jest --selectProjects unit",
     "test:integration": "jest --selectProjects integration",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "migration:run": "tsc -p tsconfig.build.json && node --env-file-if-exists=.env ../../node_modules/typeorm/cli.js migration:run -d dist/data-source.js",
+    "migration:revert": "tsc -p tsconfig.build.json && node --env-file-if-exists=.env ../../node_modules/typeorm/cli.js migration:revert -d dist/data-source.js",
+    "migration:generate": "tsc -p tsconfig.build.json && node --env-file-if-exists=.env ../../node_modules/typeorm/cli.js migration:generate -d dist/data-source.js"
   },
   "dependencies": {
     "@nestjs/common": "11.2.7",
@@ -21,6 +24,7 @@
     "pino-http": "11.0.0",
     "reflect-metadata": "0.2.2",
     "rxjs": "7.8.2",
+    "typeorm": "1.1.2",
     "zod": "4.6.7"
   },
   "devDependencies": {

@@ -1,5 +1,6 @@
 import { Client } from 'pg';
 import { Redis } from 'ioredis';
+import { createDataSource } from '../src/database';
 import { requireEnv } from './env';
 
 it('provides PostGIS 3.6 and Redis', async () => {
@@ -17,5 +18,14 @@ it('provides PostGIS 3.6 and Redis', async () => {
     expect(await redis.ping()).toBe('PONG');
   } finally {
     redis.disconnect();
+  }
+});
+
+it('applies all migrations in globalSetup', async () => {
+  const ds = await createDataSource(requireEnv('DATABASE_URL')).initialize();
+  try {
+    expect(await ds.showMigrations()).toBe(false);
+  } finally {
+    await ds.destroy();
   }
 });
