@@ -1,6 +1,8 @@
 import { DynamicModule, Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { JwtModule } from '@nestjs/jwt';
+import { Redis } from 'ioredis';
+import type { Config } from '../shared/config/env';
 import { UsersModule } from '../users/users.module';
 import { AccessTokenService } from './access-token.service';
 import { AuthController } from './auth.controller';
@@ -10,11 +12,11 @@ import { OtpProvider } from './otp.provider';
 import { OtpService } from './otp.service';
 import { SessionsRepository } from './sessions.repository';
 import { SessionsService } from './sessions.service';
+import { TelegramGatewayOtpProvider } from './telegram-gateway-otp.provider';
 
-// OTP_PROVIDER only allows 'dev' so far; switch on it here once a real SMS provider exists
 @Module({})
 export class AuthModule {
-  static forRoot(jwtSecret: string): DynamicModule {
+  static forRoot(config: Config): DynamicModule {
     return {
       module: AuthModule,
       // Global so the realtime gateway (and later ones) verify tokens with the same service
@@ -23,7 +25,7 @@ export class AuthModule {
         UsersModule,
         // Pinned algorithm: verify() then rejects tokens signed any other way (e.g. alg "none")
         JwtModule.register({
-          secret: jwtSecret,
+          secret: config.JWT_SECRET,
           signOptions: { algorithm: 'HS256', expiresIn: '15m' },
           verifyOptions: { algorithms: ['HS256'] },
         }),
@@ -34,7 +36,15 @@ export class AuthModule {
         OtpService,
         SessionsRepository,
         SessionsService,
-        { provide: OtpProvider, useClass: DevOtpProvider },
+        {
+          provide: OtpProvider,
+          inject: [Redis],
+          // parseEnv guarantees the token when OTP_PROVIDER is telegram
+          useFactory: (redis: Redis) =>
+            config.OTP_PROVIDER === 'telegram'
+              ? new TelegramGatewayOtpProvider(redis, config.TELEGRAM_GATEWAY_URL, config.TELEGRAM_GATEWAY_TOKEN!)
+              : new DevOtpProvider(),
+        },
         // Global guard lives here because it needs this module's JwtService
         { provide: APP_GUARD, useClass: AuthGuard },
       ],
