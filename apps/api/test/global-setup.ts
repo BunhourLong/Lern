@@ -19,6 +19,7 @@ export default async function globalSetup(): Promise<void> {
   ]);
   process.env.DATABASE_URL = pg.getConnectionUri();
   process.env.REDIS_URL = redis.getConnectionUrl();
+  process.env.OTP_PROVIDER = 'dev';
 
   const ds = await createDataSource(process.env.DATABASE_URL).initialize();
   try {
