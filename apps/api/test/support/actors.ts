@@ -6,11 +6,12 @@ import { Redis } from 'ioredis';
 import request from 'supertest';
 import type { App } from 'supertest/types';
 import { AppModule } from '../../src/app.module';
-import { parseEnv } from '../../src/shared/config/env';
+import { type Config, parseEnv } from '../../src/shared/config/env';
 
-// The real app plus test-only modules/controllers (probe routes); call .init() or .listen() on the result
-export async function bootApp(extra: Pick<ModuleMetadata, 'imports' | 'controllers'> = {}) {
-  const config = { ...parseEnv(process.env), LOG_LEVEL: 'silent' as const };
+// The real app plus test-only modules/controllers (probe routes) and config overrides;
+// call .init() or .listen() on the result
+export async function bootApp(extra: Pick<ModuleMetadata, 'imports' | 'controllers'> = {}, overrides: Partial<Config> = {}) {
+  const config: Config = { ...parseEnv(process.env), LOG_LEVEL: 'silent', ...overrides };
   const moduleRef = await Test.createTestingModule({
     imports: [AppModule.forRoot(config), ...(extra.imports ?? [])],
     controllers: extra.controllers,

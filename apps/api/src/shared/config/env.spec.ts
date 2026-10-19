@@ -12,7 +12,12 @@ it('rejects an env without DATABASE_URL and REDIS_URL, naming both', () => {
 });
 
 it('returns typed config with defaults for a valid env', () => {
-  expect(parseEnv(valid)).toEqual({ ...valid, PORT: 3000, LOG_LEVEL: 'info' });
+  expect(parseEnv(valid)).toEqual({
+    ...valid,
+    PORT: 3000,
+    LOG_LEVEL: 'info',
+    TELEGRAM_GATEWAY_URL: 'https://gatewayapi.telegram.org',
+  });
 });
 
 it('coerces PORT from the string the environment provides', () => {
@@ -35,4 +40,14 @@ it('requires a JWT secret long enough for HS256, without echoing it', () => {
   const run = () => parseEnv({ ...valid, JWT_SECRET: 'short-s3cret' });
   expect(run).toThrow(/JWT_SECRET/);
   expect(run).not.toThrow(/short-s3cret/);
+});
+
+it('requires a non-empty Gateway token when OTP_PROVIDER is telegram', () => {
+  expect(() => parseEnv({ ...valid, OTP_PROVIDER: 'telegram' })).toThrow(/TELEGRAM_GATEWAY_TOKEN/);
+  const config = parseEnv({ ...valid, OTP_PROVIDER: 'telegram', TELEGRAM_GATEWAY_TOKEN: 'tg-s3cret' });
+  expect(config.TELEGRAM_GATEWAY_URL).toBe('https://gatewayapi.telegram.org');
+  expect(config.TELEGRAM_GATEWAY_TOKEN).toBe('tg-s3cret');
+  expect(() => parseEnv({ ...valid, OTP_PROVIDER: 'telegram', TELEGRAM_GATEWAY_TOKEN: '' })).toThrow(
+    /TELEGRAM_GATEWAY_TOKEN/,
+  );
 });

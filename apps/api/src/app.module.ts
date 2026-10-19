@@ -23,7 +23,7 @@ export class AppModule {
         TypeOrmModule.forRoot(dataSourceOptions(config.DATABASE_URL)),
         RedisModule.forRoot(config.REDIS_URL),
         HealthModule,
-        AuthModule.forRoot(config.JWT_SECRET),
+        AuthModule.forRoot(config),
         DriversModule,
         RealtimeModule,
       ],
