@@ -1,0 +1,67 @@
+name: Security
+
+# Every security scanner lives in this workflow (Snyk now; container scan joins at M8).
+# Kept out of ci.yml: it needs a secret, write access to code scanning, and its own
+# triggers so Snyk's monthly test quota isn't spent on every branch push.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    # Weekly re-test: new CVEs land in unchanged deps, and an expired SNYK_TOKEN shows up here
+    - cron: '17 3 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Pinned CLI; bump on purpose, not whatever `latest` is on the day
+  SNYK: snyk@1.1307.4
+
+jobs:
+  snyk-open-source:
+    # Fork PRs get no secrets; skip rather than fail. Never switch to pull_request_target here.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+      # Reads pnpm-lock.yaml and Podfile.lock directly, so no install step.
+      # shortcut: android/ is excluded because a Gradle scan needs a JDK plus node_modules; add it when native modules land (M5).
+      # Fails on high/critical only; accepted risks go in .snyk with a reason and an expiry.
+      - run: npx --yes "$SNYK" test --all-projects --exclude=android --severity-threshold=high
+        # Token only on the steps that call Snyk, not every action in the job
+        env: { SNYK_TOKEN: '${{ secrets.SNYK_TOKEN }}' }
+      # Snapshot main so Snyk re-checks it daily and emails when a new CVE hits a shipped dependency
+      - if: github.ref == 'refs/heads/main'
+        run: npx --yes "$SNYK" monitor --all-projects --exclude=android --target-reference=main
+        env: { SNYK_TOKEN: '${{ secrets.SNYK_TOKEN }}' }
+
+  snyk-code:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+      - run: npx --yes "$SNYK" code test --severity-threshold=high --sarif-file-output=snyk-code.sarif
+        env: { SNYK_TOKEN: '${{ secrets.SNYK_TOKEN }}' }
+      # Upload even when the gate fails, so findings show inline on the PR and in the Security tab
+      - if: ${{ !cancelled() && hashFiles('snyk-code.sarif') != '' }}
+        uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
+        with:
+          sarif_file: snyk-code.sarif
+          category: snyk-code
