@@ -10,15 +10,24 @@ reference module.
 
 1. **Tests first** (red for the right reason, then green):
    - Pure rules → `src/<feature>/domain/*.spec.ts` (unit, no Nest/TypeORM imports).
-   - Endpoints, SQL, Redis → `test/<feature>[-<topic>].int-spec.ts`. Boot the real app with
-     `AppModule.forRoot({ ...parseEnv(process.env), LOG_LEVEL: 'silent' })`, hit it with supertest,
-     and spy on or override only external edges (e.g. `jest.spyOn(app.get(OtpProvider), 'send')`).
+   - Endpoints, SQL, Redis → `test/<feature>[-<topic>].int-spec.ts`. Use `test/support/actors.ts`:
+     `bootApp({ imports, controllers })` boots the real app (add probe routes there), and `signIn(app)`
+     returns an actor `{ id, phone, tokens, auth }` through the real OTP flow. Hit it with supertest;
+     spy on or override only external edges (e.g. `jest.spyOn(app.get(OtpProvider), 'send')`).
      Never mock Postgres or Redis.
-   - Cover: happy path, a 400 for invalid input that has no side effects, the
-     auth/ownership (IDOR) case once guards exist, and every limit or race the feature has (use
+   - Cover: happy path, 401 without a token, a 400 for invalid input that has no side effects,
+     the role/verification 403s, and every limit or race the feature has (use
      `Promise.all`/`allSettled` for "exactly N succeed").
-   - Integration files share one Postgres and Redis: key data by unique ids per test and reset only
-     your own keys (`rl:<feature>:*`), never FLUSHDB.
+   - **IDOR test (every endpoint that touches a resource)**: sign in actors A and B; A creates the
+     resource; B tries every route on it (read, update, delete, list) by its id → **404, not 403**
+     (don't reveal that it exists), and A's data is unchanged afterwards. Also send `userId`/owner
+     fields in B's body and assert they're ignored. Example: `ownership` in `test/drivers.int-spec.ts`.
+     In code: load by `id AND owner = caller` in the same query (or the guarded UPDATE's WHERE), never
+     load-then-compare.
+   - Integration files share one Postgres and Redis: get phone numbers from `uniquePhone(app)`, key
+     other data by unique ids, and reset only your own keys (`rl:<feature>:*`), never FLUSHDB.
+   - Build a supertest request only after its awaited inputs exist (`const t = await signIn(app)`
+     first): an `await` inside `.set(...)` lets another request close the shared server.
 2. **Contract**: request/response schemas go in `packages/contracts/src/<name>.schema.ts` and are
    exported from `src/index.ts`. Changing an existing schema → follow `contract-change` (ask first
    if it breaks a consumer).

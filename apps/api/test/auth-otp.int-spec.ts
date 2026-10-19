@@ -1,25 +1,18 @@
 import type { INestApplication } from '@nestjs/common';
 import { HttpStatus } from '@nestjs/common';
-import { Test } from '@nestjs/testing';
 import { Redis } from 'ioredis';
 import request from 'supertest';
 import type { App } from 'supertest/types';
-import { AppModule } from '../src/app.module';
 import { OtpProvider } from '../src/auth/otp.provider';
 import { OtpService } from '../src/auth/otp.service';
-import { parseEnv } from '../src/shared/config/env';
+import { bootApp, uniquePhone } from './support/actors';
 
 let app: INestApplication<App>;
 let send: jest.SpyInstance;
-let nextPhone = 0;
-// Every test gets fresh numbers so per-phone windows never leak between tests
-const phone = () => `+8557${String(nextPhone++).padStart(7, '0')}`;
 const requestOtp = (body: object) => request(app.getHttpServer()).post('/auth/otp/request').send(body);
 
 beforeAll(async () => {
-  const config = { ...parseEnv(process.env), LOG_LEVEL: 'silent' as const };
-  const moduleRef = await Test.createTestingModule({ imports: [AppModule.forRoot(config)] }).compile();
-  app = await moduleRef.createNestApplication<INestApplication<App>>({ logger: false }).init();
+  app = await (await bootApp()).init();
   send = jest.spyOn(app.get(OtpProvider), 'send');
 });
 
@@ -35,7 +28,7 @@ afterAll(() => app.close());
 
 describe('POST /auth/otp/request', () => {
   it('sends a code through the provider', async () => {
-    const to = phone();
+    const to = await uniquePhone(app);
     const res = await requestOtp({ phone: to });
     expect(res.status).toBe(HttpStatus.NO_CONTENT);
     expect(send).toHaveBeenCalledWith(to);
@@ -50,7 +43,7 @@ describe('POST /auth/otp/request', () => {
   });
 
   it('makes the same number wait before a resend', async () => {
-    const to = phone();
+    const to = await uniquePhone(app);
     expect((await requestOtp({ phone: to })).status).toBe(HttpStatus.NO_CONTENT);
     const res = await requestOtp({ phone: to });
     expect(res.status).toBe(HttpStatus.TOO_MANY_REQUESTS);
@@ -59,22 +52,22 @@ describe('POST /auth/otp/request', () => {
   });
 
   it('caps requests per IP across different numbers', async () => {
-    for (let i = 0; i < 100; i++) expect((await requestOtp({ phone: phone() })).status).toBe(HttpStatus.NO_CONTENT);
-    expect((await requestOtp({ phone: phone() })).status).toBe(HttpStatus.TOO_MANY_REQUESTS);
+    for (let i = 0; i < 100; i++) expect((await requestOtp({ phone: await uniquePhone(app) })).status).toBe(HttpStatus.NO_CONTENT);
+    expect((await requestOtp({ phone: await uniquePhone(app) })).status).toBe(HttpStatus.TOO_MANY_REQUESTS);
   });
 });
 
 describe('OtpService.verify', () => {
   it('accepts the right code and rejects a wrong one', async () => {
     const otp = app.get(OtpService);
-    const to = phone();
+    const to = await uniquePhone(app);
     expect(await otp.verify(to, '123456')).toBe(false);
     expect(await otp.verify(to, '000000')).toBe(true);
   });
 
   it('locks a number after 5 attempts, even against parallel guesses with the right code among them', async () => {
     const otp = app.get(OtpService);
-    const to = phone();
+    const to = await uniquePhone(app);
     const guesses = Array.from({ length: 20 }, (_, i) => otp.verify(to, String(i + 100000)));
     const results = await Promise.allSettled([...guesses, otp.verify(to, '000000')]);
     expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(5);

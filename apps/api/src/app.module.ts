@@ -4,7 +4,9 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { LoggerModule } from 'nestjs-pino';
 import { ZodSerializerInterceptor, ZodValidationPipe } from 'nestjs-zod';
 import { AuthModule } from './auth/auth.module';
+import { DriversModule } from './drivers/drivers.module';
 import { HealthModule } from './health/health.module';
+import { RealtimeModule } from './realtime/realtime.module';
 import type { Config } from './shared/config/env';
 import { dataSourceOptions } from './shared/database/database';
 import { httpLoggerOptions } from './shared/logging/http-logger';
@@ -22,6 +24,8 @@ export class AppModule {
         RedisModule.forRoot(config.REDIS_URL),
         HealthModule,
         AuthModule.forRoot(config.JWT_SECRET),
+        DriversModule,
+        RealtimeModule,
       ],
       // Request DTOs are validated, and @ZodSerializerDto responses checked, against packages/contracts
       providers: [

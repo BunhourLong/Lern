@@ -1,10 +1,9 @@
 import type { TokenPair } from '@lern/contracts';
 import { Injectable, UnauthorizedException } from '@nestjs/common';
-import { JwtService } from '@nestjs/jwt';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { DataSource, type EntityManager } from 'typeorm';
 import { UsersService } from '../users/users.service';
-import type { AccessClaims } from './auth.decorators';
+import { AccessTokenService } from './access-token.service';
 import { OtpService } from './otp.service';
 import { SessionsRepository } from './sessions.repository';
 
@@ -18,7 +17,7 @@ const hash = (token: string) => createHash('sha256').update(token).digest('hex')
 export class SessionsService {
   constructor(
     private readonly db: DataSource,
-    private readonly jwt: JwtService,
+    private readonly tokens: AccessTokenService,
     private readonly otp: OtpService,
     private readonly users: UsersService,
     private readonly sessions: SessionsRepository,
@@ -47,7 +46,7 @@ export class SessionsService {
     const refreshToken = randomBytes(32).toString('base64url');
     await this.sessions.insert(tx, userId, familyId, hash(refreshToken), REFRESH_TTL_SECONDS);
     // Roles are re-read on every refresh, so a role change reaches the token within its 15-minute life
-    const claims: AccessClaims = { sub: userId, roles: await this.users.roles(userId) };
-    return { accessToken: await this.jwt.signAsync(claims), refreshToken };
+    const accessToken = await this.tokens.sign({ id: userId, roles: await this.users.roles(userId) });
+    return { accessToken, refreshToken };
   }
 }
