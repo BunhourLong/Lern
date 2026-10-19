@@ -2,6 +2,7 @@ import type { DriverProfile } from '@lern/contracts';
 import { Body, Controller, Get, Post } from '@nestjs/common';
 import { ZodSerializerDto } from 'nestjs-zod';
 import { type AuthUser, CurrentUser } from '../auth/auth.decorators';
+import { Idempotent } from '../shared/idempotency/idempotency.interceptor';
 import { ApplyDriverDto } from './dto/apply-driver.dto';
 import { DriverProfileDto } from './dto/driver-profile.dto';
 import { DriversService } from './drivers.service';
@@ -13,6 +14,7 @@ export class DriversController {
 
   // Any signed-in user may apply; the driver role is granted here, so no @Roles
   @Post()
+  @Idempotent()
   @ZodSerializerDto(DriverProfileDto)
   apply(@CurrentUser() user: AuthUser, @Body() body: ApplyDriverDto): Promise<DriverProfile> {
     return this.drivers.apply(user.id, body);

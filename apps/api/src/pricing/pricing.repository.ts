@@ -1,6 +1,14 @@
-import type { CreateQuote, Money } from '@lern/contracts';
+import type { CreateQuote, Money, Point, VehicleType } from '@lern/contracts';
 import { Injectable } from '@nestjs/common';
 import { DataSource } from 'typeorm';
+
+export type BookableQuote = {
+  vehicleType: VehicleType;
+  pickup: Point;
+  dropoff: Point;
+  fare: Money;
+  expired: boolean;
+};
 
 @Injectable()
 export class PricingRepository {
@@ -30,6 +38,20 @@ export class PricingRepository {
         fare.currency,
         ttlSeconds,
       ],
+    );
+    return row;
+  }
+
+  // Owner in the WHERE, so another rider's quote is indistinguishable from a missing one
+  async findForRider(riderId: string, quoteId: string): Promise<BookableQuote | undefined> {
+    const [row] = await this.db.query<BookableQuote[]>(
+      `SELECT vehicle_type AS "vehicleType",
+              json_build_object('lat', ST_Y(pickup::geometry), 'lng', ST_X(pickup::geometry)) AS pickup,
+              json_build_object('lat', ST_Y(dropoff::geometry), 'lng', ST_X(dropoff::geometry)) AS dropoff,
+              json_build_object('amountMinor', amount_minor, 'currency', currency) AS fare,
+              expires_at <= now() AS expired
+       FROM quotes WHERE id = $1 AND rider_id = $2`,
+      [quoteId, riderId],
     );
     return row;
   }

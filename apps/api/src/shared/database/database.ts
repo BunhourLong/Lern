@@ -4,6 +4,8 @@ import { CreateUsersAndRefreshTokens1792391315000 } from './migrations/179239131
 import { CreateUserRoles1792391999000 } from './migrations/1792391999000-create-user-roles';
 import { CreateDrivers1792392447000 } from './migrations/1792392447000-create-drivers';
 import { CreateQuotes1792483200000 } from './migrations/1792483200000-create-quotes';
+import { CreateRides1792486800000 } from './migrations/1792486800000-create-rides';
+import { CreateIdempotencyKeys1792486900000 } from './migrations/1792486900000-create-idempotency-keys';
 
 // Migrations are listed, not globbed, so the same list works from ts (tests) and dist (CLI)
 export const migrations = [
@@ -12,6 +14,8 @@ export const migrations = [
   CreateUserRoles1792391999000,
   CreateDrivers1792392447000,
   CreateQuotes1792483200000,
+  CreateRides1792486800000,
+  CreateIdempotencyKeys1792486900000,
 ];
 
 export function dataSourceOptions(url: string): DataSourceOptions {
