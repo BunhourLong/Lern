@@ -72,7 +72,7 @@ afterAll(async () => {
 
 it('asks Telegram for a 6-digit, 5-minute code, authenticated with the token', async () => {
   const phone = await uniquePhone(app);
-  await app.get(OtpService).request(phone, IP);
+  await app.get(OtpService).sendCode(phone, IP);
   expect(calls).toEqual([
     {
       method: 'sendVerificationMessage',
@@ -84,7 +84,7 @@ it('asks Telegram for a 6-digit, 5-minute code, authenticated with the token', a
 
 it('signs in with the delivered code, once', async () => {
   const phone = await uniquePhone(app);
-  await app.get(OtpService).request(phone, IP);
+  await app.get(OtpService).sendCode(phone, IP);
 
   expect((await verify(phone, '999999')).status).toBe(HttpStatus.UNAUTHORIZED);
   expect((await verify(phone, lastCode(phone))).status).toBe(HttpStatus.OK);
@@ -103,7 +103,7 @@ it('rejects a code for a number with no pending request, without calling Telegra
 it('is 503 when Telegram refuses to send, and leaves nothing to verify', async () => {
   const phone = await uniquePhone(app);
   failNextWith = 'PHONE_NUMBER_INVALID';
-  await expect(app.get(OtpService).request(phone, IP)).rejects.toMatchObject({
+  await expect(app.get(OtpService).sendCode(phone, IP)).rejects.toMatchObject({
     status: HttpStatus.SERVICE_UNAVAILABLE,
   });
   expect((await verify(phone, '100000')).status).toBe(HttpStatus.UNAUTHORIZED);
