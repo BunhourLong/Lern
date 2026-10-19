@@ -9,9 +9,9 @@
     "test:integration": "jest --selectProjects integration",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
-    "migration:run": "tsc -p tsconfig.build.json && node --env-file-if-exists=.env ../../node_modules/typeorm/cli.js migration:run -d dist/shared/database/data-source.js",
-    "migration:revert": "tsc -p tsconfig.build.json && node --env-file-if-exists=.env ../../node_modules/typeorm/cli.js migration:revert -d dist/shared/database/data-source.js",
-    "migration:generate": "tsc -p tsconfig.build.json && node --env-file-if-exists=.env ../../node_modules/typeorm/cli.js migration:generate -d dist/shared/database/data-source.js"
+    "migration:run": "pnpm run build && node --env-file-if-exists=.env ../../node_modules/typeorm/cli.js migration:run -d dist/shared/database/data-source.js",
+    "migration:revert": "pnpm run build && node --env-file-if-exists=.env ../../node_modules/typeorm/cli.js migration:revert -d dist/shared/database/data-source.js",
+    "migration:generate": "pnpm run build && node --env-file-if-exists=.env ../../node_modules/typeorm/cli.js migration:generate -d dist/shared/database/data-source.js"
   },
   "dependencies": {
     "@lern/contracts": "workspace:*",
