@@ -1,6 +1,6 @@
 import type { Me, Role } from '@lern/contracts';
 import { Injectable } from '@nestjs/common';
-import { DataSource } from 'typeorm';
+import { DataSource, type EntityManager } from 'typeorm';
 
 @Injectable()
 export class UsersRepository {
@@ -21,6 +21,10 @@ export class UsersRepository {
       [phone],
     );
     return row.id;
+  }
+
+  async grantRole(tx: EntityManager, userId: string, role: Role): Promise<void> {
+    await tx.query('INSERT INTO user_roles (user_id, role) VALUES ($1, $2) ON CONFLICT DO NOTHING', [userId, role]);
   }
 
   async roles(userId: string): Promise<Role[]> {
