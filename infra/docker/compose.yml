@@ -1,0 +1,35 @@
+# Local dev stack. Credentials are dev-only; ports bind to localhost only.
+name: lern
+
+services:
+  postgres:
+    # Official image is amd64-only; runs under Rosetta on Apple Silicon (see PLAN.md M0)
+    image: postgis/postgis:18-3.6@sha256:ea49d706470cfe1215c4f1e074fcab66d5af52f80adaf90d5a9beace71cd5ce8
+    platform: linux/amd64
+    environment:
+      POSTGRES_USER: lern
+      POSTGRES_PASSWORD: lern
+      POSTGRES_DB: lern
+    ports:
+      - 127.0.0.1:5432:5432
+    volumes:
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      # TCP check: during initdb the temporary server only listens on the socket
+      test: pg_isready -h 127.0.0.1 -U lern -d lern
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  redis:
+    image: redis:8.10.2@sha256:2c2dff791878316e3b083188be0d578423b24813cdda5de0e80ea4f7b3e6bfd6
+    ports:
+      - 127.0.0.1:6379:6379
+    healthcheck:
+      test: redis-cli ping
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  pgdata:
