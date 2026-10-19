@@ -1,7 +1,7 @@
 # Native/vendor scaffolding and build output — keep the graph on app + API source
-Lern/ios/
-Lern/android/
-Lern/vendor/
+apps/mobile/ios/
+apps/mobile/android/
+apps/mobile/vendor/
 *.lock
 package-lock.json
 pnpm-lock.yaml

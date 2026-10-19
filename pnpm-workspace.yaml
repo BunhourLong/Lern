@@ -1,0 +1,5 @@
+packages:
+  - apps/*
+  - packages/*
+# React Native/Metro cannot follow pnpm's symlinked layout
+nodeLinker: hoisted
