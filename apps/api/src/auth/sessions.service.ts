@@ -4,6 +4,7 @@ import { JwtService } from '@nestjs/jwt';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { DataSource, type EntityManager } from 'typeorm';
 import { UsersService } from '../users/users.service';
+import type { AccessClaims } from './auth.decorators';
 import { OtpService } from './otp.service';
 import { SessionsRepository } from './sessions.repository';
 
@@ -45,6 +46,8 @@ export class SessionsService {
   private async issue(tx: EntityManager, userId: string, familyId: string): Promise<TokenPair> {
     const refreshToken = randomBytes(32).toString('base64url');
     await this.sessions.insert(tx, userId, familyId, hash(refreshToken), REFRESH_TTL_SECONDS);
-    return { accessToken: await this.jwt.signAsync({ sub: userId }), refreshToken };
+    // Roles are re-read on every refresh, so a role change reaches the token within its 15-minute life
+    const claims: AccessClaims = { sub: userId, roles: await this.users.roles(userId) };
+    return { accessToken: await this.jwt.signAsync(claims), refreshToken };
   }
 }

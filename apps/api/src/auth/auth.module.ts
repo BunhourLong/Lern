@@ -1,7 +1,9 @@
 import { DynamicModule, Module } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
 import { JwtModule } from '@nestjs/jwt';
 import { UsersModule } from '../users/users.module';
 import { AuthController } from './auth.controller';
+import { AuthGuard } from './auth.guard';
 import { DevOtpProvider } from './dev-otp.provider';
 import { OtpProvider } from './otp.provider';
 import { OtpService } from './otp.service';
@@ -24,7 +26,14 @@ export class AuthModule {
         }),
       ],
       controllers: [AuthController],
-      providers: [OtpService, SessionsRepository, SessionsService, { provide: OtpProvider, useClass: DevOtpProvider }],
+      providers: [
+        OtpService,
+        SessionsRepository,
+        SessionsService,
+        { provide: OtpProvider, useClass: DevOtpProvider },
+        // Global guard lives here because it needs this module's JwtService
+        { provide: APP_GUARD, useClass: AuthGuard },
+      ],
     };
   }
 }

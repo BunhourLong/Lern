@@ -1,6 +1,7 @@
 import type { TokenPair } from '@lern/contracts';
 import { Body, Controller, HttpCode, HttpStatus, Ip, Post } from '@nestjs/common';
 import { ZodSerializerDto } from 'nestjs-zod';
+import { Public } from './auth.decorators';
 import { RefreshSessionDto } from './dto/refresh-session.dto';
 import { RequestOtpDto } from './dto/request-otp.dto';
 import { TokenPairDto } from './dto/token-pair.dto';
@@ -8,6 +9,7 @@ import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { OtpService } from './otp.service';
 import { SessionsService } from './sessions.service';
 
+@Public()
 @Controller('auth')
 export class AuthController {
   constructor(

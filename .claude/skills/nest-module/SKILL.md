@@ -26,8 +26,11 @@ reference module.
    `export class XDto extends createZodDto(xSchema) {}`. The global `ZodValidationPipe` validates
    request DTOs. A response is only checked when the handler has `@ZodSerializerDto(XDto)`; add it to
    any endpoint whose body clients parse.
-4. **Code**: controller is thin (parse → service → return); set the status with `@HttpCode`. The
-   service owns use-cases and transactions. Swappable externals (SMS, push, maps) are an
+4. **Code**: controller is thin (parse → service → return); set the status with `@HttpCode`.
+   The global `AuthGuard` denies by default: mark open routes `@Public()`, restrict with
+   `@Roles('driver')`, and read the caller with `@CurrentUser()` (`src/auth/auth.decorators.ts`).
+   Roles only say what *kind* of caller this is; per-resource ownership still needs its own check
+   and an IDOR test. The service owns use-cases and transactions. Swappable externals (SMS, push, maps) are an
    `abstract class` used as the DI token, plus a dev implementation. Env-driven choices are validated
    in `shared/config/env.ts`, and anything unsafe for production has no default.
 5. **Wire**: import the module in `app.module.ts` (composition only). New env keys go in `env.ts`,
