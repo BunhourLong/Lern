@@ -5,3 +5,6 @@ export * from './user.schema';
 export * from './driver.schema';
 export * from './ride.schema';
 export * from './ride.transitions';
+export * from './money.schema';
+export * from './geo.schema';
+export * from './quote.schema';

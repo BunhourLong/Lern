@@ -3,6 +3,7 @@ import { EnablePostgis1792383670000 } from './migrations/1792383670000-enable-po
 import { CreateUsersAndRefreshTokens1792391315000 } from './migrations/1792391315000-create-users-and-refresh-tokens';
 import { CreateUserRoles1792391999000 } from './migrations/1792391999000-create-user-roles';
 import { CreateDrivers1792392447000 } from './migrations/1792392447000-create-drivers';
+import { CreateQuotes1792483200000 } from './migrations/1792483200000-create-quotes';
 
 // Migrations are listed, not globbed, so the same list works from ts (tests) and dist (CLI)
 export const migrations = [
@@ -10,6 +11,7 @@ export const migrations = [
   CreateUsersAndRefreshTokens1792391315000,
   CreateUserRoles1792391999000,
   CreateDrivers1792392447000,
+  CreateQuotes1792483200000,
 ];
 
 export function dataSourceOptions(url: string): DataSourceOptions {
