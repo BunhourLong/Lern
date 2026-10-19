@@ -1,9 +1,9 @@
+import type { Health } from '@lern/contracts';
 import { Injectable } from '@nestjs/common';
 import { Redis } from 'ioredis';
 import { DataSource } from 'typeorm';
 
-type Status = 'up' | 'down';
-export type Health = { status: 'ok' | 'error'; db: Status; redis: Status };
+type Status = Health['db'];
 
 // A probe must answer fast; a hung dependency counts as down
 const TIMEOUT_MS = 1000;

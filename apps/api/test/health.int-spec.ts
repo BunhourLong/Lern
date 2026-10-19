@@ -4,6 +4,7 @@ import request from 'supertest';
 import type { App } from 'supertest/types';
 import { DataSource } from 'typeorm';
 import { AppModule } from '../src/app.module';
+import { HealthService } from '../src/health/health.service';
 import { type Config, parseEnv } from '../src/shared/config/env';
 
 async function boot(overrides: Partial<Config> = {}): Promise<INestApplication<App>> {
@@ -43,6 +44,22 @@ it('is 503 when the database connection is gone', async () => {
     const res = await request(app.getHttpServer()).get('/health');
     expect(res.status).toBe(503);
     expect(res.body).toEqual({ status: 'error', db: 'down', redis: 'up' });
+  } finally {
+    await app.close();
+  }
+});
+
+it('is 500 instead of leaking a body that breaks the health contract', async () => {
+  const config = { ...parseEnv(process.env), LOG_LEVEL: 'silent' as const };
+  const moduleRef = await Test.createTestingModule({ imports: [AppModule.forRoot(config)] })
+    .overrideProvider(HealthService)
+    .useValue({ check: () => Promise.resolve({ status: 'ok', db: 'maybe', redis: 'up' }) })
+    .compile();
+  const app = await moduleRef.createNestApplication<INestApplication<App>>({ logger: false }).init();
+  try {
+    const res = await request(app.getHttpServer()).get('/health');
+    expect(res.status).toBe(500);
+    expect(res.body).not.toHaveProperty('db');
   } finally {
     await app.close();
   }

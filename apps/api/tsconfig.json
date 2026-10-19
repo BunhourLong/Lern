@@ -12,7 +12,10 @@
       "node",
       "jest"
     ],
-    "isolatedModules": true
+    "isolatedModules": true,
+    "customConditions": [
+      "source"
+    ]
   },
   "include": [
     "src",

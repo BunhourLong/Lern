@@ -1,5 +1,10 @@
 /** @type {import('jest').Config} */
-const ts = { transform: { '^.+\\.ts$': 'ts-jest' }, testEnvironment: 'node' };
+const ts = {
+  transform: { '^.+\\.ts$': 'ts-jest' },
+  testEnvironment: 'node',
+  // Workspace packages resolve to their TypeScript source, so tests never run a stale build
+  testEnvironmentOptions: { customExportConditions: ['node', 'node-addons', 'source'] },
+};
 
 module.exports = {
   projects: [
