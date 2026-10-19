@@ -8,6 +8,7 @@
   "scripts": {
     "dev": "pnpm --filter @lern/mobile start",
     "test": "pnpm -r test",
+    "test:integration": "pnpm -r test:integration",
     "infra:up": "docker compose -f infra/docker/compose.yml up -d --wait",
     "infra:down": "docker compose -f infra/docker/compose.yml down"
   }

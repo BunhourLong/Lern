@@ -3,3 +3,11 @@ packages:
   - packages/*
 # React Native/Metro cannot follow pnpm's symlinked layout
 nodeLinker: hoisted
+# Dependency install scripts we don't need: prebuilt binaries cover them, and
+# ssh2/cpu-features are dockerode's unused SSH transport
+allowBuilds:
+  '@parcel/watcher': false
+  cpu-features: false
+  protobufjs: false
+  ssh2: false
+  unrs-resolver: false
