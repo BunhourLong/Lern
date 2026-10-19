@@ -7,6 +7,7 @@ async function bootstrap(): Promise<void> {
   const config = parseEnv(process.env);
   const app = await NestFactory.create(AppModule.forRoot(config), { bufferLogs: true });
   app.useLogger(app.get(Logger));
+  app.enableShutdownHooks(); // SIGTERM closes Postgres and Redis connections
   await app.listen(config.PORT);
 }
 
