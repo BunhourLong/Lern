@@ -12,3 +12,4 @@ pnpm-lock.yaml
 # Re-include planning docs that .gitignore hides from git
 !CLAUDE.md
 !PLAN.md
+!PLAN-notes.md

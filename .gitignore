@@ -1,6 +1,7 @@
 # Private planning docs: kept local, graphed by graphify (see .graphifyignore)
 CLAUDE.md
 PLAN.md
+PLAN-notes.md
 MEMORY.md
 
 # graph.json embeds the private docs above, so the graph stays local too
