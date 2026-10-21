@@ -119,6 +119,48 @@ describe('POST /rides/:id/accept (open pool)', () => {
     expect(row.driver_id).toBe(first.id);
   });
 
+  it('lets exactly one of 50 parallel drivers win the ride', async () => {
+    const ride = await searchingRide();
+    const drivers: Actor[] = [];
+    // Sequential: parallel multi-request chains hang supertest's auto-listened server (PLAN §9)
+    for (let i = 0; i < 50; i++) drivers.push(await verifiedDriver());
+    // Build every request before awaiting any, so they share one server and really overlap
+    const results = await Promise.all(drivers.map((d) => accept(d, ride.id)));
+
+    const statuses = results.map((r) => r.status);
+    expect([...statuses].sort()).toEqual([HttpStatus.OK, ...Array<number>(49).fill(HttpStatus.CONFLICT)]);
+    expect(results.filter((r) => (r.body as { code?: string }).code === 'INVALID_TRANSITION')).toHaveLength(49);
+
+    const winner = drivers[statuses.indexOf(HttpStatus.OK)];
+    const [row] = await db().query<{ driver_id: string; status: string; version: number }[]>(
+      'SELECT driver_id, status, version FROM rides WHERE id = $1',
+      [ride.id],
+    );
+    expect(row).toEqual({ driver_id: winner.id, status: 'driver_assigned', version: 2 });
+    // Exactly one accept event after the booking's seq 1
+    expect((await events(ride.id)).slice(1)).toEqual([
+      { seq: 2, status: 'driver_assigned', actor: 'driver', actor_id: winner.id },
+    ]);
+  });
+
+  it('lets one driver win only one of two rides accepted in parallel', async () => {
+    const [r1, r2] = [await searchingRide(), await searchingRide()];
+    const driver = await verifiedDriver();
+    const results = await Promise.all([accept(driver, r1.id), accept(driver, r2.id)]);
+
+    const statuses = results.map((r) => r.status);
+    expect([...statuses].sort()).toEqual([HttpStatus.OK, HttpStatus.CONFLICT]);
+    const rows = await db().query<{ id: string; status: string; version: number; driver_id: string | null }[]>(
+      'SELECT id, status, version, driver_id FROM rides WHERE id = ANY($1) ORDER BY status',
+      [[r1.id, r2.id]],
+    );
+    const won = statuses.indexOf(HttpStatus.OK) === 0 ? r1.id : r2.id;
+    expect(rows).toEqual([
+      { id: won, status: 'driver_assigned', version: 2, driver_id: driver.id },
+      { id: won === r1.id ? r2.id : r1.id, status: 'searching', version: 1, driver_id: null },
+    ]);
+  });
+
   it('gives the assigned driver the current snapshot on a repeat accept', async () => {
     const ride = await searchingRide();
     const driver = await verifiedDriver();
