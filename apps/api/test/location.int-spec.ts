@@ -1,4 +1,4 @@
-import type { LocationPoint } from '@lern/contracts';
+import type { LocationPoint, Quote, Ride } from '@lern/contracts';
 import { HttpStatus, type INestApplication } from '@nestjs/common';
 import { io, type Socket } from 'socket.io-client';
 import request from 'supertest';
@@ -47,6 +47,29 @@ const stored = async (id: string) =>
        FROM driver_locations WHERE driver_id = $1`,
     [id],
   );
+
+const trip = { pickup: { lat: 11.5564, lng: 104.9282 }, dropoff: { lat: 11.5466, lng: 104.8441 }, vehicleType: 'remork' };
+// A fresh rider's ride accepted by d, walked on with driver steps (arrive, start, complete)
+const rideOf = async (d: Actor, ...steps: string[]) => {
+  const rider = await signIn(app);
+  const quote = (await http().post('/quotes').set(rider.auth).send(trip).expect(201)).body as Quote;
+  const ride = (await http().post('/rides').set(rider.auth).send({ quoteId: quote.id }).expect(201)).body as Ride;
+  for (const s of ['accept', ...steps]) await http().post(`/rides/${ride.id}/${s}`).set(d.auth).expect(200);
+  return ride.id;
+};
+const tripPoints = (rideId: string) =>
+  db().query<Omit<Row, 'received_at'>[]>(
+    `SELECT ST_Y(position::geometry) lat, ST_X(position::geometry) lng, recorded_at
+       FROM trip_points WHERE ride_id = $1 ORDER BY recorded_at`,
+    [rideId],
+  );
+// Start of a 10 s bucket a minute ago, in ms, so test points sit on known bucket boundaries
+const bucketStart = async () =>
+  (
+    await db().query<{ t: Date }[]>(
+      `SELECT date_bin('10 seconds', now() - interval '60 seconds', timestamptz '2000-01-01Z') AS t`,
+    )
+  )[0].t.getTime();
 
 describe('POST /drivers/me/locations', () => {
   it('stores the newest point of a batch, whatever the array order', async () => {
@@ -216,5 +239,52 @@ describe('socket driver:location', () => {
     expect(ack).toEqual({ dropped: 0 });
     expect(await stored(a.id)).toHaveLength(1);
     expect(await stored(b.id)).toHaveLength(0);
+  });
+});
+
+describe('trip_points', () => {
+  it('keeps one point per 10 s bucket of an in_progress ride, the earliest in each', async () => {
+    const d = await verifiedDriver();
+    const rideId = await rideOf(d, 'arrive', 'start');
+    const base = await bucketStart();
+    const p = (s: number) => pt(11.55 + s / 1000, 104.92, new Date(base + s * 1000).toISOString());
+    const times = (rows: { recorded_at: Date }[]) => rows.map((r) => r.recorded_at.toISOString());
+
+    // +3 comes before +1 in the array: the earlier point wins its bucket, not the first sent
+    const res = await post(d, { points: [p(12), p(3), p(1), p(25), pt(11.6, 104.95, await at(300))] });
+    expect(res.body).toEqual({ dropped: 1 });
+    const rows = await tripPoints(rideId);
+    expect(times(rows)).toEqual([p(1), p(12), p(25)].map((x) => x.recordedAt));
+    expect(rows[0].lat).toBeCloseTo(11.551, 6);
+
+    // A replay and a point in a taken bucket add nothing; a late point in a new bucket fills the gap
+    await post(d, { points: [p(12), p(3), p(1), p(25), p(5)] }).expect(200);
+    await post(d, { points: [p(35)] }).expect(200);
+    await post(d, { points: [p(-15)] }).expect(200);
+    expect(times(await tripPoints(rideId))).toEqual([p(-15), p(1), p(12), p(25), p(35)].map((x) => x.recordedAt));
+  });
+
+  it('samples nothing before the trip starts or after it ends', async () => {
+    for (const steps of [[], ['arrive'], ['arrive', 'start', 'complete']]) {
+      const d = await verifiedDriver();
+      const rideId = await rideOf(d, ...steps);
+      await post(d, { points: [pt(11.56, 104.92, await at(-5))] }).expect(200);
+      expect(await tripPoints(rideId)).toHaveLength(0);
+    }
+  });
+
+  it("adds points only to the caller's own ride (IDOR)", async () => {
+    const d = await verifiedDriver();
+    const rideId = await rideOf(d, 'arrive', 'start');
+    const other = await verifiedDriver();
+    await post(other, { rideId, points: [pt(11.56, 104.92, await at(-5))] }).expect(200);
+    expect(await tripPoints(rideId)).toHaveLength(0);
+  });
+
+  it('samples socket points too', async () => {
+    const d = await verifiedDriver();
+    const rideId = await rideOf(d, 'arrive', 'start');
+    expect(await send(await connect(d), pt(11.56, 104.92, await at(-5)))).toEqual({ dropped: 0 });
+    expect(await tripPoints(rideId)).toHaveLength(1);
   });
 });

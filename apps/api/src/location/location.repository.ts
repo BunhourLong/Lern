@@ -6,8 +6,9 @@ import { DataSource } from 'typeorm';
 export class LocationRepository {
   constructor(private readonly db: DataSource) {}
 
-  // One statement: verification check, future-point filter, newest-point pick and an upsert that
-  // only moves forward in recorded_at (invariant 12). No rows back = the caller is not a verified driver.
+  // One statement: verification check, future-point filter, newest-point pick, an upsert that only
+  // moves forward in recorded_at (invariant 12), and trip_points sampling while a ride is in_progress.
+  // No rows back = the caller is not a verified driver.
   async record(driverId: string, points: LocationPoint[]): Promise<LocationResult | undefined> {
     const rows = await this.db.query<LocationResult[]>(
       `WITH me AS (
@@ -24,6 +25,15 @@ export class LocationRepository {
          ON CONFLICT (driver_id) DO UPDATE
            SET position = EXCLUDED.position, recorded_at = EXCLUDED.recorded_at, received_at = now()
            WHERE driver_locations.recorded_at < EXCLUDED.recorded_at
+       ), trip AS (
+         SELECT rides.id FROM rides, me WHERE rides.driver_id = me.user_id AND rides.status = 'in_progress'
+       ), sampled AS (
+         -- shortcut: a batch that arrives after complete loses its tail; attribute by recorded_at if M5 shows late batches
+         INSERT INTO trip_points (ride_id, position, recorded_at)
+         SELECT trip.id, ST_SetSRID(ST_MakePoint(pts.lng, pts.lat), 4326)::geography, pts.recorded_at
+         FROM trip, pts WHERE NOT pts.future
+         ORDER BY pts.recorded_at
+         ON CONFLICT (ride_id, date_bin('10 seconds', recorded_at, timestamptz '2000-01-01Z')) DO NOTHING
        )
        SELECT (SELECT count(*) FROM pts WHERE future)::int AS dropped FROM me`,
       [driverId, points.map((p) => p.lat), points.map((p) => p.lng), points.map((p) => p.recordedAt)],
