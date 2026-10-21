@@ -4,6 +4,7 @@ import { ZodSerializerDto } from 'nestjs-zod';
 import { type AuthUser, CurrentUser, Roles } from '../auth/auth.decorators';
 import { VerifiedDriver } from '../drivers/verified-driver.guard';
 import { Idempotent } from '../shared/idempotency/idempotency.interceptor';
+import { CancelRideDto } from './dto/cancel-ride.dto';
 import { CreateRideDto } from './dto/create-ride.dto';
 import { RideDto } from './dto/ride.dto';
 import { RidesService } from './rides.service';
@@ -38,7 +39,21 @@ export class RidesController {
     return this.rides.accept(user.id, id);
   }
 
-  // Declared after accept: Express matches routes in order, so /accept never reaches this one
+  // Rider or assigned driver; no @Roles, the guarded UPDATE decides. Not @VerifiedDriver either: a
+  // suspended driver must still be able to drop a ride they can no longer serve.
+  @Post(':id/cancel')
+  @HttpCode(HttpStatus.OK)
+  @Idempotent()
+  @ZodSerializerDto(RideDto)
+  cancel(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: CancelRideDto,
+  ): Promise<Ride> {
+    return this.rides.cancel(user.id, id, body.reason);
+  }
+
+  // Declared after accept and cancel: Express matches routes in order, so they never reach this one
   @Post(':id/:action')
   @HttpCode(HttpStatus.OK)
   @Roles('driver')

@@ -1,4 +1,4 @@
-import type { Money, Point, Ride, RideAction, RideStatus, VehicleType } from '@lern/contracts';
+import type { CancelReason, Money, Point, Ride, RideAction, RideStatus, VehicleType } from '@lern/contracts';
 import { Injectable } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 
@@ -49,25 +49,27 @@ export class RidesRepository {
 
   // Invariant 1: one guarded statement moves the ride and logs the event, or matches nothing (undefined:
   // wrong status, or the caller may not move this ride). Accept also assigns the caller as the driver.
-  // Throws a unique violation if that driver already has an active ride.
+  // Throws a unique violation if that driver already has an active ride. A cancel needs its reason (a CHECK
+  // rejects a cancelled ride without one); every other move leaves it NULL, as it already is.
   async transition(
     userId: string,
     rideId: string,
     actor: 'rider' | 'driver',
     action: RideAction,
     t: { from: readonly RideStatus[]; to: RideStatus },
+    cancelReason?: CancelReason,
   ): Promise<Ride | undefined> {
     const accept = action === 'accept';
     const [row] = await this.db.query<Ride[]>(
       `WITH ride AS (
-         UPDATE rides SET status = $4, version = version + 1${accept ? ', driver_id = $1' : ''}
+         UPDATE rides SET status = $4, version = version + 1, cancel_reason = $6${accept ? ', driver_id = $1' : ''}
          WHERE id = $2 AND status = ANY($3) AND ${MAY_MOVE[accept ? 'accept' : actor]}
          RETURNING *
        ), event AS (
          INSERT INTO ride_events (ride_id, seq, status, actor, actor_id) SELECT id, version, status, $5, $1 FROM ride
        )
        SELECT ${RIDE} FROM ride`,
-      [userId, rideId, t.from, t.to, actor],
+      [userId, rideId, t.from, t.to, actor, cancelReason ?? null],
     );
     return row;
   }
@@ -77,6 +79,16 @@ export class RidesRepository {
     const [row] = await this.db.query<Ride[]>(
       `SELECT ${RIDE} FROM rides WHERE id = $1 AND (rider_id = $2 OR driver_id = $2)`,
       [rideId, userId],
+    );
+    return row;
+  }
+
+  // The caller's ride on one side that hasn't ended; the partial uniques allow at most one per side
+  async findActive(userId: string, side: 'rider_id' | 'driver_id'): Promise<Ride | undefined> {
+    const [row] = await this.db.query<Ride[]>(
+      `SELECT ${RIDE} FROM rides
+       WHERE ${side} = $1 AND status IN ('searching', 'driver_assigned', 'driver_arrived', 'in_progress')`,
+      [userId],
     );
     return row;
   }
