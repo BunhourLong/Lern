@@ -1,6 +1,6 @@
-import type { LocationPoint, LocationResult } from '@lern/contracts';
+import type { LocationPoint, LocationResult, Point } from '@lern/contracts';
 import { Injectable } from '@nestjs/common';
-import { LocationRepository } from './location.repository';
+import { LocationRepository, type NearbyDriver } from './location.repository';
 
 @Injectable()
 export class LocationService {
@@ -9,5 +9,10 @@ export class LocationService {
   // undefined = the caller is not a verified driver
   record(driverId: string, points: LocationPoint[]): Promise<LocationResult | undefined> {
     return this.locations.record(driverId, points);
+  }
+
+  // Nearest available drivers by straight line; road ETA re-ranking is M4's
+  nearby(p: Point, radiusM: number, limit: number): Promise<NearbyDriver[]> {
+    return this.locations.nearby(p, radiusM, limit);
   }
 }

@@ -1,9 +1,10 @@
-import type { LocationPoint, Quote, Ride } from '@lern/contracts';
+import type { LocationPoint, Point, Quote, Ride } from '@lern/contracts';
 import { HttpStatus, type INestApplication } from '@nestjs/common';
 import { io, type Socket } from 'socket.io-client';
 import request from 'supertest';
 import type { App } from 'supertest/types';
 import { DataSource } from 'typeorm';
+import { LocationService } from '../src/location/location.service';
 import { type Actor, bootApp, signIn } from './support/actors';
 
 let app: INestApplication<App>;
@@ -286,5 +287,57 @@ describe('trip_points', () => {
     const rideId = await rideOf(d, 'arrive', 'start');
     expect(await send(await connect(d), pt(11.56, 104.92, await at(-5)))).toEqual({ dropped: 0 });
     expect(await tripPoints(rideId)).toHaveLength(1);
+  });
+});
+
+describe('LocationService.nearby', () => {
+  // Suites share the DB, so each test looks only at its own drivers; the default limit is high so other
+  // suites' drivers can't push them out before that filter
+  const nearby = async (p: Point, radiusM: number, mine: Actor[], limit = 10_000) => {
+    const ids = mine.map((a) => a.id);
+    return (await app.get(LocationService).nearby(p, radiusM, limit)).filter((r) => ids.includes(r.driverId));
+  };
+  const driverAt = async (p: Point) => {
+    const d = await verifiedDriver();
+    await post(d, { points: [pt(p.lat, p.lng, await at(-1))] }).expect(200);
+    return d;
+  };
+  const receivedAgo = (a: Actor, seconds: number) =>
+    db().query(`UPDATE driver_locations SET received_at = now() - make_interval(secs => $2) WHERE driver_id = $1`, [
+      a.id,
+      seconds,
+    ]);
+  const quay = { lat: 11.564, lng: 104.931 }; // rider on Sisowath Quay
+
+  it('orders by straight-line distance, so a driver across the river ranks first (M4 re-ranks by road ETA)', async () => {
+    const acrossRiver = await driverAt({ lat: 11.564, lng: 104.948 }); // far bank (Arey Ksat side): ~1854 m
+    const sameBank = await driverAt({ lat: 11.548, lng: 104.92 }); // same bank, ~2137 m, shorter by road
+    const outside = await driverAt({ lat: 11.59, lng: 104.89 }); // ~5.3 km
+    const res = await nearby(quay, 3000, [acrossRiver, sameBank, outside]);
+    expect(res.map((r) => r.driverId)).toEqual([acrossRiver.id, sameBank.id]);
+    expect(Math.abs(res[0].distanceM - 1854)).toBeLessThan(20);
+    expect(Math.abs(res[1].distanceM - 2137)).toBeLessThan(20);
+  });
+
+  it('leaves out stale, unverified and busy drivers', async () => {
+    const spot = { lat: 11.566, lng: 104.929 };
+    const ds = [];
+    for (let i = 0; i < 6; i++) ds.push(await driverAt(spot)); // sequential: parallel sign-in chains hang supertest
+    const [fresh, recent, stale, suspended, busy, done] = ds;
+    await receivedAgo(recent, 59);
+    await receivedAgo(stale, 61);
+    await db().query(`UPDATE drivers SET verification = 'suspended' WHERE user_id = $1`, [suspended.id]);
+    await rideOf(busy);
+    await rideOf(done, 'arrive', 'start', 'complete');
+    const res = await nearby(quay, 1000, [fresh, recent, stale, suspended, busy, done]);
+    expect(res.map((r) => r.driverId).sort()).toEqual([fresh.id, recent.id, done.id].sort());
+  });
+
+  it('returns at most limit drivers, the nearest', async () => {
+    const spot = { lat: 11.53, lng: 104.88 }; // no other suite reports near here
+    const ds = [];
+    for (const i of [2, 0, 1]) ds[i] = await driverAt({ lat: spot.lat + i * 0.0001, lng: spot.lng });
+    const res = await nearby(spot, 100, ds, 2);
+    expect(res.map((r) => r.driverId)).toEqual([ds[0].id, ds[1].id]);
   });
 });

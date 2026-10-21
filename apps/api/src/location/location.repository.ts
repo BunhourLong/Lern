@@ -1,6 +1,8 @@
-import type { LocationPoint, LocationResult } from '@lern/contracts';
+import type { LocationPoint, LocationResult, Point } from '@lern/contracts';
 import { Injectable } from '@nestjs/common';
 import { DataSource } from 'typeorm';
+
+export type NearbyDriver = { driverId: string; distanceM: number };
 
 @Injectable()
 export class LocationRepository {
@@ -39,5 +41,26 @@ export class LocationRepository {
       [driverId, points.map((p) => p.lat), points.map((p) => p.lng), points.map((p) => p.recordedAt)],
     );
     return rows[0];
+  }
+
+  // Fresh = received in the last 60 s by the server clock (a slow phone clock leaves recorded_at behind).
+  // The point is inlined, not a CTE, so ORDER BY <-> can walk the GiST index.
+  nearby(p: Point, radiusM: number, limit: number): Promise<NearbyDriver[]> {
+    return this.db.query<NearbyDriver[]>(
+      `SELECT l.driver_id AS "driverId",
+              round(ST_Distance(l.position, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography))::int AS "distanceM"
+       FROM driver_locations l JOIN drivers d ON d.user_id = l.driver_id
+       WHERE ST_DWithin(l.position, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography, $3)
+         AND l.received_at > now() - interval '60 seconds'
+         AND d.verification = 'verified'
+         -- shortcut: "available" = verified + no active ride, as in the open pool; the availability column replaces it in M4
+         AND NOT EXISTS (
+           SELECT 1 FROM rides r
+           WHERE r.driver_id = l.driver_id AND r.status IN ('driver_assigned', 'driver_arrived', 'in_progress')
+         )
+       ORDER BY l.position <-> ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography
+       LIMIT $4`,
+      [p.lng, p.lat, radiusM, limit],
+    );
   }
 }
