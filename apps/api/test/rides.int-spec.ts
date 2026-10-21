@@ -90,6 +90,81 @@ describe('POST /rides', () => {
   });
 });
 
+const verifiedDriver = async (vehicleType = 'remork', user?: Actor) => {
+  const me = user ?? (await signIn(app));
+  await http().post('/drivers/me').set(me.auth).send({ vehicleType, plate: 'PP 2A-1234' }).expect(201);
+  await db().query(`UPDATE drivers SET verification = 'verified' WHERE user_id = $1`, [me.id]);
+  return signIn(app, me.phone); // a fresh token carries the driver role
+};
+const searchingRide = async () => {
+  const rider = await signIn(app);
+  return (await book(rider, (await newQuote(rider)).id).expect(201)).body as Ride;
+};
+const accept = (a: Actor, rideId: string) => http().post(`/rides/${rideId}/accept`).set(a.auth);
+
+describe('POST /rides/:id/accept (open pool)', () => {
+  it('assigns a searching ride to the driver who accepts, and only to them', async () => {
+    const ride = await searchingRide();
+    const [first, second] = [await verifiedDriver(), await verifiedDriver()];
+    const res = await accept(first, ride.id);
+    expect(res.status).toBe(HttpStatus.OK);
+    expect(res.body).toEqual({ ...ride, status: 'driver_assigned', version: 2 });
+
+    const late = await accept(second, ride.id);
+    expect(late.status).toBe(HttpStatus.CONFLICT);
+    expect(late.body).toMatchObject({ code: 'INVALID_TRANSITION' });
+    expect(late.body).not.toHaveProperty('ride'); // not their ride: no snapshot
+    const [row] = await db().query<{ driver_id: string }[]>('SELECT driver_id FROM rides WHERE id = $1', [ride.id]);
+    expect(row.driver_id).toBe(first.id);
+  });
+
+  it('gives the assigned driver the current snapshot on a repeat accept', async () => {
+    const ride = await searchingRide();
+    const driver = await verifiedDriver();
+    await accept(driver, ride.id).expect(200);
+    const again = await accept(driver, ride.id);
+    expect(again.status).toBe(HttpStatus.CONFLICT);
+    expect(again.body).toMatchObject({ code: 'INVALID_TRANSITION', ride: { id: ride.id, status: 'driver_assigned', version: 2 } });
+  });
+
+  it('is 409 for a driver with a different vehicle type', async () => {
+    const ride = await searchingRide();
+    expect((await accept(await verifiedDriver('moto'), ride.id)).status).toBe(HttpStatus.CONFLICT);
+  });
+
+  it('allows one active ride per driver', async () => {
+    const [r1, r2] = [await searchingRide(), await searchingRide()];
+    const driver = await verifiedDriver();
+    await accept(driver, r1.id).expect(200);
+    const res = await accept(driver, r2.id);
+    expect(res.status).toBe(HttpStatus.CONFLICT);
+    expect(res.body).toMatchObject({ message: 'Driver already has an active ride' });
+  });
+
+  it("never lets a driver accept their own ride", async () => {
+    const user = await signIn(app);
+    const ride = (await book(user, (await newQuote(user)).id).expect(201)).body as Ride;
+    expect((await accept(await verifiedDriver('remork', user), ride.id)).status).toBe(HttpStatus.CONFLICT);
+  });
+
+  it('is 404 for an unknown ride and 400 for a malformed id', async () => {
+    const driver = await verifiedDriver();
+    expect((await accept(driver, randomUUID())).status).toBe(HttpStatus.NOT_FOUND);
+    expect((await accept(driver, 'nope')).status).toBe(HttpStatus.BAD_REQUEST);
+  });
+
+  it('is 403 for a rider and for an unverified driver, and leaves the ride searching', async () => {
+    const ride = await searchingRide();
+    const rider = await signIn(app);
+    expect((await accept(rider, ride.id)).status).toBe(HttpStatus.FORBIDDEN);
+    const pending = await verifiedDriver();
+    await db().query(`UPDATE drivers SET verification = 'pending' WHERE user_id = $1`, [pending.id]);
+    expect((await accept(pending, ride.id)).status).toBe(HttpStatus.FORBIDDEN);
+    const [row] = await db().query<{ status: string }[]>('SELECT status FROM rides WHERE id = $1', [ride.id]);
+    expect(row.status).toBe('searching');
+  });
+});
+
 // IDOR (see test/support/actors.ts): B can't book A's quote or learn that it exists
 describe('ownership', () => {
   it("never lets one rider book another rider's quote", async () => {
