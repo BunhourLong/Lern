@@ -35,3 +35,22 @@ export const rideSchema = z.object({
   fare: moneySchema,
 });
 export type Ride = z.infer<typeof rideSchema>;
+
+// Required on every cancel: a fixed list stays reportable and can't hold typed-in personal data.
+// Who cancelled is the ride event's actor. The DB CHECK repeats this list: a new reason needs a migration.
+export const cancelReasonSchema = z.enum([
+  'changed_mind',
+  'waited_too_long',
+  'driver_not_moving',
+  'rider_unreachable',
+  'vehicle_problem',
+  'other',
+]);
+export type CancelReason = z.infer<typeof cancelReasonSchema>;
+
+export const cancelRideSchema = z.object({ reason: cancelReasonSchema });
+export type CancelRide = z.infer<typeof cancelRideSchema>;
+
+// One user may hold both roles, and the two partial uniques allow one active ride on each side
+export const activeRidesSchema = z.object({ rider: rideSchema.nullable(), driver: rideSchema.nullable() });
+export type ActiveRides = z.infer<typeof activeRidesSchema>;
