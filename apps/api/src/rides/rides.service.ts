@@ -46,15 +46,20 @@ export class RidesService {
       throw conflict(err);
     }
     if (ride) return ride;
-    const current = await this.rides.find(rideId);
-    if (!current) throw new NotFoundException('Ride not found');
-    const { driverId: assignee, ...snapshot } = current;
-    // Only the assigned driver gets the snapshot to reconcile with; anyone else just learns it's gone
+    // Only a participant gets the snapshot to reconcile with; any other driver just learns it's gone
+    const mine = await this.rides.findForParticipant(rideId, driverId);
+    if (!mine && !(await this.rides.exists(rideId))) throw new NotFoundException('Ride not found');
     throw new ConflictException({
       statusCode: HttpStatus.CONFLICT,
       code: 'INVALID_TRANSITION',
       message: 'Ride can no longer be accepted',
-      ride: assignee === driverId ? snapshot : undefined,
+      ride: mine,
     });
+  }
+
+  async get(userId: string, rideId: string): Promise<Ride> {
+    const ride = await this.rides.findForParticipant(rideId, userId);
+    if (!ride) throw new NotFoundException('Ride not found');
+    return ride;
   }
 }

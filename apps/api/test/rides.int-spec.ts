@@ -101,6 +101,7 @@ const searchingRide = async () => {
   return (await book(rider, (await newQuote(rider)).id).expect(201)).body as Ride;
 };
 const accept = (a: Actor, rideId: string) => http().post(`/rides/${rideId}/accept`).set(a.auth);
+const getRide = (a: Actor, rideId: string) => http().get(`/rides/${rideId}`).set(a.auth);
 
 describe('POST /rides/:id/accept (open pool)', () => {
   it('assigns a searching ride to the driver who accepts, and only to them', async () => {
@@ -174,5 +175,44 @@ describe('ownership', () => {
     expect(await rideCount(b)).toBe(0);
     // A can still book it: B's attempt didn't consume it
     expect((await book(a, quote.id)).status).toBe(HttpStatus.CREATED);
+  });
+
+  it('ignores an owner smuggled into the booking body', async () => {
+    const [a, b] = [await signIn(app), await signIn(app)];
+    const quote = await newQuote(b);
+    await http().post('/rides').set(b.auth).send({ quoteId: quote.id, riderId: a.id }).expect(201);
+    expect([await rideCount(a), await rideCount(b)]).toEqual([0, 1]);
+  });
+
+  it("hides a ride from every user but its rider and assigned driver, and doesn't reveal it exists", async () => {
+    const ride = await searchingRide();
+    const [otherRider, otherDriver] = [await signIn(app), await verifiedDriver()];
+    // Open pool: any driver may accept a searching ride, but only the assigned one may read it
+    expect((await getRide(otherDriver, ride.id)).status).toBe(HttpStatus.NOT_FOUND);
+    expect((await getRide(otherRider, ride.id)).status).toBe(HttpStatus.NOT_FOUND);
+    await accept(await verifiedDriver(), ride.id).expect(200);
+    expect((await getRide(otherDriver, ride.id)).status).toBe(HttpStatus.NOT_FOUND);
+    // The losing driver's 409 carries no snapshot either
+    expect((await accept(otherDriver, ride.id)).body).not.toHaveProperty('ride');
+  });
+});
+
+describe('GET /rides/:id', () => {
+  it('shows the rider their ride, and the assigned driver the same snapshot', async () => {
+    const rider = await signIn(app);
+    const booked = (await book(rider, (await newQuote(rider)).id).expect(201)).body as Ride;
+    expect((await getRide(rider, booked.id).expect(200)).body).toEqual(booked);
+
+    const driver = await verifiedDriver();
+    const accepted = (await accept(driver, booked.id).expect(200)).body as Ride;
+    expect((await getRide(driver, booked.id).expect(200)).body).toEqual(accepted);
+    expect((await getRide(rider, booked.id).expect(200)).body).toEqual(accepted);
+  });
+
+  it('is 404 for an unknown ride, 400 for a malformed id and 401 without a token', async () => {
+    const rider = await signIn(app);
+    expect((await getRide(rider, randomUUID())).status).toBe(HttpStatus.NOT_FOUND);
+    expect((await getRide(rider, 'nope')).status).toBe(HttpStatus.BAD_REQUEST);
+    expect((await http().get(`/rides/${randomUUID()}`)).status).toBe(HttpStatus.UNAUTHORIZED);
   });
 });

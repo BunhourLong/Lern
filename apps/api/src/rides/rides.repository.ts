@@ -48,11 +48,16 @@ export class RidesRepository {
     return rows[0];
   }
 
-  async find(rideId: string): Promise<(Ride & { driverId: string | null }) | undefined> {
-    const [row] = await this.db.query<(Ride & { driverId: string | null })[]>(
-      `SELECT ${RIDE}, driver_id AS "driverId" FROM rides WHERE id = $1`,
-      [rideId],
+  // Ownership lives in the WHERE: anyone but the ride's rider or assigned driver gets undefined
+  async findForParticipant(rideId: string, userId: string): Promise<Ride | undefined> {
+    const [row] = await this.db.query<Ride[]>(
+      `SELECT ${RIDE} FROM rides WHERE id = $1 AND (rider_id = $2 OR driver_id = $2)`,
+      [rideId, userId],
     );
     return row;
+  }
+
+  async exists(rideId: string): Promise<boolean> {
+    return (await this.db.query<unknown[]>('SELECT 1 FROM rides WHERE id = $1', [rideId])).length === 1;
   }
 }
