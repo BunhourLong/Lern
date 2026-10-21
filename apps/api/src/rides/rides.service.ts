@@ -1,4 +1,4 @@
-import { type Ride, rideTransition } from '@lern/contracts';
+import { type Ride, type RideAction, rideTransition } from '@lern/contracts';
 import { ConflictException, GoneException, HttpStatus, Injectable, NotFoundException } from '@nestjs/common';
 import { QueryFailedError } from 'typeorm';
 import { PricingService } from '../pricing/pricing.service';
@@ -15,8 +15,6 @@ function conflict(err: unknown): unknown {
   const constraint = err instanceof QueryFailedError ? (err.driverError as { constraint?: string }).constraint : undefined;
   return constraint && CONFLICTS[constraint] ? new ConflictException(CONFLICTS[constraint]) : err;
 }
-
-const ACCEPT = rideTransition('accept', 'driver')!;
 
 @Injectable()
 export class RidesService {
@@ -38,21 +36,35 @@ export class RidesService {
   }
 
   // Open pool (until M4 offers): the guarded UPDATE decides which of many drivers wins
-  async accept(driverId: string, rideId: string): Promise<Ride> {
+  accept(driverId: string, rideId: string): Promise<Ride> {
+    return this.move(driverId, rideId, 'driver', 'accept');
+  }
+
+  // arrive → start → complete, each only by the ride's assigned driver
+  step(driverId: string, rideId: string, action: Extract<RideAction, 'arrive' | 'start' | 'complete'>): Promise<Ride> {
+    return this.move(driverId, rideId, 'driver', action);
+  }
+
+  private async move(userId: string, rideId: string, actor: 'rider' | 'driver', action: RideAction): Promise<Ride> {
+    const t = rideTransition(action, actor);
+    if (!t) throw new Error(`No ${action} transition for ${actor}`);
     let ride: Ride | undefined;
     try {
-      ride = await this.rides.accept(driverId, rideId, ACCEPT.from, ACCEPT.to);
+      ride = await this.rides.transition(userId, rideId, actor, action, t);
     } catch (err) {
       throw conflict(err);
     }
     if (ride) return ride;
-    // Only a participant gets the snapshot to reconcile with; any other driver just learns it's gone
-    const mine = await this.rides.findForParticipant(rideId, driverId);
-    if (!mine && !(await this.rides.exists(rideId))) throw new NotFoundException('Ride not found');
+    // Only a participant gets the snapshot to reconcile with. Accept is the one action a non-participant
+    // may try (open pool), so only it says that someone else's ride exists; every other action is a 404.
+    const mine = await this.rides.findForParticipant(rideId, userId);
+    if (!mine && (action !== 'accept' || !(await this.rides.exists(rideId)))) {
+      throw new NotFoundException('Ride not found');
+    }
     throw new ConflictException({
       statusCode: HttpStatus.CONFLICT,
       code: 'INVALID_TRANSITION',
-      message: 'Ride can no longer be accepted',
+      message: `Ride can't ${action} from its current status`,
       ride: mine,
     });
   }

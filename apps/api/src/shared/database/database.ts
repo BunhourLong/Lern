@@ -7,6 +7,7 @@ import { CreateQuotes1792483200000 } from './migrations/1792483200000-create-quo
 import { CreateRides1792486800000 } from './migrations/1792486800000-create-rides';
 import { CreateIdempotencyKeys1792486900000 } from './migrations/1792486900000-create-idempotency-keys';
 import { RidesOneActivePerDriver1792573200000 } from './migrations/1792573200000-rides-one-active-per-driver';
+import { CreateRideEvents1792576800000 } from './migrations/1792576800000-create-ride-events';
 
 // Migrations are listed, not globbed, so the same list works from ts (tests) and dist (CLI)
 export const migrations = [
@@ -18,6 +19,7 @@ export const migrations = [
   CreateRides1792486800000,
   CreateIdempotencyKeys1792486900000,
   RidesOneActivePerDriver1792573200000,
+  CreateRideEvents1792576800000,
 ];
 
 export function dataSourceOptions(url: string): DataSourceOptions {

@@ -166,6 +166,63 @@ describe('POST /rides/:id/accept (open pool)', () => {
   });
 });
 
+const step = (a: Actor, rideId: string, action: string) => http().post(`/rides/${rideId}/${action}`).set(a.auth);
+const events = (rideId: string) =>
+  db().query<{ seq: number; status: string; actor: string; actor_id: string | null }[]>(
+    'SELECT seq, status, actor, actor_id FROM ride_events WHERE ride_id = $1 ORDER BY seq',
+    [rideId],
+  );
+
+describe('POST /rides/:id/{arrive,start,complete}', () => {
+  it('walks the trip to completed, one guarded step and one event per version', async () => {
+    const rider = await signIn(app);
+    const ride = (await book(rider, (await newQuote(rider)).id).expect(201)).body as Ride;
+    const driver = await verifiedDriver();
+    await accept(driver, ride.id).expect(200);
+    for (const [action, status, version] of [
+      ['arrive', 'driver_arrived', 3],
+      ['start', 'in_progress', 4],
+      ['complete', 'completed', 5],
+    ] as const) {
+      expect((await step(driver, ride.id, action).expect(200)).body).toMatchObject({ status, version });
+    }
+    expect(await events(ride.id)).toEqual([
+      { seq: 1, status: 'searching', actor: 'rider', actor_id: rider.id },
+      { seq: 2, status: 'driver_assigned', actor: 'driver', actor_id: driver.id },
+      { seq: 3, status: 'driver_arrived', actor: 'driver', actor_id: driver.id },
+      { seq: 4, status: 'in_progress', actor: 'driver', actor_id: driver.id },
+      { seq: 5, status: 'completed', actor: 'driver', actor_id: driver.id },
+    ]);
+    // A completed trip frees the driver (partial unique index)
+    await accept(driver, (await searchingRide()).id).expect(200);
+  });
+
+  it('is 409 with the snapshot for an out-of-order step, and writes no event', async () => {
+    const ride = await searchingRide();
+    const driver = await verifiedDriver();
+    await accept(driver, ride.id).expect(200);
+    const res = await step(driver, ride.id, 'complete');
+    expect(res.status).toBe(HttpStatus.CONFLICT);
+    expect(res.body).toMatchObject({ code: 'INVALID_TRANSITION', ride: { status: 'driver_assigned', version: 2 } });
+    expect(await events(ride.id)).toHaveLength(2);
+  });
+
+  it("is 404 for another driver's ride and leaves it untouched (IDOR)", async () => {
+    const ride = await searchingRide();
+    const [driver, other] = [await verifiedDriver(), await verifiedDriver()];
+    await accept(driver, ride.id).expect(200);
+    expect((await step(other, ride.id, 'arrive')).status).toBe(HttpStatus.NOT_FOUND);
+    expect((await getRide(driver, ride.id)).body).toMatchObject({ status: 'driver_assigned', version: 2 });
+  });
+
+  it('is 403 for a rider, 400 for an unknown action', async () => {
+    const ride = await searchingRide();
+    const driver = await verifiedDriver();
+    expect((await step(await signIn(app), ride.id, 'arrive')).status).toBe(HttpStatus.FORBIDDEN);
+    expect((await step(driver, ride.id, 'teleport')).status).toBe(HttpStatus.BAD_REQUEST);
+  });
+});
+
 // IDOR (see test/support/actors.ts): B can't book A's quote or learn that it exists
 describe('ownership', () => {
   it("never lets one rider book another rider's quote", async () => {
