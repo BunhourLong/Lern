@@ -24,7 +24,7 @@ it('runs every migration up, down and up again', async () => {
   const hasPostgis = async () =>
     (await ds.query<unknown[]>(`SELECT 1 FROM pg_extension WHERE extname = 'postgis'`)).length === 1;
   const tables = async () =>
-    (await ds.query<{ t: string }[]>(`SELECT to_regclass(t)::text AS t FROM unnest($1::text[]) t`, [['users', 'refresh_tokens', 'user_roles', 'drivers']]))
+    (await ds.query<{ t: string }[]>(`SELECT to_regclass(t)::text AS t FROM unnest($1::text[]) t`, [['users', 'refresh_tokens', 'user_roles', 'drivers', 'quotes', 'rides', 'idempotency_keys', 'ride_events']]))
       .map((r) => r.t)
       .filter(Boolean);
 
@@ -33,7 +33,7 @@ it('runs every migration up, down and up again', async () => {
 
     await ds.runMigrations();
     expect(await hasPostgis()).toBe(true);
-    expect(await tables()).toEqual(['users', 'refresh_tokens', 'user_roles', 'drivers']);
+    expect(await tables()).toEqual(['users', 'refresh_tokens', 'user_roles', 'drivers', 'quotes', 'rides', 'idempotency_keys', 'ride_events']);
 
     for (let i = 0; i < ds.migrations.length; i++) await ds.undoLastMigration();
     expect(await hasPostgis()).toBe(false);

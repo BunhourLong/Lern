@@ -1,0 +1,25 @@
+# Snyk (https://snyk.io) policy file: recorded risk acceptances, reviewed in PRs (PLAN.md §2.6).
+# Every entry needs a reason and an expiry. `snyk ignore` rewrites this file and drops comments,
+# so the full analysis lives in each `reason`.
+version: v1.25.0
+ignore:
+  SNYK-JS-PICOMATCH-21248802:
+    - '*':
+        reason: >-
+          WHAT: picomatch ReDoS (CVE-2026-112366, CWE-1333, published 2026-10-19). A crafted
+          glob pattern makes picomatch build a regex with catastrophic backtracking and pins the
+          event loop. Availability only: no data read or changed.
+          NO FIX: 4.0.7 and 2.3.2 are the newest releases of each line and Snyk lists no fixed
+          version, so there is nothing to upgrade, patch or pnpm-override to.
+          HOW IT REACHES US: typeorm > tinyglobby > picomatch@4.0.7 (and 3 similar paths).
+          TypeORM only globs entity/migration paths from its options, and ours are explicit class
+          lists (src/shared/database/database.ts), so no glob is ever built at runtime.
+          EXPLOITABILITY: an attacker would need to control a glob pattern. No api code imports
+          picomatch, micromatch or tinyglobby, and eslint.config.mjs bans those imports so a new
+          use has to be argued for in review.
+          REVISIT: at expiry; sooner if picomatch publishes a fix (upgrade, delete this entry) or
+          if any server code starts building glob patterns from request data (then it's a real
+          DoS: drop the ignore and fix it).
+        expires: 2027-01-19T00:00:00.000Z
+        created: 2026-10-21T00:00:00.000Z
+patch: {}

@@ -27,4 +27,20 @@ ignore:
           any server code starts passing user input to micromatch/braces (then it's a real DoS).
         expires: 2027-01-17T00:00:00.000Z
         created: 2026-10-19T00:00:00.000Z
+  SNYK-JS-PICOMATCH-21248802:
+    - '*':
+        reason: >-
+          WHAT: picomatch ReDoS (CVE-2026-112366, CWE-1333, published 2026-10-19). A crafted
+          glob pattern makes picomatch build a regex with catastrophic backtracking and hangs the
+          process. Availability only: no data read or changed.
+          NO FIX: 4.0.7 and 2.3.2 are the newest releases of each line and Snyk lists no fixed
+          version, so there is nothing to upgrade, patch or pnpm-override to.
+          HOW IT REACHES US: only build and test tooling (32 paths): react-native >
+          @react-native/codegen > tinyglobby, metro > micromatch / anymatch, jest-util,
+          jest-haste-map, @parcel/watcher. None of it ships in the app bundle.
+          EXPLOITABILITY: same as the braces entry above: patterns come only from repo config
+          (metro, Jest, ESLint, codegen), never from network or user input.
+          REVISIT: at expiry; sooner if picomatch publishes a fix (upgrade, delete this entry).
+        expires: 2027-01-19T00:00:00.000Z
+        created: 2026-10-21T00:00:00.000Z
 patch: {}
