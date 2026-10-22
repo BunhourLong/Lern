@@ -36,6 +36,9 @@ export const rideSchema = z.object({
 });
 export type Ride = z.infer<typeof rideSchema>;
 
+// Server push to the ride's participants on every change; the payload is the full Ride (invariant 8)
+export const RIDE_UPDATED_EVENT = 'ride:updated';
+
 // Required on every cancel: a fixed list stays reportable and can't hold typed-in personal data.
 // Who cancelled is the ride event's actor. The DB CHECK repeats this list: a new reason needs a migration.
 export const cancelReasonSchema = z.enum([

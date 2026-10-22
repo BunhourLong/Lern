@@ -74,6 +74,11 @@ export class RealtimeGateway implements OnGatewayInit, OnGatewayConnection, OnAp
     });
   }
 
+  // False while this instance can't publish to Redis: an emit would reach only its own sockets
+  canFanOut(): boolean {
+    return this.pub.status === 'ready';
+  }
+
   onApplicationShutdown(): void {
     this.pub.disconnect();
     this.sub.disconnect();
