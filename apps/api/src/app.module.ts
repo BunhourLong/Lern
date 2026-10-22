@@ -6,6 +6,7 @@ import { ZodSerializerInterceptor, ZodValidationPipe } from 'nestjs-zod';
 import { AuthModule } from './auth/auth.module';
 import { DriversModule } from './drivers/drivers.module';
 import { HealthModule } from './health/health.module';
+import { LocationModule } from './location/location.module';
 import { PricingModule } from './pricing/pricing.module';
 import { RealtimeModule } from './realtime/realtime.module';
 import { RidesModule } from './rides/rides.module';
@@ -27,6 +28,7 @@ export class AppModule {
         HealthModule,
         AuthModule.forRoot(config),
         DriversModule,
+        LocationModule,
         PricingModule,
         RidesModule,
         RealtimeModule,

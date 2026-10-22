@@ -9,3 +9,4 @@ export * from './money.schema';
 export * from './geo.schema';
 export * from './quote.schema';
 export * from './idempotency.schema';
+export * from './location.schema';

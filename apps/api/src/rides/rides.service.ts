@@ -1,6 +1,7 @@
 import { type ActiveRides, type CancelReason, type Ride, type RideAction, rideTransition } from '@lern/contracts';
 import { ConflictException, GoneException, HttpStatus, Injectable, NotFoundException } from '@nestjs/common';
 import { QueryFailedError } from 'typeorm';
+import { OutboxService } from '../outbox/outbox.service';
 import { PricingService } from '../pricing/pricing.service';
 import { RidesRepository } from './rides.repository';
 
@@ -19,6 +20,7 @@ function conflict(err: unknown): unknown {
 @Injectable()
 export class RidesService {
   constructor(
+    private readonly outbox: OutboxService,
     private readonly pricing: PricingService,
     private readonly rides: RidesRepository,
   ) {}
@@ -28,11 +30,14 @@ export class RidesService {
     const quote = await this.pricing.findQuote(riderId, quoteId);
     if (!quote) throw new NotFoundException('Quote not found');
     if (quote.expired) throw new GoneException('Quote expired, request a new one');
+    let ride: Ride;
     try {
-      return await this.rides.insert(riderId, { quoteId, ...quote });
+      ride = await this.rides.insert(riderId, { quoteId, ...quote });
     } catch (err) {
       throw conflict(err);
     }
+    this.outbox.kick();
+    return ride;
   }
 
   // Open pool (until M4 offers): the guarded UPDATE decides which of many drivers wins
@@ -67,7 +72,10 @@ export class RidesService {
       } catch (err) {
         throw conflict(err);
       }
-      if (ride) return ride;
+      if (ride) {
+        this.outbox.kick();
+        return ride;
+      }
     }
     // Only a participant gets the snapshot to reconcile with. Accept is the one action a non-participant
     // may try (open pool), so only it says that someone else's ride exists; every other action is a 404.

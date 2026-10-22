@@ -1,4 +1,13 @@
-import type { CancelReason, Money, Point, Ride, RideAction, RideStatus, VehicleType } from '@lern/contracts';
+import {
+  type CancelReason,
+  type Money,
+  type Point,
+  RIDE_UPDATED_EVENT,
+  type Ride,
+  type RideAction,
+  type RideStatus,
+  type VehicleType,
+} from '@lern/contracts';
 import { Injectable } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 
@@ -6,6 +15,14 @@ const RIDE = `id, status, version, vehicle_type AS "vehicleType",
   json_build_object('lat', ST_Y(pickup::geometry), 'lng', ST_X(pickup::geometry)) AS pickup,
   json_build_object('lat', ST_Y(dropoff::geometry), 'lng', ST_X(dropoff::geometry)) AS dropoff,
   json_build_object('amountMinor', fare_minor, 'currency', currency) AS fare`;
+
+// Invariant 7: the statement that changes the ride also queues its announcement to both participants,
+// carrying the same snapshot REST returns (invariant 8). OutboxService sends it after the caller's kick.
+const OUTBOX = `outbox AS (
+  INSERT INTO outbox_events (topic, recipients, payload)
+  SELECT '${RIDE_UPDATED_EVENT}', array_remove(ARRAY[rider_id, driver_id], NULL), (SELECT to_jsonb(s) FROM (SELECT ${RIDE}) s)
+  FROM ride
+)`;
 
 // Who may move a ride, checked inside the guarded UPDATE so a non-participant matches no row ($1 = caller)
 const MAY_MOVE = {
@@ -30,7 +47,7 @@ export class RidesRepository {
          RETURNING *
        ), event AS (
          INSERT INTO ride_events (ride_id, seq, status, actor, actor_id) SELECT id, version, status, 'rider', $1 FROM ride
-       )
+       ), ${OUTBOX}
        SELECT ${RIDE} FROM ride`,
       [
         riderId,
@@ -47,7 +64,7 @@ export class RidesRepository {
     return row;
   }
 
-  // Invariant 1: one guarded statement moves the ride and logs the event, or matches nothing (undefined:
+  // Invariant 1: one guarded statement moves the ride, logs the event and queues it in the outbox, or matches nothing (undefined:
   // wrong status, or the caller may not move this ride). Accept also assigns the caller as the driver.
   // Throws a unique violation if that driver already has an active ride. A cancel needs its reason (a CHECK
   // rejects a cancelled ride without one); every other move leaves it NULL, as it already is.
@@ -67,7 +84,7 @@ export class RidesRepository {
          RETURNING *
        ), event AS (
          INSERT INTO ride_events (ride_id, seq, status, actor, actor_id) SELECT id, version, status, $5, $1 FROM ride
-       )
+       ), ${OUTBOX}
        SELECT ${RIDE} FROM ride`,
       [userId, rideId, t.from, t.to, actor, cancelReason ?? null],
     );
