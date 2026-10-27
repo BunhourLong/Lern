@@ -11,3 +11,9 @@ allowBuilds:
   protobufjs: false
   ssh2: false
   unrs-resolver: false
+# Patched transitive deps (Snyk high). Drop each once its parent ships the fix.
+overrides:
+  # SNYK-JS-MULTER-21431602: Nest 11 pins multer 2.4.0; 2.5.0 is what Nest 12 ships, same deps (Nest 12 is out, PLAN §9)
+  'multer@<2.5.0': 2.5.0
+  # SNYK-JS-BODYPARSER-21431495: via express 5 and the RN CLI, both on ^2.2, so only the lockfile was behind
+  'body-parser@>=2 <2.4.0': ^2.4.0
