@@ -2,7 +2,7 @@ import type { LocationPoint, LocationResult, Point } from '@lern/contracts';
 import { Injectable } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 
-export type NearbyDriver = { driverId: string; distanceM: number };
+export type NearbyDriver = { driverId: string; distanceM: number; lat: number; lng: number };
 
 @Injectable()
 export class LocationRepository {
@@ -48,7 +48,8 @@ export class LocationRepository {
   nearby(p: Point, radiusM: number, limit: number): Promise<NearbyDriver[]> {
     return this.db.query<NearbyDriver[]>(
       `SELECT l.driver_id AS "driverId",
-              round(ST_Distance(l.position, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography))::int AS "distanceM"
+              round(ST_Distance(l.position, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography))::int AS "distanceM",
+              ST_Y(l.position::geometry) AS lat, ST_X(l.position::geometry) AS lng
        FROM driver_locations l JOIN drivers d ON d.user_id = l.driver_id
        WHERE ST_DWithin(l.position, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography, $3)
          AND l.received_at > now() - interval '60 seconds'

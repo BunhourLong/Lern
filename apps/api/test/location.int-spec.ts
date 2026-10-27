@@ -340,4 +340,50 @@ describe('LocationService.nearby', () => {
     const res = await nearby(spot, 100, ds, 2);
     expect(res.map((r) => r.driverId)).toEqual([ds[0].id, ds[1].id]);
   });
+
+  // Each test sits in a town no other suite reports from, so the whole body is the test's own drivers
+  describe('GET /drivers/nearby', () => {
+    const get = (a: Actor, query: object) => http().get('/drivers/nearby').set(a.auth).query(query);
+
+    it('returns positions within 3 km, nearest first, rounded to 3 decimals and without ids', async () => {
+      const kampot = { lat: 10.612, lng: 104.18 };
+      await driverAt({ lat: 10.61234, lng: 104.18166 }); // ~180 m
+      await driverAt({ lat: 10.638, lng: 104.18 }); // ~2.9 km
+      await driverAt({ lat: 10.61, lng: 104.2 }); // ~2.2 km
+      await driverAt({ lat: 10.642, lng: 104.18 }); // ~3.3 km: outside
+      const rider = await signIn(app);
+      const res = await get(rider, kampot).expect(200);
+      expect(res.body).toEqual({
+        drivers: [
+          { lat: 10.612, lng: 104.182 },
+          { lat: 10.61, lng: 104.2 },
+          { lat: 10.638, lng: 104.18 },
+        ],
+      });
+    });
+
+    it('returns at most the nearest 10', async () => {
+      const battambang = { lat: 13.1, lng: 103.2 };
+      for (const i of [10, 3, 0, 7, 1, 9, 2, 8, 4, 6, 5]) await driverAt({ lat: 13.1 + i * 0.001, lng: 103.2 });
+      const rider = await signIn(app);
+      const res = await get(rider, battambang).expect(200);
+      expect((res.body as { drivers: Point[] }).drivers.map((d) => d.lat)).toEqual(
+        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map((i) => Number((13.1 + i * 0.001).toFixed(3))),
+      );
+    });
+
+    it('400 for a missing, out-of-area or non-numeric point', async () => {
+      const rider = await signIn(app);
+      for (const q of [{ lat: 11.56 }, { lat: 1, lng: 104.9 }, { lat: 'x', lng: 104.9 }, { lat: '', lng: 104.9 }])
+        await get(rider, q).expect(400);
+    });
+
+    it('is 401 without a token and 403 for a user without the rider role', async () => {
+      await http().get('/drivers/nearby').query({ lat: 11.56, lng: 104.92 }).expect(401);
+      const user = await signIn(app);
+      await db().query('DELETE FROM user_roles WHERE user_id = $1', [user.id]);
+      const again = await signIn(app, user.phone);
+      await get(again, { lat: 11.56, lng: 104.92 }).expect(403);
+    });
+  });
 });

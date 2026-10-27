@@ -23,3 +23,14 @@ export const DRIVER_LOCATION_EVENT = 'driver:location';
 // Socket ack when the point is refused; the success ack is a LocationResult
 export const socketErrorSchema = z.object({ error: z.enum(['BAD_REQUEST', 'FORBIDDEN']) });
 export type SocketError = z.infer<typeof socketErrorSchema>;
+
+// GET /drivers/nearby: query strings arrive as text
+export const nearbyDriversQuerySchema = z.object({
+  lat: z.coerce.number().pipe(pointSchema.shape.lat),
+  lng: z.coerce.number().pipe(pointSchema.shape.lng),
+});
+export type NearbyDriversQuery = z.infer<typeof nearbyDriversQuerySchema>;
+
+// Positions only, rounded to ~110 m and without ids, so a rider can't follow one driver between polls
+export const nearbyDriversSchema = z.object({ drivers: z.array(pointSchema) });
+export type NearbyDrivers = z.infer<typeof nearbyDriversSchema>;
