@@ -1,6 +1,7 @@
 packages:
   - apps/*
   - packages/*
+  - tools/*
 # React Native/Metro cannot follow pnpm's symlinked layout
 nodeLinker: hoisted
 # Dependency install scripts we don't need: prebuilt binaries cover them, and
