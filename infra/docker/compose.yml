@@ -31,5 +31,22 @@ services:
       timeout: 3s
       retries: 30
 
+  osrm:
+    # Road routing (quotes, ETA re-ranking, simulator routes). Data comes from osrm/prepare.sh, which
+    # `pnpm infra:up` runs first. Multi-arch image: native on Apple Silicon.
+    image: ghcr.io/project-osrm/osrm-backend:v26.10.0-debian@sha256:55dbfd47d984c2cacd64e32901b4321c86b5ec761438e69aa053dc78698a786f
+    command: osrm-routed --algorithm mld /data/cambodia.osrm
+    volumes:
+      - ./osrm/data:/data:ro
+    ports:
+      # 5000 is taken by macOS AirPlay Receiver
+      - 127.0.0.1:5050:5000
+    healthcheck:
+      # No curl in the image; the port opens once the graph is loaded
+      test: bash -c 'exec 3<>/dev/tcp/127.0.0.1/5000'
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
 volumes:
   pgdata:
