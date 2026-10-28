@@ -1,9 +1,3 @@
-import {
-  DRIVER_LOCATION_EVENT,
-  type LocationResult,
-  locationPointSchema,
-  type SocketError,
-} from '@lern/contracts';
 import { Logger, type OnApplicationShutdown } from '@nestjs/common';
 import {
   type OnGatewayConnection,
@@ -17,13 +11,13 @@ import { Redis } from 'ioredis';
 import type { Server, Socket } from 'socket.io';
 import { AccessTokenService } from '../auth/access-token.service';
 import type { AuthUser } from '../auth/auth.decorators';
-import { LocationService } from '../location/location.service';
 
-type SocketData = { user: AuthUser; expiresAt: number };
+export type SocketData = { user: AuthUser; expiresAt: number };
 
 // Push channel only (commands stay REST). Auth runs once, in the handshake; rooms: user:{id} (ride events go
 // to the participants' user rooms, so there are no ride rooms to leave). WebSocket only: long-polling would
 // need sticky sessions across instances. The Redis adapter fans room emits out to every instance.
+// Features add their handlers in their own <feature>.gateway.ts; gateways on this port share this server.
 // Nest builds gateway contexts without the app config, so the global AuthGuard, ZodValidationPipe and
 // serializer never run here: every @SubscribeMessage must validate its payload itself.
 @WebSocketGateway({ transports: ['websocket'] })
@@ -35,7 +29,6 @@ export class RealtimeGateway implements OnGatewayInit, OnGatewayConnection, OnAp
 
   constructor(
     private readonly tokens: AccessTokenService,
-    private readonly location: LocationService,
     redis: Redis,
   ) {
     // pub keeps the default retry limit: emits during an outage are dropped after 20 tries instead of
@@ -96,17 +89,5 @@ export class RealtimeGateway implements OnGatewayInit, OnGatewayConnection, OnAp
   @SubscribeMessage('whoami')
   whoami(socket: Socket): AuthUser {
     return (socket.data as SocketData).user;
-  }
-
-  // Foreground path: one point per message, the ack is the result. The driver id is always the token's.
-  // shortcut: no per-socket rate limit, a client can flood; add one before the M8 load test.
-  @SubscribeMessage(DRIVER_LOCATION_EVENT)
-  async recordLocation(socket: Socket, payload: unknown): Promise<LocationResult | SocketError> {
-    const { user } = socket.data as SocketData;
-    if (!user.roles.includes('driver')) return { error: 'FORBIDDEN' }; // skip the DB call for riders
-    const point = locationPointSchema.safeParse(payload);
-    if (!point.success) return { error: 'BAD_REQUEST' };
-    const result = await this.location.record(user.id, [point.data]);
-    return result ?? { error: 'FORBIDDEN' };
   }
 }

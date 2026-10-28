@@ -34,3 +34,9 @@ export type NearbyDriversQuery = z.infer<typeof nearbyDriversQuerySchema>;
 // Positions only, rounded to ~110 m and without ids, so a rider can't follow one driver between polls
 export const nearbyDriversSchema = z.object({ drivers: z.array(pointSchema) });
 export type NearbyDrivers = z.infer<typeof nearbyDriversSchema>;
+
+// Server -> the rider of the driver's active ride (driver_assigned until it ends), at most one per 2 s.
+// Not a ride event: no seq; the client keeps the newest recordedAt.
+export const DRIVER_POSITION_EVENT = 'ride:driver-position';
+export const driverPositionSchema = pointSchema.extend({ rideId: z.uuid(), recordedAt: z.iso.datetime() });
+export type DriverPosition = z.infer<typeof driverPositionSchema>;

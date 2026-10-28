@@ -1,10 +1,12 @@
-import type { LocationPoint, Point, Quote, Ride } from '@lern/contracts';
+import { DRIVER_POSITION_EVENT, type LocationPoint, type Point, type Quote, type Ride } from '@lern/contracts';
 import { HttpStatus, type INestApplication } from '@nestjs/common';
 import { io, type Socket } from 'socket.io-client';
 import request from 'supertest';
 import type { App } from 'supertest/types';
+import { Redis } from 'ioredis';
 import { DataSource } from 'typeorm';
 import { LocationService } from '../src/location/location.service';
+import { RealtimeGateway } from '../src/realtime/realtime.gateway';
 import { type Actor, bootApp, signIn } from './support/actors';
 
 let app: INestApplication<App>;
@@ -50,13 +52,21 @@ const stored = async (id: string) =>
   );
 
 const trip = { pickup: { lat: 11.5564, lng: 104.9282 }, dropoff: { lat: 11.5466, lng: 104.8441 }, vehicleType: 'remork' };
-// A fresh rider's ride accepted by d, walked on with driver steps (arrive, start, complete)
-const rideOf = async (d: Actor, ...steps: string[]) => {
+// A fresh rider's ride accepted by d
+const assigned = async (d: Actor) => {
   const rider = await signIn(app);
   const quote = (await http().post('/quotes').set(rider.auth).send(trip).expect(201)).body as Quote;
   const ride = (await http().post('/rides').set(rider.auth).send({ quoteId: quote.id }).expect(201)).body as Ride;
-  for (const s of ['accept', ...steps]) await http().post(`/rides/${ride.id}/${s}`).set(d.auth).expect(200);
-  return ride.id;
+  await http().post(`/rides/${ride.id}/accept`).set(d.auth).expect(200);
+  return { rider, rideId: ride.id };
+};
+const step = (a: Actor, rideId: string, s: string, body: object = {}) =>
+  http().post(`/rides/${rideId}/${s}`).set(a.auth).send(body).expect(200);
+// ...walked on with driver steps (arrive, start, complete)
+const rideOf = async (d: Actor, ...steps: string[]) => {
+  const { rideId } = await assigned(d);
+  for (const s of steps) await step(d, rideId, s);
+  return rideId;
 };
 const tripPoints = (rideId: string) =>
   db().query<Omit<Row, 'received_at'>[]>(
@@ -385,5 +395,111 @@ describe('LocationService.nearby', () => {
       const again = await signIn(app, user.phone);
       await get(again, { lat: 11.56, lng: 104.92 }).expect(403);
     });
+  });
+});
+
+describe('driver position to the rider', () => {
+  // Positions a's socket received so far. The sentinel goes out after everything the test caused before the
+  // call, on the same ordered stream, so "nothing yet" means nothing was sent.
+  const watch = async (a: Actor) => {
+    const socket = await connect(a);
+    const got: unknown[] = [];
+    socket.on(DRIVER_POSITION_EVENT, (e) => got.push(e));
+    return async () => {
+      const done = new Promise((resolve) => socket.once('sentinel', resolve));
+      app.get(RealtimeGateway).server.to(`user:${a.id}`).emit('sentinel');
+      await done;
+      return got.splice(0);
+    };
+  };
+  const unthrottle = (d: Actor) => app.get(Redis).del(`rl:driver-position:${d.id}`);
+  const position = (rideId: string, p: LocationPoint) => ({ rideId, ...p });
+
+  it("sends the assigned driver's newest point from both paths while assigned, arrived and in progress", async () => {
+    const d = await verifiedDriver();
+    const driverSocket = await connect(d);
+    const { rider, rideId } = await assigned(d);
+    const received = await watch(rider);
+
+    const p1 = pt(11.561, 104.921, await at(-5));
+    await send(driverSocket, p1);
+    expect(await received()).toEqual([position(rideId, p1)]);
+
+    await unthrottle(d);
+    await step(d, rideId, 'arrive');
+    const [older, newer] = [pt(11.562, 104.922, await at(-4)), pt(11.563, 104.923, await at(-3))];
+    await post(d, { points: [newer, older] }).expect(200);
+    expect(await received()).toEqual([position(rideId, newer)]);
+
+    await unthrottle(d);
+    await step(d, rideId, 'start');
+    const p3 = pt(11.564, 104.924, await at(-2));
+    await send(driverSocket, p3);
+    expect(await received()).toEqual([position(rideId, p3)]);
+  });
+
+  it('sends nothing after the ride completes or is cancelled, and nothing for an out-of-order point', async () => {
+    const d = await verifiedDriver();
+    const socket = await connect(d);
+    const done = await assigned(d);
+    const doneReceived = await watch(done.rider);
+    for (const s of ['arrive', 'start', 'complete']) await step(d, done.rideId, s);
+    await send(socket, pt(11.561, 104.921, await at(-9)));
+    expect(await doneReceived()).toEqual([]);
+
+    const cancelled = await assigned(d);
+    const cancelledReceived = await watch(cancelled.rider);
+    await step(cancelled.rider, cancelled.rideId, 'cancel', { reason: 'changed_mind' });
+    await unthrottle(d);
+    await send(socket, pt(11.562, 104.922, await at(-8)));
+    expect(await cancelledReceived()).toEqual([]);
+
+    const active = await assigned(d);
+    const activeReceived = await watch(active.rider);
+    await unthrottle(d);
+    await send(socket, pt(11.563, 104.923, await at(-1)));
+    await unthrottle(d);
+    await send(socket, pt(11.564, 104.924, await at(-7))); // older than the stored point
+    expect(await activeReceived()).toHaveLength(1);
+  });
+
+  it('never sends to anyone else: other riders, other drivers, users with no ride (privacy)', async () => {
+    const [d, other] = [await verifiedDriver(), await verifiedDriver()];
+    const mine = await assigned(d);
+    const theirs = await assigned(other);
+    const stranger = await signIn(app);
+    const watchers = [await watch(mine.rider), await watch(theirs.rider), await watch(other), await watch(stranger)];
+    await post(d, { points: [pt(11.561, 104.921, await at(-1))] }).expect(200);
+    expect(await Promise.all(watchers.map((w) => w()))).toEqual([[expect.anything()], [], [], []]);
+  });
+
+  it('throttles to one position per driver every 2 s', async () => {
+    const d = await verifiedDriver();
+    const socket = await connect(d);
+    const { rider } = await assigned(d);
+    const received = await watch(rider);
+    await send(socket, pt(11.561, 104.921, await at(-3)));
+    await send(socket, pt(11.562, 104.922, await at(-2)));
+    expect(await received()).toHaveLength(1);
+    await unthrottle(d);
+    await send(socket, pt(11.563, 104.923, await at(-1)));
+    expect(await received()).toHaveLength(1);
+  });
+
+  it('still stores the point when Redis fails, and shares nothing', async () => {
+    const d = await verifiedDriver();
+    const { rider } = await assigned(d);
+    const received = await watch(rider);
+    const p = pt(11.561, 104.921, await at(-1));
+    const multi = jest.spyOn(app.get(Redis), 'multi').mockImplementation(() => {
+      throw new Error('redis down');
+    });
+    try {
+      await post(d, { points: [p] }).expect(200);
+    } finally {
+      multi.mockRestore();
+    }
+    expect((await stored(d.id))[0].recorded_at.toISOString()).toBe(p.recordedAt);
+    expect(await received()).toEqual([]);
   });
 });
