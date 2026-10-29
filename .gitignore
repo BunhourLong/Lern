@@ -10,6 +10,8 @@ graphify-out/
 node_modules/
 dist/
 coverage/
+# Built by infra/docker/osrm/prepare.sh
+infra/docker/osrm/data/
 .env*
 !.env.example
 .DS_Store

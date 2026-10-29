@@ -5,11 +5,12 @@ import {
   RIDE_UPDATED_EVENT,
   type Ride,
   type RideAction,
+  type RideActor,
   type RideStatus,
   type VehicleType,
 } from '@lern/contracts';
 import { Injectable } from '@nestjs/common';
-import { DataSource } from 'typeorm';
+import { DataSource, type EntityManager } from 'typeorm';
 
 const RIDE = `id, status, version, vehicle_type AS "vehicleType",
   json_build_object('lat', ST_Y(pickup::geometry), 'lng', ST_X(pickup::geometry)) AS pickup,
@@ -24,15 +25,20 @@ const OUTBOX = `outbox AS (
   FROM ride
 )`;
 
-// Who may move a ride, checked inside the guarded UPDATE so a non-participant matches no row ($1 = caller)
+// Who may move a ride, checked inside the guarded UPDATE so a non-participant matches no row ($1 = caller,
+// NULL for the system)
 const MAY_MOVE = {
   rider: 'rider_id = $1',
   driver: 'driver_id = $1',
-  // shortcut: "available" = verified + no active ride; the availability state machine replaces it in M3/M4
-  accept: 'rider_id <> $1 AND vehicle_type = (SELECT vehicle_type FROM drivers WHERE user_id = $1)',
+  system: '$1::uuid IS NULL',
+  // Only through an accepted offer (matching), which already checked the driver
+  accept: 'driver_id IS NULL',
 };
 
 export type NewRide = { quoteId: string; vehicleType: VehicleType; pickup: Point; dropoff: Point; fare: Money };
+// driverId never reaches a client: @ZodSerializerDto(RideDto) strips unknown keys, and the outbox payload is the RIDE projection
+export type MovedRide = Ride & { driverId: string | null };
+export type MatchableRide = { status: RideStatus; riderId: string; vehicleType: VehicleType; pickup: Point; elapsedS: number };
 
 @Injectable()
 export class RidesRepository {
@@ -65,19 +71,21 @@ export class RidesRepository {
   }
 
   // Invariant 1: one guarded statement moves the ride, logs the event and queues it in the outbox, or matches nothing (undefined:
-  // wrong status, or the caller may not move this ride). Accept also assigns the caller as the driver.
+  // wrong status, or the caller may not move this ride). Accept also assigns the caller as the driver. Returns the
+  // ride's driver alongside the snapshot, for the availability move in the same transaction.
   // Throws a unique violation if that driver already has an active ride. A cancel needs its reason (a CHECK
   // rejects a cancelled ride without one); every other move leaves it NULL, as it already is.
   async transition(
-    userId: string,
+    userId: string | null,
     rideId: string,
-    actor: 'rider' | 'driver',
+    actor: RideActor,
     action: RideAction,
     t: { from: readonly RideStatus[]; to: RideStatus },
     cancelReason?: CancelReason,
-  ): Promise<Ride | undefined> {
+    m: EntityManager = this.db.manager,
+  ): Promise<MovedRide | undefined> {
     const accept = action === 'accept';
-    const [row] = await this.db.query<Ride[]>(
+    const [row] = await m.query<MovedRide[]>(
       `WITH ride AS (
          UPDATE rides SET status = $4, version = version + 1, cancel_reason = $6${accept ? ', driver_id = $1' : ''}
          WHERE id = $2 AND status = ANY($3) AND ${MAY_MOVE[accept ? 'accept' : actor]}
@@ -85,7 +93,7 @@ export class RidesRepository {
        ), event AS (
          INSERT INTO ride_events (ride_id, seq, status, actor, actor_id) SELECT id, version, status, $5, $1 FROM ride
        ), ${OUTBOX}
-       SELECT ${RIDE} FROM ride`,
+       SELECT ${RIDE}, driver_id AS "driverId" FROM ride`,
       [userId, rideId, t.from, t.to, actor, cancelReason ?? null],
     );
     return row;
@@ -110,7 +118,15 @@ export class RidesRepository {
     return row;
   }
 
-  async exists(rideId: string): Promise<boolean> {
-    return (await this.db.query<unknown[]>('SELECT 1 FROM rides WHERE id = $1', [rideId])).length === 1;
+  // Locked until the caller's tx ends, so matching runs one sync per ride at a time; elapsed by the DB clock
+  async lockForMatching(m: EntityManager, rideId: string): Promise<MatchableRide | undefined> {
+    const [row] = await m.query<MatchableRide[]>(
+      `SELECT status, rider_id AS "riderId", vehicle_type AS "vehicleType",
+              json_build_object('lat', ST_Y(pickup::geometry), 'lng', ST_X(pickup::geometry)) AS pickup,
+              extract(epoch FROM now() - created_at)::float AS "elapsedS"
+       FROM rides WHERE id = $1 FOR UPDATE`,
+      [rideId],
+    );
+    return row;
   }
 }

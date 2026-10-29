@@ -12,6 +12,8 @@ import { RidesCancelReason1792583685644 } from './migrations/1792583685644-rides
 import { CreateDriverLocations1792591652004 } from './migrations/1792591652004-create-driver-locations';
 import { CreateTripPoints1792593369866 } from './migrations/1792593369866-create-trip-points';
 import { CreateOutboxEvents1792629104815 } from './migrations/1792629104815-create-outbox-events';
+import { DriversAvailability1793241466000 } from './migrations/1793241466000-drivers-availability';
+import { CreateRideOffers1793241933000 } from './migrations/1793241933000-create-ride-offers';
 
 // Migrations are listed, not globbed, so the same list works from ts (tests) and dist (CLI)
 export const migrations = [
@@ -28,6 +30,8 @@ export const migrations = [
   CreateDriverLocations1792591652004,
   CreateTripPoints1792593369866,
   CreateOutboxEvents1792629104815,
+  DriversAvailability1793241466000,
+  CreateRideOffers1793241933000,
 ];
 
 export function dataSourceOptions(url: string): DataSourceOptions {

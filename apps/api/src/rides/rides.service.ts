@@ -1,9 +1,11 @@
 import { type ActiveRides, type CancelReason, type Ride, type RideAction, rideTransition } from '@lern/contracts';
-import { ConflictException, GoneException, HttpStatus, Injectable, NotFoundException } from '@nestjs/common';
-import { QueryFailedError } from 'typeorm';
+import { ConflictException, GoneException, HttpStatus, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { DataSource, type EntityManager, QueryFailedError } from 'typeorm';
 import { OutboxService } from '../outbox/outbox.service';
 import { PricingService } from '../pricing/pricing.service';
-import { RidesRepository } from './rides.repository';
+import { DriversService } from '../drivers/drivers.service';
+import { MatchingQueue } from '../shared/queue/matching-queue';
+import { type MatchableRide, type MovedRide, RidesRepository } from './rides.repository';
 
 const CONFLICTS: Record<string, string> = {
   rides_quote_id_key: 'Quote already booked',
@@ -19,7 +21,12 @@ function conflict(err: unknown): unknown {
 
 @Injectable()
 export class RidesService {
+  private readonly logger = new Logger(RidesService.name);
+
   constructor(
+    private readonly db: DataSource,
+    private readonly drivers: DriversService,
+    private readonly matching: MatchingQueue,
     private readonly outbox: OutboxService,
     private readonly pricing: PricingService,
     private readonly rides: RidesRepository,
@@ -37,12 +44,18 @@ export class RidesService {
       throw conflict(err);
     }
     this.outbox.kick();
+    this.match(ride.id);
     return ride;
   }
 
-  // Open pool (until M4 offers): the guarded UPDATE decides which of many drivers wins
-  accept(driverId: string, rideId: string): Promise<Ride> {
-    return this.move(driverId, rideId, ['driver'], 'accept');
+  // An accepted offer assigns its ride, inside matching's transaction (which kicks the outbox after commit).
+  // Throws 409 if the driver already has an active ride (invariant 2).
+  async assign(m: EntityManager, driverId: string, rideId: string): Promise<Ride | undefined> {
+    try {
+      return await this.rides.transition(driverId, rideId, 'driver', 'accept', rideTransition('accept', 'driver')!, undefined, m);
+    } catch (err) {
+      throw conflict(err);
+    }
   }
 
   // arrive → start → complete, each only by the ride's assigned driver
@@ -52,8 +65,27 @@ export class RidesService {
 
   // Either side may cancel, each from its own statuses (contracts table). Accept never assigns a ride's own
   // rider, so the caller is on at most one side and at most one of the two guarded UPDATEs can match.
-  cancel(userId: string, rideId: string, reason: CancelReason): Promise<Ride> {
-    return this.move(userId, rideId, ['rider', 'driver'], 'cancel', reason);
+  async cancel(userId: string, rideId: string, reason: CancelReason): Promise<Ride> {
+    const ride = await this.move(userId, rideId, ['rider', 'driver'], 'cancel', reason);
+    this.match(rideId); // ends its pending offer
+    return ride;
+  }
+
+  // Matching's read of a ride, locked for the rest of its transaction
+  lockForMatching(m: EntityManager, rideId: string): Promise<MatchableRide | undefined> {
+    return this.rides.lockForMatching(m, rideId);
+  }
+
+  // The search deadline passed (invariant 1: guarded, by the system), inside matching's transaction.
+  // The caller kicks the outbox after commit.
+  async expire(m: EntityManager, rideId: string): Promise<boolean> {
+    const t = rideTransition('expire', 'system')!;
+    return (await this.rides.transition(null, rideId, 'system', 'expire', t, undefined, m)) !== undefined;
+  }
+
+  // Not awaited and never fails the request: the ride is committed, and a lost job is the sweep's to catch
+  private match(rideId: string): void {
+    this.matching.sync(rideId).catch((err: Error) => this.logger.warn(`sync of ${rideId} not queued: ${err.message}`));
   }
 
   private async move(
@@ -66,23 +98,28 @@ export class RidesService {
     for (const actor of actors) {
       const t = rideTransition(action, actor);
       if (!t) throw new Error(`No ${action} transition for ${actor}`);
-      let ride: Ride | undefined;
+      let row: MovedRide | undefined;
       try {
-        ride = await this.rides.transition(userId, rideId, actor, action, t, cancelReason);
+        row = await this.db.transaction(async (m) => {
+          const moved = await this.rides.transition(userId, rideId, actor, action, t, cancelReason, m);
+          // A ride that ends frees its driver. A driver who isn't on_trip has drifted: the move misses, the ride
+          // change still stands, and the reconciler repairs the driver.
+          if (moved?.driverId && (moved.status === 'completed' || moved.status === 'cancelled')) {
+            await this.drivers.move(m, moved.driverId, 'finish');
+          }
+          return moved;
+        });
       } catch (err) {
         throw conflict(err);
       }
-      if (ride) {
+      if (row) {
         this.outbox.kick();
-        return ride;
+        return row;
       }
     }
-    // Only a participant gets the snapshot to reconcile with. Accept is the one action a non-participant
-    // may try (open pool), so only it says that someone else's ride exists; every other action is a 404.
+    // Only a participant gets the snapshot to reconcile with; anyone else can't tell the ride exists
     const mine = await this.rides.findForParticipant(rideId, userId);
-    if (!mine && (action !== 'accept' || !(await this.rides.exists(rideId)))) {
-      throw new NotFoundException('Ride not found');
-    }
+    if (!mine) throw new NotFoundException('Ride not found');
     throw new ConflictException({
       statusCode: HttpStatus.CONFLICT,
       code: 'INVALID_TRANSITION',

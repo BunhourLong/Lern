@@ -1,8 +1,15 @@
-import type { ApplyDriver, DriverProfile, DriverVerification } from '@lern/contracts';
+import {
+  type ApplyDriver,
+  type DriverAvailability,
+  type DriverAvailabilityAction,
+  type DriverProfile,
+  type DriverVerification,
+  driverTransition,
+} from '@lern/contracts';
 import { Injectable } from '@nestjs/common';
 import { DataSource, type EntityManager } from 'typeorm';
 
-const PROFILE = 'vehicle_type AS "vehicleType", plate, verification';
+const PROFILE = 'vehicle_type AS "vehicleType", plate, verification, availability';
 
 @Injectable()
 export class DriversRepository {
@@ -30,5 +37,23 @@ export class DriversRepository {
       [userId],
     );
     return row?.verification;
+  }
+
+  // One guarded move of the availability machine; false = the driver isn't in the move's `from` state
+  async move(m: EntityManager, driverId: string, action: DriverAvailabilityAction): Promise<boolean> {
+    const { from, to } = driverTransition(action);
+    const [, count] = await m.query<[unknown, number]>(
+      'UPDATE drivers SET availability = $3 WHERE user_id = $1 AND availability = $2',
+      [driverId, from, to],
+    );
+    return count === 1;
+  }
+
+  async state(userId: string): Promise<{ verification: DriverVerification; availability: DriverAvailability } | undefined> {
+    const [row] = await this.db.query<{ verification: DriverVerification; availability: DriverAvailability }[]>(
+      'SELECT verification, availability FROM drivers WHERE user_id = $1',
+      [userId],
+    );
+    return row;
   }
 }

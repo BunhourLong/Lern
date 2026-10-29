@@ -1,0 +1,36 @@
+{
+  "name": "@lern/simulator",
+  "version": "0.0.0",
+  "private": true,
+  "exports": {
+    ".": {
+      "source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "pnpm --filter @lern/contracts --fail-if-no-match build && tsc -p tsconfig.build.json",
+    "start": "node --env-file-if-exists=../../apps/api/.env dist/main.js",
+    "typecheck": "tsc --noEmit",
+    "test": "jest",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "@lern/contracts": "workspace:*",
+    "pg": "8.23.1",
+    "socket.io-client": "4.8.3",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/jest": "30.0.0",
+    "@types/node": "24.19.2",
+    "@types/pg": "8.23.1",
+    "eslint": "10.13.0",
+    "jest": "30.5.2",
+    "ts-jest": "29.4.15",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.71.2"
+  }
+}

@@ -12,6 +12,16 @@ const Env = z.object({
   TELEGRAM_GATEWAY_URL: z.url({ protocol: /^https?$/ }).default('https://gatewayapi.telegram.org'),
   // HS256 key: at least 256 bits; generate with `openssl rand -base64 48`
   JWT_SECRET: z.string().min(32),
+  // Matching (PLAN.md §2.4)
+  OFFER_TTL_SECONDS: z.coerce.number().int().min(1).default(15),
+  SEARCH_DEADLINE_SECONDS: z.coerce.number().int().min(1).default(90),
+  // Rides searching without an offer are synced this often (retry + bookings whose enqueue was lost); 0 = off
+  SWEEP_INTERVAL_MS: z.coerce.number().int().min(0).default(5000),
+  // Repairs what lost jobs left behind (expired offers still pending, drivers stuck reserved/on_trip); 0 = off
+  RECONCILE_INTERVAL_MS: z.coerce.number().int().min(0).default(30000),
+  // false = this instance only enqueues jobs, another one runs them
+  MATCHING_WORKER: z.stringbool().default(true),
+  QUEUE_PREFIX: z.string().min(1).default('lern'),
 }).refine((env) => env.OTP_PROVIDER !== 'telegram' || env.TELEGRAM_GATEWAY_TOKEN, {
   message: 'Required when OTP_PROVIDER is telegram',
   path: ['TELEGRAM_GATEWAY_TOKEN'],

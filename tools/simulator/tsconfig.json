@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    "target": "es2023",
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "strict": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "types": ["node", "jest"],
+    // Contracts resolve to their TypeScript source here; only the built CLI reads contracts' dist
+    "customConditions": ["source"],
+    // Built only for the CLI; the api e2e reads src
+    "declaration": true,
+    "rootDir": "src",
+    "outDir": "dist"
+  },
+  "include": ["src"]
+}

@@ -11,5 +11,6 @@ import { RidesService } from './rides.service';
   imports: [DriversModule, OutboxModule, PricingModule],
   controllers: [RidesController, ActiveRideController],
   providers: [RidesRepository, RidesService],
+  exports: [RidesService],
 })
 export class RidesModule {}
