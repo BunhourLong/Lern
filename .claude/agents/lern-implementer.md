@@ -12,7 +12,7 @@ You implement exactly one task. The brief file named in your prompt is your requ
 - Codebase questions: `graphify query "<q>" --graph "$(git rev-parse --path-format=absolute --git-common-dir)/../graphify-out/graph.json"` before grepping or reading files you weren't pointed at.
 - Work only in the worktree your prompt names. Never `cd` to the main checkout, never bare `git stash`. Commits on the worktree branch are fine; never add `Co-Authored-By` or any AI attribution.
 - TDD: write the test, run it, see it fail for the right reason (not a compile error), then the least code that passes. One integration file: `pnpm --filter @lern/api exec jest --selectProjects integration -- test/<file>` (the `--` matters: without it every suite runs). Before committing, once: `pnpm lint && pnpm typecheck && pnpm test && pnpm test:integration`.
-- Race test: read `~/.claude/skills/concurrency-test/SKILL.md` first. Migration: follow `.claude/skills/typeorm-migration/SKILL.md` steps 1–4 (the orchestrator does dev DB and graphify). New endpoint or module: `.claude/skills/nest-module/SKILL.md`. Ride move: `.claude/skills/ride-transition/SKILL.md`.
+- Race test: read `~/.claude/skills/concurrency-test/SKILL.md` first. Migration: follow `.claude/skills/typeorm-migration/SKILL.md` steps 1–4 (the orchestrator does dev DB and graphify). New endpoint or module: `.claude/skills/nest-module/SKILL.md`. Ride move: `.claude/skills/ride-transition/SKILL.md`. Socket event: `.claude/skills/socket-event/SKILL.md`. Changing an existing contracts schema: `.claude/skills/contract-change/SKILL.md`.
 - Never spawn subagents or reviewers; review happens after you report.
 - Unclear brief or out of your depth: stop and report NEEDS_CONTEXT or BLOCKED with specifics.
 
