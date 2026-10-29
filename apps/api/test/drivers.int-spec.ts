@@ -113,6 +113,14 @@ describe('PUT /drivers/me/availability', () => {
     return tokens;
   };
   const stored = async (t: Tokens) => ((await http().get('/drivers/me').set(auth(t))).body as { availability: string }).availability;
+  const idOf = async (t: Tokens) => ((await http().get('/me').set(auth(t))).body as { id: string }).id;
+  const history = async (t: Tokens) =>
+    app
+      .get(DataSource)
+      .query<{ action: string; from: string; to: string }[]>(
+        'SELECT action, from_state AS "from", to_state AS "to" FROM driver_availability_events WHERE driver_id = $1 ORDER BY id',
+        [await idOf(t)],
+      );
 
   it('starts offline, goes online and offline, and repeating a state changes nothing', async () => {
     const t = await driver();
@@ -123,6 +131,11 @@ describe('PUT /drivers/me/availability', () => {
       expect(res.body).toEqual({ availability });
       expect(await stored(t)).toBe(availability);
     }
+    // Only real moves are logged: repeating a state writes nothing
+    expect(await history(t)).toEqual([
+      { action: 'go_online', from: 'offline', to: 'available' },
+      { action: 'go_offline', from: 'available', to: 'offline' },
+    ]);
   });
 
   it.each(['pending', 'suspended'])('keeps a %s driver offline, but lets them go offline', async (verification) => {
@@ -138,7 +151,7 @@ describe('PUT /drivers/me/availability', () => {
 
   it('is 409 with the current state while reserved or on a trip, and changes nothing', async () => {
     const t = await driver();
-    const { id } = (await http().get('/me').set(auth(t))).body as { id: string };
+    const id = await idOf(t);
     for (const state of ['reserved', 'on_trip']) {
       await app.get(DataSource).query('UPDATE drivers SET availability = $2 WHERE user_id = $1', [id, state]);
       for (const online of [true, false]) {
@@ -148,6 +161,7 @@ describe('PUT /drivers/me/availability', () => {
       }
       expect(await stored(t)).toBe(state);
     }
+    expect(await history(t)).toEqual([]);
   });
 
   it('is 404 for a non-driver, 400 for a bad body and 401 without a token', async () => {
