@@ -5,6 +5,7 @@ import request from 'supertest';
 import type { App } from 'supertest/types';
 import { DataSource } from 'typeorm';
 import { type Actor, bootApp, signIn } from './support/actors';
+import { assign } from './support/offers';
 
 let app: INestApplication<App>;
 const http = () => request(app.getHttpServer());
@@ -100,114 +101,11 @@ const searchingRide = async () => {
   const rider = await signIn(app);
   return (await book(rider, (await newQuote(rider)).id).expect(201)).body as Ride;
 };
-const accept = (a: Actor, rideId: string) => http().post(`/rides/${rideId}/accept`).set(a.auth);
 const getRide = (a: Actor, rideId: string) => http().get(`/rides/${rideId}`).set(a.auth);
 
-describe('POST /rides/:id/accept (open pool)', () => {
-  it('assigns a searching ride to the driver who accepts, and only to them', async () => {
-    const ride = await searchingRide();
-    const [first, second] = [await verifiedDriver(), await verifiedDriver()];
-    const res = await accept(first, ride.id);
-    expect(res.status).toBe(HttpStatus.OK);
-    expect(res.body).toEqual({ ...ride, status: 'driver_assigned', version: 2 });
-
-    const late = await accept(second, ride.id);
-    expect(late.status).toBe(HttpStatus.CONFLICT);
-    expect(late.body).toMatchObject({ code: 'INVALID_TRANSITION' });
-    expect(late.body).not.toHaveProperty('ride'); // not their ride: no snapshot
-    const [row] = await db().query<{ driver_id: string }[]>('SELECT driver_id FROM rides WHERE id = $1', [ride.id]);
-    expect(row.driver_id).toBe(first.id);
-  });
-
-  it('lets exactly one of 50 parallel drivers win the ride', async () => {
-    const ride = await searchingRide();
-    const drivers: Actor[] = [];
-    // Sequential: parallel multi-request chains hang supertest's auto-listened server (PLAN §9)
-    for (let i = 0; i < 50; i++) drivers.push(await verifiedDriver());
-    // Build every request before awaiting any, so they share one server and really overlap
-    const results = await Promise.all(drivers.map((d) => accept(d, ride.id)));
-
-    const statuses = results.map((r) => r.status);
-    expect([...statuses].sort()).toEqual([HttpStatus.OK, ...Array<number>(49).fill(HttpStatus.CONFLICT)]);
-    expect(results.filter((r) => (r.body as { code?: string }).code === 'INVALID_TRANSITION')).toHaveLength(49);
-
-    const winner = drivers[statuses.indexOf(HttpStatus.OK)];
-    const [row] = await db().query<{ driver_id: string; status: string; version: number }[]>(
-      'SELECT driver_id, status, version FROM rides WHERE id = $1',
-      [ride.id],
-    );
-    expect(row).toEqual({ driver_id: winner.id, status: 'driver_assigned', version: 2 });
-    // Exactly one accept event after the booking's seq 1
-    expect((await events(ride.id)).slice(1)).toEqual([
-      { seq: 2, status: 'driver_assigned', actor: 'driver', actor_id: winner.id },
-    ]);
-  });
-
-  it('lets one driver win only one of two rides accepted in parallel', async () => {
-    const [r1, r2] = [await searchingRide(), await searchingRide()];
-    const driver = await verifiedDriver();
-    const results = await Promise.all([accept(driver, r1.id), accept(driver, r2.id)]);
-
-    const statuses = results.map((r) => r.status);
-    expect([...statuses].sort()).toEqual([HttpStatus.OK, HttpStatus.CONFLICT]);
-    const rows = await db().query<{ id: string; status: string; version: number; driver_id: string | null }[]>(
-      'SELECT id, status, version, driver_id FROM rides WHERE id = ANY($1) ORDER BY status',
-      [[r1.id, r2.id]],
-    );
-    const won = statuses.indexOf(HttpStatus.OK) === 0 ? r1.id : r2.id;
-    expect(rows).toEqual([
-      { id: won, status: 'driver_assigned', version: 2, driver_id: driver.id },
-      { id: won === r1.id ? r2.id : r1.id, status: 'searching', version: 1, driver_id: null },
-    ]);
-  });
-
-  it('gives the assigned driver the current snapshot on a repeat accept', async () => {
-    const ride = await searchingRide();
-    const driver = await verifiedDriver();
-    await accept(driver, ride.id).expect(200);
-    const again = await accept(driver, ride.id);
-    expect(again.status).toBe(HttpStatus.CONFLICT);
-    expect(again.body).toMatchObject({ code: 'INVALID_TRANSITION', ride: { id: ride.id, status: 'driver_assigned', version: 2 } });
-  });
-
-  it('is 409 for a driver with a different vehicle type', async () => {
-    const ride = await searchingRide();
-    expect((await accept(await verifiedDriver('moto'), ride.id)).status).toBe(HttpStatus.CONFLICT);
-  });
-
-  it('allows one active ride per driver', async () => {
-    const [r1, r2] = [await searchingRide(), await searchingRide()];
-    const driver = await verifiedDriver();
-    await accept(driver, r1.id).expect(200);
-    const res = await accept(driver, r2.id);
-    expect(res.status).toBe(HttpStatus.CONFLICT);
-    expect(res.body).toMatchObject({ message: 'Driver already has an active ride' });
-  });
-
-  it("never lets a driver accept their own ride", async () => {
-    const user = await signIn(app);
-    const ride = (await book(user, (await newQuote(user)).id).expect(201)).body as Ride;
-    expect((await accept(await verifiedDriver('remork', user), ride.id)).status).toBe(HttpStatus.CONFLICT);
-  });
-
-  it('is 404 for an unknown ride and 400 for a malformed id', async () => {
-    const driver = await verifiedDriver();
-    expect((await accept(driver, randomUUID())).status).toBe(HttpStatus.NOT_FOUND);
-    expect((await accept(driver, 'nope')).status).toBe(HttpStatus.BAD_REQUEST);
-  });
-
-  it('is 403 for a rider and for an unverified driver, and leaves the ride searching', async () => {
-    const ride = await searchingRide();
-    const rider = await signIn(app);
-    expect((await accept(rider, ride.id)).status).toBe(HttpStatus.FORBIDDEN);
-    const pending = await verifiedDriver();
-    await db().query(`UPDATE drivers SET verification = 'pending' WHERE user_id = $1`, [pending.id]);
-    expect((await accept(pending, ride.id)).status).toBe(HttpStatus.FORBIDDEN);
-    const [row] = await db().query<{ status: string }[]>('SELECT status FROM rides WHERE id = $1', [ride.id]);
-    expect(row.status).toBe('searching');
-  });
-});
-
+const availability = async (a: Actor) =>
+  (await db().query<{ availability: string }[]>('SELECT availability FROM drivers WHERE user_id = $1', [a.id]))[0]
+    .availability;
 const step = (a: Actor, rideId: string, action: string) => http().post(`/rides/${rideId}/${action}`).set(a.auth);
 const events = (rideId: string) =>
   db().query<{ seq: number; status: string; actor: string; actor_id: string | null }[]>(
@@ -220,7 +118,7 @@ describe('POST /rides/:id/{arrive,start,complete}', () => {
     const rider = await signIn(app);
     const ride = (await book(rider, (await newQuote(rider)).id).expect(201)).body as Ride;
     const driver = await verifiedDriver();
-    await accept(driver, ride.id).expect(200);
+    await assign(app, driver, ride.id);
     for (const [action, status, version] of [
       ['arrive', 'driver_arrived', 3],
       ['start', 'in_progress', 4],
@@ -235,14 +133,15 @@ describe('POST /rides/:id/{arrive,start,complete}', () => {
       { seq: 4, status: 'in_progress', actor: 'driver', actor_id: driver.id },
       { seq: 5, status: 'completed', actor: 'driver', actor_id: driver.id },
     ]);
-    // A completed trip frees the driver (partial unique index)
-    await accept(driver, (await searchingRide()).id).expect(200);
+    // A completed trip frees the driver
+    expect(await availability(driver)).toBe('available');
+    await assign(app, driver, (await searchingRide()).id);
   });
 
   it('is 409 with the snapshot for an out-of-order step, and writes no event', async () => {
     const ride = await searchingRide();
     const driver = await verifiedDriver();
-    await accept(driver, ride.id).expect(200);
+    await assign(app, driver, ride.id);
     const res = await step(driver, ride.id, 'complete');
     expect(res.status).toBe(HttpStatus.CONFLICT);
     expect(res.body).toMatchObject({ code: 'INVALID_TRANSITION', ride: { status: 'driver_assigned', version: 2 } });
@@ -252,7 +151,7 @@ describe('POST /rides/:id/{arrive,start,complete}', () => {
   it("is 404 for another driver's ride and leaves it untouched (IDOR)", async () => {
     const ride = await searchingRide();
     const [driver, other] = [await verifiedDriver(), await verifiedDriver()];
-    await accept(driver, ride.id).expect(200);
+    await assign(app, driver, ride.id);
     expect((await step(other, ride.id, 'arrive')).status).toBe(HttpStatus.NOT_FOUND);
     expect((await getRide(driver, ride.id)).body).toMatchObject({ status: 'driver_assigned', version: 2 });
   });
@@ -286,13 +185,11 @@ describe('ownership', () => {
   it("hides a ride from every user but its rider and assigned driver, and doesn't reveal it exists", async () => {
     const ride = await searchingRide();
     const [otherRider, otherDriver] = [await signIn(app), await verifiedDriver()];
-    // Open pool: any driver may accept a searching ride, but only the assigned one may read it
     expect((await getRide(otherDriver, ride.id)).status).toBe(HttpStatus.NOT_FOUND);
     expect((await getRide(otherRider, ride.id)).status).toBe(HttpStatus.NOT_FOUND);
-    await accept(await verifiedDriver(), ride.id).expect(200);
+    await assign(app, await verifiedDriver(), ride.id);
     expect((await getRide(otherDriver, ride.id)).status).toBe(HttpStatus.NOT_FOUND);
-    // The losing driver's 409 carries no snapshot either
-    expect((await accept(otherDriver, ride.id)).body).not.toHaveProperty('ride');
+    expect((await getRide(otherRider, ride.id)).status).toBe(HttpStatus.NOT_FOUND);
   });
 });
 
@@ -303,7 +200,7 @@ describe('GET /rides/:id', () => {
     expect((await getRide(rider, booked.id).expect(200)).body).toEqual(booked);
 
     const driver = await verifiedDriver();
-    const accepted = (await accept(driver, booked.id).expect(200)).body as Ride;
+    const accepted = await assign(app, driver, booked.id);
     expect((await getRide(driver, booked.id).expect(200)).body).toEqual(accepted);
     expect((await getRide(rider, booked.id).expect(200)).body).toEqual(accepted);
   });
@@ -330,7 +227,7 @@ const assignedRide = async (...steps: string[]) => {
   const rider = await signIn(app);
   const ride = (await book(rider, (await newQuote(rider)).id).expect(201)).body as Ride;
   const driver = await verifiedDriver();
-  await accept(driver, ride.id).expect(200);
+  await assign(app, driver, ride.id);
   for (const s of steps) await step(driver, ride.id, s).expect(200);
   return { rider, driver, ride };
 };
@@ -359,7 +256,8 @@ describe('POST /rides/:id/cancel', () => {
     expect(res.status).toBe(HttpStatus.OK);
     expect(res.body).toMatchObject({ status: 'cancelled', version: 3 + steps.length });
     expect((await events(ride.id)).at(-1)).toMatchObject({ status: 'cancelled', actor: who, actor_id: actor.id });
-    await accept(driver, (await searchingRide()).id).expect(200);
+    expect(await availability(driver)).toBe('available');
+    await assign(app, driver, (await searchingRide()).id);
   });
 
   it('is 409 with the snapshot once the trip has started, and for a second cancel', async () => {
@@ -394,7 +292,6 @@ describe('POST /rides/:id/cancel', () => {
   it("is 404 for anyone but the ride's rider and assigned driver, and leaves it untouched (IDOR)", async () => {
     const ride = await searchingRide();
     const [otherRider, otherDriver] = [await signIn(app), await verifiedDriver()];
-    // A driver can accept a searching ride (open pool) but not cancel it
     expect((await cancel(otherDriver, ride.id)).status).toBe(HttpStatus.NOT_FOUND);
     expect((await cancel(otherRider, ride.id)).status).toBe(HttpStatus.NOT_FOUND);
     const assigned = await assignedRide();
@@ -423,7 +320,7 @@ describe('GET /me/active-ride', () => {
     expect((await activeRides(rider).expect(200)).body).toEqual({ rider: booked, driver: null });
 
     const driver = await verifiedDriver();
-    const accepted = (await accept(driver, booked.id).expect(200)).body as Ride;
+    const accepted = await assign(app, driver, booked.id);
     expect((await activeRides(rider).expect(200)).body).toEqual({ rider: accepted, driver: null });
     expect((await activeRides(driver).expect(200)).body).toEqual({ rider: null, driver: accepted });
     expect((await activeRides(await verifiedDriver()).expect(200)).body).toEqual({ rider: null, driver: null });
@@ -437,8 +334,7 @@ describe('GET /me/active-ride', () => {
   it('shows both sides for a user who is riding one ride and driving another', async () => {
     const user = await signIn(app);
     const own = (await book(user, (await newQuote(user)).id).expect(201)).body as Ride;
-    const driving = (await accept(await verifiedDriver('remork', user), (await searchingRide()).id).expect(200))
-      .body as Ride;
+    const driving = await assign(app, await verifiedDriver('remork', user), (await searchingRide()).id);
     expect((await activeRides(await signIn(app, user.phone)).expect(200)).body).toEqual({ rider: own, driver: driving });
   });
 

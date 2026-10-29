@@ -45,7 +45,7 @@ describe('POST /drivers/me', () => {
     const rider = await login();
     const res = await apply(rider);
     expect(res.status).toBe(HttpStatus.CREATED);
-    expect(res.body).toEqual({ vehicleType: 'remork', plate: 'PP 2A-1234', verification: 'pending' });
+    expect(res.body).toEqual({ vehicleType: 'remork', plate: 'PP 2A-1234', verification: 'pending', availability: 'offline' });
     expect((await http().get('/drivers/me').set(auth(rider))).body).toEqual(res.body);
     const driver = await refresh(rider);
     const { roles } = (await http().get('/me').set(auth(driver))).body as { roles: string[] };
@@ -100,6 +100,60 @@ describe('@VerifiedDriver', () => {
   it('is 403 for a rider who is not a driver', async () => {
     const rider = await login();
     expect((await probe(rider)).status).toBe(HttpStatus.FORBIDDEN);
+  });
+});
+
+describe('PUT /drivers/me/availability', () => {
+  const put = (t: Tokens, body: object) => http().put('/drivers/me/availability').set(auth(t)).send(body);
+  const driver = async (verification = 'verified') => {
+    const rider = await login();
+    await apply(rider).expect(HttpStatus.CREATED);
+    const tokens = await refresh(rider);
+    await setVerification(tokens, verification);
+    return tokens;
+  };
+  const stored = async (t: Tokens) => ((await http().get('/drivers/me').set(auth(t))).body as { availability: string }).availability;
+
+  it('starts offline, goes online and offline, and repeating a state changes nothing', async () => {
+    const t = await driver();
+    expect(await stored(t)).toBe('offline');
+    for (const [online, availability] of [[true, 'available'], [true, 'available'], [false, 'offline'], [false, 'offline']] as const) {
+      const res = await put(t, { online });
+      expect(res.status).toBe(HttpStatus.OK);
+      expect(res.body).toEqual({ availability });
+      expect(await stored(t)).toBe(availability);
+    }
+  });
+
+  it.each(['pending', 'suspended'])('keeps a %s driver offline, but lets them go offline', async (verification) => {
+    const t = await driver('verified');
+    await put(t, { online: true }).expect(HttpStatus.OK);
+    await setVerification(t, verification);
+    await put(t, { online: false }).expect(HttpStatus.OK);
+    const res = await put(t, { online: true });
+    expect(res.status).toBe(HttpStatus.FORBIDDEN);
+    expect(res.body).toMatchObject({ verification });
+    expect(await stored(t)).toBe('offline');
+  });
+
+  it('is 409 with the current state while reserved or on a trip, and changes nothing', async () => {
+    const t = await driver();
+    const { id } = (await http().get('/me').set(auth(t))).body as { id: string };
+    for (const state of ['reserved', 'on_trip']) {
+      await app.get(DataSource).query('UPDATE drivers SET availability = $2 WHERE user_id = $1', [id, state]);
+      for (const online of [true, false]) {
+        const res = await put(t, { online });
+        expect(res.status).toBe(HttpStatus.CONFLICT);
+        expect(res.body).toMatchObject({ availability: state });
+      }
+      expect(await stored(t)).toBe(state);
+    }
+  });
+
+  it('is 404 for a non-driver, 400 for a bad body and 401 without a token', async () => {
+    expect((await put(await login(), { online: false })).status).toBe(HttpStatus.NOT_FOUND);
+    expect((await put(await driver(), { online: 'yes' })).status).toBe(HttpStatus.BAD_REQUEST);
+    expect((await http().put('/drivers/me/availability').send({ online: true })).status).toBe(HttpStatus.UNAUTHORIZED);
   });
 });
 

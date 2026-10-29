@@ -5,10 +5,11 @@ import type { App } from 'supertest/types';
 import { DataSource } from 'typeorm';
 import { AppModule } from '../src/app.module';
 import { HealthService } from '../src/health/health.service';
-import { type Config, parseEnv } from '../src/shared/config/env';
+import type { Config } from '../src/shared/config/env';
+import { testConfig } from './support/actors';
 
 async function boot(overrides: Partial<Config> = {}): Promise<INestApplication<App>> {
-  const config = { ...parseEnv(process.env), LOG_LEVEL: 'silent' as const, ...overrides };
+  const config = testConfig(overrides);
   const moduleRef = await Test.createTestingModule({ imports: [AppModule.forRoot(config)] }).compile();
   return moduleRef.createNestApplication<INestApplication<App>>({ logger: false }).init();
 }
@@ -37,6 +38,21 @@ it('is 503 within the timeout when Redis is unreachable', async () => {
   }
 });
 
+// Production defaults: the matching worker registers its schedulers at bootstrap, which must not wait for Redis
+it('boots and is 503 when Redis is unreachable, with the matching worker on', async () => {
+  const app = await boot({
+    REDIS_URL: 'redis://127.0.0.1:1',
+    MATCHING_WORKER: true,
+    SWEEP_INTERVAL_MS: 5000,
+    RECONCILE_INTERVAL_MS: 30000,
+  });
+  try {
+    await request(app.getHttpServer()).get('/health').expect(503);
+  } finally {
+    await app.close();
+  }
+});
+
 it('is 503 when the database connection is gone', async () => {
   const app = await boot();
   try {
@@ -50,7 +66,7 @@ it('is 503 when the database connection is gone', async () => {
 });
 
 it('is 500 instead of leaking a body that breaks the health contract', async () => {
-  const config = { ...parseEnv(process.env), LOG_LEVEL: 'silent' as const };
+  const config = testConfig();
   const moduleRef = await Test.createTestingModule({ imports: [AppModule.forRoot(config)] })
     .overrideProvider(HealthService)
     .useValue({ check: () => Promise.resolve({ status: 'ok', db: 'maybe', redis: 'up' }) })

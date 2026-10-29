@@ -23,6 +23,8 @@ services:
 
   redis:
     image: redis:8.10.2@sha256:2c2dff791878316e3b083188be0d578423b24813cdda5de0e80ea4f7b3e6bfd6
+    # BullMQ: an evicted job key is a timer that never fires; the API refuses to boot on any other policy
+    command: redis-server --maxmemory-policy noeviction
     ports:
       - 127.0.0.1:6379:6379
     healthcheck:

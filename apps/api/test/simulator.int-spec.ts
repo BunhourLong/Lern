@@ -2,14 +2,17 @@ import { type Router, Simulation } from '@lern/simulator';
 import type { INestApplication } from '@nestjs/common';
 import type { App } from 'supertest/types';
 import { DataSource } from 'typeorm';
-import { requireEnv } from './env';
 import { bootApp } from './support/actors';
+import { isolatedDatabase } from './support/isolated-database';
 
 let app: INestApplication<App>;
 let url: string;
+let databaseUrl: string;
 
+// Matching runs here (worker + sweep), so the suite gets its own database: the sweep scans every searching ride
 beforeAll(async () => {
-  app = await bootApp();
+  databaseUrl = await isolatedDatabase();
+  app = await bootApp({}, { DATABASE_URL: databaseUrl, MATCHING_WORKER: true, SWEEP_INTERVAL_MS: 500 });
   await app.listen(0, '127.0.0.1');
   url = await app.getUrl();
 });
@@ -26,13 +29,14 @@ const straight: Router = (from, to) => Promise.resolve([from, to]);
 it('drives a booked ride from searching to completed through the real API and socket', async () => {
   const sim = await Simulation.start({
     api: url,
-    databaseUrl: requireEnv('DATABASE_URL'),
+    databaseUrl,
     router: straight,
     drivers: 2,
     riders: 1,
     speed: 200, // ~1.6 km/s: a cross-town trip in a few seconds
     tickMs: 50,
     pauseMs: 60_000, // one ride per rider in this test
+    rand: () => 0.45 + Math.random() * 0.1, // everyone within ~1 km, inside the first 2 km search radius
     log: () => undefined,
   });
   const [rider] = sim.riders;

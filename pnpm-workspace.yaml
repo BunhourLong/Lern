@@ -9,6 +9,7 @@ nodeLinker: hoisted
 allowBuilds:
   '@parcel/watcher': false
   cpu-features: false
+  msgpackr-extract: false # optional native speed-up for bullmq's msgpackr; the JS fallback is enough
   protobufjs: false
   ssh2: false
   unrs-resolver: false

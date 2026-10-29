@@ -8,7 +8,6 @@ export type RiderDeps = {
   pauseMs: number;
   rand: () => number;
   log: (line: string) => void;
-  onBooked: (ride: Ride) => void;
 };
 
 const DONE = new Set<Ride['status']>(['completed', 'cancelled', 'no_driver_found']);
@@ -50,7 +49,6 @@ export class SimRider {
       try {
         const ended = new Promise<void>((resolve) => (this.ended = resolve));
         this.current = await this.deps.api.book(this.session.token, randomPoint(this.deps.rand), randomPoint(this.deps.rand));
-        this.deps.onBooked(this.current);
         await ended;
       } catch (err) {
         this.deps.log(`rider ${this.session.userId.slice(0, 8)}: ${(err as Error).message}`);

@@ -1,7 +1,5 @@
-import type { Ride } from '@lern/contracts';
 import { ApiClient } from './api.client';
 import { randomPoint } from './geo';
-import { nearestIdle } from './hand-off';
 import type { Router } from './osrm.router';
 import { SimDriver } from './sim-driver';
 import { SimRider } from './sim-rider';
@@ -26,7 +24,6 @@ const CITY_SPEED_MPS = 8;
 export class Simulation {
   readonly drivers: SimDriver[] = [];
   readonly riders: SimRider[] = [];
-  private readonly queue: Ride[] = [];
 
   private constructor() {}
 
@@ -46,6 +43,7 @@ export class Simulation {
         await api.applyDriver(first.token);
         await verifyDriver(o.databaseUrl, first.userId);
         const session = await api.signIn(p); // a fresh token carries the driver role
+        await api.goOnline(session.token);
         sim.drivers.push(
           new SimDriver(session, await api.connect(session.token), randomPoint(rand), {
             api,
@@ -54,7 +52,6 @@ export class Simulation {
             tickMs: o.tickMs ?? 1000,
             rand,
             log,
-            onIdle: () => sim.dispatch(),
           }),
         );
       }
@@ -66,10 +63,6 @@ export class Simulation {
             pauseMs: o.pauseMs ?? 5000,
             rand,
             log,
-            onBooked: (ride) => {
-              sim.queue.push(ride);
-              sim.dispatch();
-            },
           }),
         );
       }
@@ -87,15 +80,5 @@ export class Simulation {
       positions: this.riders.reduce((s, r) => s + r.positions.length, 0),
       stale: this.riders.reduce((s, r) => s + r.stale, 0),
     };
-  }
-
-  // Oldest ride first, to the nearest idle driver; rides wait when every driver is busy
-  private dispatch(): void {
-    for (const ride of [...this.queue]) {
-      const driver = nearestIdle(this.drivers, ride.pickup);
-      if (!driver) return;
-      this.queue.shift();
-      driver.assign(ride);
-    }
   }
 }

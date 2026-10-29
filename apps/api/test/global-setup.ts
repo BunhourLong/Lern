@@ -16,7 +16,7 @@ const image = (name: string) => {
 export default async function globalSetup(): Promise<void> {
   const [pg, redis] = await Promise.all([
     new PostgreSqlContainer(image('postgis/postgis')).withPlatform('linux/amd64').start(),
-    new RedisContainer(image('redis')).start(),
+    new RedisContainer(image('redis')).withCommand(['redis-server', '--maxmemory-policy', 'noeviction']).start(),
   ]);
   process.env.DATABASE_URL = pg.getConnectionUri();
   process.env.REDIS_URL = redis.getConnectionUrl();

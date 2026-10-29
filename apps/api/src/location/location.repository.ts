@@ -65,11 +65,7 @@ export class LocationRepository {
        WHERE ST_DWithin(l.position, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography, $3)
          AND l.received_at > now() - interval '60 seconds'
          AND d.verification = 'verified'
-         -- shortcut: "available" = verified + no active ride, as in the open pool; the availability column replaces it in M4
-         AND NOT EXISTS (
-           SELECT 1 FROM rides r
-           WHERE r.driver_id = l.driver_id AND r.status IN ('driver_assigned', 'driver_arrived', 'in_progress')
-         )
+         AND d.availability = 'available'
        ORDER BY l.position <-> ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography
        LIMIT $4`,
       [p.lng, p.lat, radiusM, limit],

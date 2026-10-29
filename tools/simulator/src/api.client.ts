@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import {
+  availabilitySchema,
   driverProfileSchema,
   IDEMPOTENCY_KEY_HEADER,
   meSchema,
@@ -39,7 +40,15 @@ export class ApiClient {
     return this.send('POST', '/rides', rideSchema, token, { quoteId: quote.id });
   }
 
-  // accept, arrive, start, complete
+  async goOnline(token: string): Promise<void> {
+    await this.send('PUT', '/drivers/me/availability', availabilitySchema, token, { online: true });
+  }
+
+  accept(token: string, offerId: string): Promise<Ride> {
+    return this.send('POST', `/offers/${offerId}/accept`, rideSchema, token, {});
+  }
+
+  // arrive, start, complete
   move(token: string, rideId: string, action: string): Promise<Ride> {
     return this.send('POST', `/rides/${rideId}/${action}`, rideSchema, token, {});
   }

@@ -17,7 +17,17 @@ it('returns typed config with defaults for a valid env', () => {
     PORT: 3000,
     LOG_LEVEL: 'info',
     TELEGRAM_GATEWAY_URL: 'https://gatewayapi.telegram.org',
+    OFFER_TTL_SECONDS: 15,
+    SEARCH_DEADLINE_SECONDS: 90,
+    SWEEP_INTERVAL_MS: 5000,
+    RECONCILE_INTERVAL_MS: 30000,
+    MATCHING_WORKER: true,
+    QUEUE_PREFIX: 'lern',
   });
+});
+
+it('reads MATCHING_WORKER=false as off, not as a truthy string', () => {
+  expect(parseEnv({ ...valid, MATCHING_WORKER: 'false' }).MATCHING_WORKER).toBe(false);
 });
 
 it('coerces PORT from the string the environment provides', () => {

@@ -5,6 +5,7 @@ import request from 'supertest';
 import type { App } from 'supertest/types';
 import { DataSource } from 'typeorm';
 import { type Actor, bootApp, signIn } from './support/actors';
+import { assign } from './support/offers';
 
 let app: INestApplication<App>;
 let url: string;
@@ -66,7 +67,9 @@ it('announces every ride change to both participants right after commit, as the 
   await r.take(1, 500);
   for (const action of ['accept', 'arrive', 'start', 'complete']) {
     if (action === 'complete') expect((await move(rider, sent[0].id, 'cancel').send({ reason: 'other' })).status).toBe(HttpStatus.CONFLICT);
-    sent.push((await move(driver, sent[0].id, action).expect(200)).body as Ride);
+    sent.push(
+      action === 'accept' ? await assign(app, driver, sent[0].id) : ((await move(driver, sent[0].id, action).expect(200)).body as Ride),
+    );
     await Promise.all([r.take(sent.length, 500), d.take(sent.length - 1, 500)]);
   }
 
@@ -80,24 +83,23 @@ it('announces a cancel to both participants', async () => {
   const [rider, driver] = [await signIn(app), await verifiedDriver()];
   const [r, d] = [await listen(rider), await listen(driver)];
   const ride = await book(rider);
-  await move(driver, ride.id, 'accept').expect(200);
+  await assign(app, driver, ride.id);
   const cancelled = (await move(rider, ride.id, 'cancel').send({ reason: 'changed_mind' }).expect(200)).body as Ride;
   expect(cancelled.status).toBe('cancelled');
   expect(await r.take(3, 2000)).toContainEqual(cancelled);
   expect(await d.take(2, 2000)).toContainEqual(cancelled);
 });
 
-it('tells nobody else: not a driver who lost the race, not another rider', async () => {
-  const [rider, winner, loser, otherRider] = [await signIn(app), await verifiedDriver(), await verifiedDriver(), await signIn(app)];
-  const [l, o] = [await listen(loser), await listen(otherRider)];
+it('tells nobody else: not another driver, not another rider', async () => {
+  const [rider, driver, otherDriver, otherRider] = [await signIn(app), await verifiedDriver(), await verifiedDriver(), await signIn(app)];
+  const [l, o] = [await listen(otherDriver), await listen(otherRider)];
   const r = await listen(rider);
 
   const ride = await book(rider);
-  await move(winner, ride.id, 'accept').expect(200);
-  expect((await move(loser, ride.id, 'accept')).status).toBe(HttpStatus.CONFLICT);
+  await assign(app, driver, ride.id);
   await r.take(2, 2000);
 
-  await Promise.all([sentinel(loser), sentinel(otherRider)]);
+  await Promise.all([sentinel(otherDriver), sentinel(otherRider)]);
   expect(await l.take(1, 2000)).toEqual([{ sentinel: true }]);
   expect(await o.take(1, 2000)).toEqual([{ sentinel: true }]);
 });

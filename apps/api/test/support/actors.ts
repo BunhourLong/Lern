@@ -1,5 +1,6 @@
 import type { TokenPair } from '@lern/contracts';
 import type { INestApplication, ModuleMetadata } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
 import { JwtService } from '@nestjs/jwt';
 import { Test } from '@nestjs/testing';
 import { Redis } from 'ioredis';
@@ -8,10 +9,24 @@ import type { App } from 'supertest/types';
 import { AppModule } from '../../src/app.module';
 import { type Config, parseEnv } from '../../src/shared/config/env';
 
+// Own queue per app, and no worker or sweep unless a suite asks: suites share one DB, and another suite's
+// worker would offer this suite's rides to its drivers
+export function testConfig(overrides: Partial<Config> = {}): Config {
+  return {
+    ...parseEnv(process.env),
+    LOG_LEVEL: 'silent',
+    QUEUE_PREFIX: `test-${randomUUID()}`,
+    MATCHING_WORKER: false,
+    SWEEP_INTERVAL_MS: 0,
+    RECONCILE_INTERVAL_MS: 0,
+    ...overrides,
+  };
+}
+
 // The real app plus test-only modules/controllers (probe routes) and config overrides;
 // call .init() or .listen() on the result
 export async function bootApp(extra: Pick<ModuleMetadata, 'imports' | 'controllers'> = {}, overrides: Partial<Config> = {}) {
-  const config: Config = { ...parseEnv(process.env), LOG_LEVEL: 'silent', ...overrides };
+  const config = testConfig(overrides);
   const moduleRef = await Test.createTestingModule({
     imports: [AppModule.forRoot(config), ...(extra.imports ?? [])],
     controllers: extra.controllers,

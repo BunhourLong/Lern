@@ -8,6 +8,7 @@ import { DataSource } from 'typeorm';
 import { LocationService } from '../src/location/location.service';
 import { RealtimeGateway } from '../src/realtime/realtime.gateway';
 import { type Actor, bootApp, signIn } from './support/actors';
+import { assign } from './support/offers';
 
 let app: INestApplication<App>;
 const http = () => request(app.getHttpServer());
@@ -57,7 +58,7 @@ const assigned = async (d: Actor) => {
   const rider = await signIn(app);
   const quote = (await http().post('/quotes').set(rider.auth).send(trip).expect(201)).body as Quote;
   const ride = (await http().post('/rides').set(rider.auth).send({ quoteId: quote.id }).expect(201)).body as Ride;
-  await http().post(`/rides/${ride.id}/accept`).set(d.auth).expect(200);
+  await assign(app, d, ride.id);
   return { rider, rideId: ride.id };
 };
 const step = (a: Actor, rideId: string, s: string, body: object = {}) =>
@@ -309,6 +310,7 @@ describe('LocationService.nearby', () => {
   };
   const driverAt = async (p: Point) => {
     const d = await verifiedDriver();
+    await http().put('/drivers/me/availability').set(d.auth).send({ online: true }).expect(200);
     await post(d, { points: [pt(p.lat, p.lng, await at(-1))] }).expect(200);
     return d;
   };
@@ -329,18 +331,19 @@ describe('LocationService.nearby', () => {
     expect(Math.abs(res[1].distanceM - 2137)).toBeLessThan(20);
   });
 
-  it('leaves out stale, unverified and busy drivers', async () => {
+  it('lists only fresh, verified, available drivers', async () => {
     const spot = { lat: 11.566, lng: 104.929 };
     const ds = [];
-    for (let i = 0; i < 6; i++) ds.push(await driverAt(spot)); // sequential: parallel sign-in chains hang supertest
-    const [fresh, recent, stale, suspended, busy, done] = ds;
+    for (let i = 0; i < 7; i++) ds.push(await driverAt(spot)); // sequential: parallel sign-in chains hang supertest
+    const [fresh, recent, stale, suspended, offline, reserved, onTrip] = ds;
     await receivedAgo(recent, 59);
     await receivedAgo(stale, 61);
     await db().query(`UPDATE drivers SET verification = 'suspended' WHERE user_id = $1`, [suspended.id]);
-    await rideOf(busy);
-    await rideOf(done, 'arrive', 'start', 'complete');
-    const res = await nearby(quay, 1000, [fresh, recent, stale, suspended, busy, done]);
-    expect(res.map((r) => r.driverId).sort()).toEqual([fresh.id, recent.id, done.id].sort());
+    await http().put('/drivers/me/availability').set(offline.auth).send({ online: false }).expect(200);
+    for (const [d, state] of [[reserved, 'reserved'], [onTrip, 'on_trip']] as const)
+      await db().query('UPDATE drivers SET availability = $2 WHERE user_id = $1', [d.id, state]);
+    const res = await nearby(quay, 1000, ds);
+    expect(res.map((r) => r.driverId).sort()).toEqual([fresh.id, recent.id].sort());
   });
 
   it('returns at most limit drivers, the nearest', async () => {

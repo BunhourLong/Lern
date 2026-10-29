@@ -4,13 +4,13 @@ import { Logger } from 'nestjs-pino';
 import request from 'supertest';
 import type { App } from 'supertest/types';
 import { AppModule } from '../src/app.module';
-import { parseEnv } from '../src/shared/config/env';
+import { testConfig } from './support/actors';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 let app: INestApplication<App>;
 
 beforeAll(async () => {
-  const config = { ...parseEnv(process.env), LOG_LEVEL: 'silent' as const };
+  const config = testConfig();
   const moduleRef = await Test.createTestingModule({ imports: [AppModule.forRoot(config)] }).compile();
   app = moduleRef.createNestApplication({ bufferLogs: true });
   app.useLogger(app.get(Logger));
