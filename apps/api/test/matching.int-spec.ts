@@ -11,6 +11,7 @@ import { MatchingService } from '../src/matching/matching.service';
 import { MatchingQueue } from '../src/shared/queue/matching-queue';
 import type { Config } from '../src/shared/config/env';
 import { type Actor, bootApp, signIn } from './support/actors';
+import { lockTable } from './support/gate';
 import { isolatedDatabase } from './support/isolated-database';
 
 let databaseUrl: string;
@@ -232,23 +233,9 @@ describe('MatchingService.sync', () => {
       const spot = nextSpot();
       const d = await driver(north(spot, 100));
       const rides = [await book(await signIn(app), spot), await book(await signIn(app), spot)];
-      const gate = db().createQueryRunner();
-      await gate.connect();
-      await gate.startTransaction();
-      await gate.query('LOCK TABLE drivers IN ACCESS EXCLUSIVE MODE');
+      const gate = await lockTable(db(), 'drivers');
       const racing = rides.map((r) => sync(r.id));
-      await until(
-        async () =>
-          (
-            await db().query<{ n: number }[]>(
-              `SELECT count(*)::int AS n FROM pg_stat_activity
-               WHERE datname = current_database() AND wait_event_type = 'Lock'`,
-            )
-          )[0].n === 2,
-        10_000,
-        'not all 2 syncs arrived at the lock',
-      );
-      await gate.commitTransaction();
+      await gate.arrived(2);
       await gate.release();
 
       const results = await Promise.allSettled(racing);
@@ -399,6 +386,29 @@ describe('MatchingService.expire', () => {
     await expire(offerId);
     expect((await offersOf(ride.id)).map((o) => o.status)).toEqual(['accepted']);
     expect(await availability(first)).toBe('on_trip');
+  });
+
+  // A timer job delivered twice (BullMQ retry, or the reconciler racing the timer). Gate: ride_offers, where
+  // both expire UPDATEs wait; `status = 'pending'` lets only one through.
+  it('expires an offer once, tells its driver once and offers the ride once when its timer runs twice at once', async () => {
+    for (let round = 0; round < 3; round++) {
+      const { first, next, ride, offerId } = await offered();
+      const listener = await listen(first);
+      await due(offerId);
+      const gate = await lockTable(db(), 'ride_offers');
+      const racing = [expire(offerId), expire(offerId)];
+      await gate.arrived(2);
+      await gate.release();
+
+      expect((await Promise.allSettled(racing)).filter((r) => r.status === 'rejected')).toEqual([]);
+      expect((await offersOf(ride.id)).map((o) => [o.driver_id, o.status])).toEqual([
+        [first.id, 'expired'],
+        [next.id, 'pending'],
+      ]);
+      expect([await availability(first), await availability(next)]).toEqual(['available', 'reserved']);
+      await listener.drained();
+      expect(listener.offers.map((o) => o.status)).toEqual(['expired']);
+    }
   });
 });
 
