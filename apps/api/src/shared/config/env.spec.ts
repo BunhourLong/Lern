@@ -23,6 +23,7 @@ it('returns typed config with defaults for a valid env', () => {
     RECONCILE_INTERVAL_MS: 30000,
     MATCHING_WORKER: true,
     QUEUE_PREFIX: 'lern',
+    OSRM_URL: 'http://127.0.0.1:5050',
   });
 });
 

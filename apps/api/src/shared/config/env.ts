@@ -22,6 +22,8 @@ const Env = z.object({
   // false = this instance only enqueues jobs, another one runs them
   MATCHING_WORKER: z.stringbool().default(true),
   QUEUE_PREFIX: z.string().min(1).default('lern'),
+  // Road ETAs for matching; when it can't answer, candidates keep straight-line order
+  OSRM_URL: z.url({ protocol: /^https?$/ }).default('http://127.0.0.1:5050'),
 }).refine((env) => env.OTP_PROVIDER !== 'telegram' || env.TELEGRAM_GATEWAY_TOKEN, {
   message: 'Required when OTP_PROVIDER is telegram',
   path: ['TELEGRAM_GATEWAY_TOKEN'],

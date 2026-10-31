@@ -2,6 +2,7 @@ import { DynamicModule, Module } from '@nestjs/common';
 import { DriversModule } from '../drivers/drivers.module';
 import { OutboxModule } from '../outbox/outbox.module';
 import { RidesModule } from '../rides/rides.module';
+import { EtaProvider } from './eta.provider';
 import { MATCHING_CONFIG, type MatchingConfig } from './matching.config';
 import { MatchingRepository } from './matching.repository';
 import { MatchingService } from './matching.service';
@@ -15,7 +16,7 @@ export class MatchingModule {
       module: MatchingModule,
       imports: [DriversModule, OutboxModule, RidesModule],
       controllers: [OffersController],
-      providers: [{ provide: MATCHING_CONFIG, useValue: config }, MatchingRepository, MatchingService, MatchingWorker],
+      providers: [{ provide: MATCHING_CONFIG, useValue: config }, EtaProvider, MatchingRepository, MatchingService, MatchingWorker],
     };
   }
 }

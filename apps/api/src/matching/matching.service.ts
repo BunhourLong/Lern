@@ -6,6 +6,7 @@ import { OutboxService } from '../outbox/outbox.service';
 import { RidesService } from '../rides/rides.service';
 import { MatchingQueue, type Retry } from '../shared/queue/matching-queue';
 import { searchRadiusM } from './domain/search-radius';
+import { EtaProvider } from './eta.provider';
 import { MATCHING_CONFIG, type MatchingConfig } from './matching.config';
 import { MatchingRepository } from './matching.repository';
 
@@ -23,6 +24,7 @@ export class MatchingService {
     @Inject(MATCHING_CONFIG) private readonly config: MatchingConfig,
     private readonly db: DataSource,
     private readonly drivers: DriversService,
+    private readonly eta: EtaProvider,
     private readonly offers: MatchingRepository,
     private readonly outbox: OutboxService,
     private readonly queue: MatchingQueue,
@@ -46,7 +48,10 @@ export class MatchingService {
         await this.rides.expire(m, rideId);
         return;
       }
-      const candidate = await this.offers.candidate(m, { ...ride, rideId, radiusM: searchRadiusM(ride.elapsedS) });
+      const nearest = await this.offers.nearest(m, { ...ride, rideId, radiusM: searchRadiusM(ride.elapsedS) });
+      const ranked = await this.eta.rank(ride.pickup, nearest);
+      const driverId = await this.offers.lockFirst(m, ranked.map((c) => c.driverId));
+      const candidate = ranked.find((c) => c.driverId === driverId);
       if (!candidate) return; // the sweep tries again
       // The candidate row is locked and was available, so this can't miss
       if (!(await this.drivers.move(m, candidate.driverId, 'reserve'))) throw new Error('locked candidate not available');

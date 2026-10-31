@@ -15,6 +15,7 @@ import { CreateOutboxEvents1792629104815 } from './migrations/1792629104815-crea
 import { DriversAvailability1793241466000 } from './migrations/1793241466000-drivers-availability';
 import { CreateRideOffers1793241933000 } from './migrations/1793241933000-create-ride-offers';
 import { CreateDriverAvailabilityEvents1793255695994 } from './migrations/1793255695994-create-driver-availability-events';
+import { RideOffersEta1793433600000 } from './migrations/1793433600000-ride-offers-eta';
 
 // Migrations are listed, not globbed, so the same list works from ts (tests) and dist (CLI)
 export const migrations = [
@@ -34,6 +35,7 @@ export const migrations = [
   DriversAvailability1793241466000,
   CreateRideOffers1793241933000,
   CreateDriverAvailabilityEvents1793255695994,
+  RideOffersEta1793433600000,
 ];
 
 export function dataSourceOptions(url: string): DataSourceOptions {

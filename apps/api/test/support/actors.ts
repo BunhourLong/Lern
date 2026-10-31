@@ -9,7 +9,7 @@ import type { App } from 'supertest/types';
 import { AppModule } from '../../src/app.module';
 import { type Config, parseEnv } from '../../src/shared/config/env';
 
-// Own queue per app, and no worker or sweep unless a suite asks: suites share one DB, and another suite's
+// Own queue per app, no OSRM, and no worker or sweep unless a suite asks: suites share one DB, and another suite's
 // worker would offer this suite's rides to its drivers
 export function testConfig(overrides: Partial<Config> = {}): Config {
   return {
@@ -19,6 +19,8 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
     MATCHING_WORKER: false,
     SWEEP_INTERVAL_MS: 0,
     RECONCILE_INTERVAL_MS: 0,
+    // Nothing listens on port 9, so no test reaches a dev OSRM (test spots are in Cambodia, it would re-rank them)
+    OSRM_URL: 'http://127.0.0.1:9',
     ...overrides,
   };
 }

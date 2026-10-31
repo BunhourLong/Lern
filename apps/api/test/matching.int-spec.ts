@@ -1,5 +1,8 @@
 import { OFFER_UPDATED_EVENT, type Offer, type Point, type Quote, RIDE_UPDATED_EVENT, type Ride } from '@lern/contracts';
 import type { INestApplication } from '@nestjs/common';
+import { once } from 'node:events';
+import { createServer, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { io, type Socket } from 'socket.io-client';
 import request from 'supertest';
 import type { App } from 'supertest/types';
@@ -61,10 +64,10 @@ const book = async (rider: Actor, pickup: Point, through = app) => {
   return (await request(through.getHttpServer()).post('/rides').set(rider.auth).send({ quoteId: quote.id }).expect(201))
     .body as Ride;
 };
-type OfferRow = { driver_id: string; status: string; responded_at: Date | null; ttl_s: number; distance_m: number };
+type OfferRow = { driver_id: string; status: string; responded_at: Date | null; ttl_s: number; distance_m: number; eta_s: number };
 const offersOf = (rideId: string) =>
   db().query<OfferRow[]>(
-    `SELECT driver_id, status, responded_at, distance_m, extract(epoch FROM expires_at - created_at)::float AS ttl_s
+    `SELECT driver_id, status, responded_at, distance_m, eta_s, extract(epoch FROM expires_at - created_at)::float AS ttl_s
      FROM ride_offers WHERE ride_id = $1 ORDER BY created_at`,
     [rideId],
   );
@@ -111,6 +114,7 @@ describe('MatchingService.sync', () => {
     expect(await offersOf(ride.id)).toHaveLength(1);
     expect(offer).toMatchObject({ driver_id: near.id, status: 'pending', responded_at: null, ttl_s: 15 });
     expect(Math.abs(offer.distance_m - 500)).toBeLessThan(20);
+    expect(offer.eta_s).toBe(Math.round(offer.distance_m / 5)); // test apps have no OSRM: straight-line guess
     expect([await availability(near), await availability(far)]).toEqual(['reserved', 'available']);
     await Promise.all([n.drained(), f.drained()]);
     expect(n.offers).toEqual([
@@ -253,6 +257,87 @@ describe('MatchingService.sync', () => {
       expect(offers.map((o) => o.driver_id)).toEqual([d.id]);
       expect(await availability(d)).toBe('reserved');
     }
+  });
+});
+
+describe('ETA re-rank', () => {
+  // Local stand-in for OSRM's table service (PLAN.md §2.4): every coordinate but the last is a driver, the last
+  // the pickup; `answer` gives each driver's road seconds to the pickup
+  let answer: (driver: Point) => number | null;
+  let mode: 'ok' | 'hang' | 'error';
+  let osrm: Server;
+  let ranked: INestApplication<App>;
+  const rankedSync = (rideId: string) => ranked.get(MatchingService).sync(rideId);
+
+  beforeAll(async () => {
+    osrm = createServer((req, res) => {
+      if (mode === 'hang') return;
+      const url = new URL(req.url!, 'http://osrm');
+      const coords = url.pathname.replace('/table/v1/driving/', '').split(';');
+      const drivers = coords.slice(0, -1).map((c) => c.split(',').map(Number)).map(([lng, lat]) => ({ lat, lng }));
+      const valid =
+        url.pathname.startsWith('/table/v1/driving/') &&
+        url.searchParams.get('sources') === drivers.map((_, i) => i).join(';') &&
+        url.searchParams.get('destinations') === String(drivers.length);
+      const reply = (status: number, json: object) => res.writeHead(status).end(JSON.stringify(json));
+      if (!valid || mode === 'error') return reply(400, { code: 'InvalidQuery', message: 'bad request' });
+      reply(200, { code: 'Ok', durations: drivers.map((d) => [answer(d)]) });
+    }).listen(0, '127.0.0.1');
+    await once(osrm, 'listening');
+    const OSRM_URL = `http://127.0.0.1:${(osrm.address() as AddressInfo).port}`;
+    ranked = await (await bootApp({}, { DATABASE_URL: databaseUrl, OSRM_URL })).init();
+  });
+  beforeEach(() => (mode = 'ok'));
+  afterAll(async () => {
+    await ranked.close();
+    osrm.closeAllConnections();
+    osrm.close();
+  });
+
+  // The nearer driver is across the river: 500 m away, 15 min by road
+  const acrossTheRiver = async () => {
+    const spot = nextSpot();
+    const near = await driver(north(spot, 500));
+    const far = await driver(north(spot, 1500));
+    const isNear = (d: Point) => d.lat < north(spot, 1000).lat;
+    return { spot, near, far, isNear };
+  };
+
+  it('offers the ride to the driver with the shortest road ETA, not the nearest, and stores that ETA', async () => {
+    const { spot, far, isNear } = await acrossTheRiver();
+    answer = (d) => (isNear(d) ? 900 : 120);
+    const ride = await book(await signIn(app), spot);
+    await rankedSync(ride.id);
+    expect(await offersOf(ride.id)).toEqual([expect.objectContaining({ driver_id: far.id, eta_s: 120 })]);
+  });
+
+  // near's guess is 500 m at 5 m/s = 100 s: it loses to a 60 s road ETA and beats a 150 s one
+  it.each([
+    [60, 'far'],
+    [150, 'near'],
+  ] as const)('ranks a driver OSRM has no route for by its straight-line guess (other driver %i s → %s)', async (farS, winner) => {
+    const drivers = await acrossTheRiver();
+    answer = (d) => (drivers.isNear(d) ? null : farS);
+    const ride = await book(await signIn(app), drivers.spot);
+    await rankedSync(ride.id);
+    const [offer] = await offersOf(ride.id);
+    expect(offer.driver_id).toBe(drivers[winner].id);
+    expect(offer.eta_s).toBe(winner === 'far' ? farS : Math.round(offer.distance_m / 5));
+  });
+
+  it.each([
+    ['answers with an error', 'error'],
+    ['does not answer within 1 s', 'hang'],
+  ] as const)('offers the nearest by straight line when OSRM %s', async (_, failure) => {
+    const { spot, near, isNear } = await acrossTheRiver();
+    answer = (d) => (isNear(d) ? 900 : 120);
+    mode = failure;
+    const ride = await book(await signIn(app), spot);
+    const started = Date.now();
+    await rankedSync(ride.id);
+    expect(Date.now() - started).toBeLessThan(3000);
+    const [offer] = await offersOf(ride.id);
+    expect(offer).toMatchObject({ driver_id: near.id, eta_s: Math.round(offer.distance_m / 5) });
   });
 });
 
