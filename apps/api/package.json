@@ -11,6 +11,7 @@
     "lint": "eslint .",
     "migration:run": "pnpm run build && node --env-file-if-exists=.env ../../node_modules/typeorm/cli.js migration:run -d dist/shared/database/data-source.js",
     "migration:revert": "pnpm run build && node --env-file-if-exists=.env ../../node_modules/typeorm/cli.js migration:revert -d dist/shared/database/data-source.js",
+    "stats": "pnpm run build && node --env-file-if-exists=.env dist/matching/matching-stats.cli.js",
     "migration:generate": "pnpm run build && node --env-file-if-exists=.env ../../node_modules/typeorm/cli.js migration:generate -d dist/shared/database/data-source.js"
   },
   "dependencies": {

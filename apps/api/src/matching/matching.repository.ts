@@ -20,6 +20,16 @@ const OUTBOX = `outbox AS (
 // Nearest candidates read per sync; EtaProvider reorders these by road ETA
 const TOP_K = 5;
 
+export type MatchingStats = {
+  booked: number;
+  matched: number;
+  noDriverFound: number;
+  cancelledSearching: number;
+  timeToMatchS: { p50: number; p95: number } | null;
+  offersPerMatchedRide: number | null;
+  offers: Record<'accepted' | 'declined' | 'expired', number>;
+};
+
 export type Candidate = Point & { driverId: string; distanceM: number };
 export type RankedCandidate = Candidate & { etaS: number };
 
@@ -208,6 +218,37 @@ export class MatchingRepository {
       driverId,
     ]);
     return !backed;
+  }
+
+  // Matching report over the rides booked in the last sinceS seconds: an ops/load-test read, bounded by the window.
+  // Matched = assigned at some point (a later cancel still counts); answered offers exclude ones the ride cancelled.
+  async stats(sinceS: number): Promise<MatchingStats> {
+    const [row] = await this.db.query<(Omit<MatchingStats, 'timeToMatchS'> & { p50: number | null; p95: number | null })[]>(
+      `WITH r AS (
+         SELECT r.id, r.status, extract(epoch FROM
+                  (SELECT min(e.created_at) FROM ride_events e WHERE e.ride_id = r.id AND e.status = 'driver_assigned') - r.created_at
+                ) AS match_s
+         FROM rides r WHERE r.created_at >= now() - make_interval(secs => $1)
+       ), per_ride AS (
+         SELECT count(*) AS n FROM ride_offers o JOIN r ON r.id = o.ride_id WHERE r.match_s IS NOT NULL GROUP BY o.ride_id
+       )
+       SELECT count(*)::int AS booked,
+              count(match_s)::int AS matched,
+              count(*) FILTER (WHERE status = 'no_driver_found')::int AS "noDriverFound",
+              count(*) FILTER (WHERE status = 'cancelled' AND match_s IS NULL)::int AS "cancelledSearching",
+              percentile_cont(0.5) WITHIN GROUP (ORDER BY match_s) AS p50,
+              percentile_cont(0.95) WITHIN GROUP (ORDER BY match_s) AS p95,
+              (SELECT avg(n)::float FROM per_ride) AS "offersPerMatchedRide",
+              (SELECT json_build_object(
+                 'accepted', count(*) FILTER (WHERE o.status = 'accepted'),
+                 'declined', count(*) FILTER (WHERE o.status = 'declined'),
+                 'expired', count(*) FILTER (WHERE o.status = 'expired'))
+               FROM ride_offers o JOIN r ON r.id = o.ride_id) AS offers
+       FROM r`,
+      [sinceS],
+    );
+    const { p50, p95, ...rest } = row;
+    return { ...rest, timeToMatchS: p50 === null ? null : { p50: Math.round(p50), p95: Math.round(p95!) } };
   }
 
   // Oldest first and bounded: a backlog drains over several ticks instead of one long one

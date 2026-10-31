@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { osrmRouter } from './osrm.router';
 import { Simulation } from './simulation';
 
-// pnpm sim -- --drivers 5 --riders 3 --speed 4   (dev stack + api with OTP_PROVIDER=dev; Ctrl-C prints the summary)
+// pnpm sim --drivers 5 --riders 3 --speed 4   (dev stack + api with OTP_PROVIDER=dev; Ctrl-C prints the summary)
 const { values } = parseArgs({
   options: {
     api: { type: 'string', default: 'http://127.0.0.1:3000' },
