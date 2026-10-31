@@ -5,6 +5,8 @@ import { DataSource } from 'typeorm';
 import { DriversModule } from '../src/drivers/drivers.module';
 import { VerifiedDriver } from '../src/drivers/verified-driver.guard';
 import { bootApp, signIn } from './support/actors';
+import { lockTable } from './support/gate';
+import { isolatedDatabase } from './support/isolated-database';
 
 type Tokens = { accessToken: string; refreshToken: string };
 
@@ -35,7 +37,8 @@ const setVerification = async (t: Tokens, status: string) => {
 };
 
 beforeAll(async () => {
-  app = await (await bootApp({ imports: [ProbeModule] })).init();
+  // Own database: the double-tap race counts lock waiters across the whole database
+  app = await (await bootApp({ imports: [ProbeModule] }, { DATABASE_URL: await isolatedDatabase() })).init();
 });
 
 afterAll(() => app.close());
@@ -162,6 +165,26 @@ describe('PUT /drivers/me/availability', () => {
       expect(await stored(t)).toBe(state);
     }
     expect(await history(t)).toEqual([]);
+  });
+
+  // Found by the model-based test: both requests read `available`, one moves the driver, and the other's guarded
+  // move then misses. Gate: the availability log, which each move writes in the same statement, so both requests
+  // have read the state and wait to move.
+  it.each([
+    [true, 'available'],
+    [false, 'offline'],
+  ] as const)('answers both of two simultaneous {online: %s} with 200 %s', async (online, availability) => {
+    for (let round = 0; round < 3; round++) {
+      const t = await driver();
+      if (!online) await put(t, { online: true }).expect(HttpStatus.OK);
+      const gate = await lockTable(app.get(DataSource), 'driver_availability_events');
+      const racing = [put(t, { online }), put(t, { online })].map((r) => r.then((res) => res));
+      await gate.arrived(2);
+      await gate.release();
+      const results = await Promise.all(racing);
+      expect(results.map((r) => [r.status, r.body as unknown])).toEqual(Array(2).fill([HttpStatus.OK, { availability }]));
+      expect(await stored(t)).toBe(availability);
+    }
   });
 
   it('is 404 for a non-driver, 400 for a bad body and 401 without a token', async () => {

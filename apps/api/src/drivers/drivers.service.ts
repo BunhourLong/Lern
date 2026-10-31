@@ -48,10 +48,13 @@ export class DriversService {
     const target = online ? 'available' : 'offline';
     if (state.availability === target) return { availability: target };
     if (await this.drivers.move(this.db.manager, userId, online ? 'go_online' : 'go_offline')) return { availability: target };
+    // The move missed: a simultaneous identical request (a double tap) may have made it first
+    const availability = (await this.drivers.state(userId))?.availability;
+    if (availability === target) return { availability: target };
     throw new ConflictException({
       statusCode: HttpStatus.CONFLICT,
       message: "Can't change availability while holding an offer or on a trip",
-      availability: (await this.drivers.state(userId))?.availability,
+      availability,
     });
   }
 
