@@ -19,3 +19,5 @@ overrides:
   'multer@<2.5.0': 2.5.0
   # SNYK-JS-BODYPARSER-21431495: via express 5 and the RN CLI, both on ^2.2, so only the lockfile was behind
   'body-parser@>=2 <2.4.0': ^2.4.0
+patchedDependencies:
+  expo-modules-core@58.0.28: patches/expo-modules-core@58.0.28.patch

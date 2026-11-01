@@ -35,7 +35,13 @@
 		<true/>
 	</dict>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string></string>
+	<string>While you are online as a driver, your position is shared with the rider you are picking up and used to offer you nearby rides.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>While you are online as a driver, your position keeps being shared when the app is in the background, so riders see you coming and you keep getting nearby rides. Going offline stops it.</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>location</string>
+	</array>
 	<key>RCTNewArchEnabled</key>
 	<true/>
 	<key>UIApplicationSceneManifest</key>
