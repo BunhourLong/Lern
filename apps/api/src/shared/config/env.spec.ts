@@ -27,6 +27,8 @@ it('returns typed config with defaults for a valid env', () => {
     PRESENCE_INTERVAL_MS: 5000,
     DRIVER_STALE_SECONDS: 30,
     DRIVER_TIMEOUT_SECONDS: 300,
+    STUCK_GAP_SECONDS: 600,
+    STUCK_CAP_SECONDS: 7200,
   });
 });
 

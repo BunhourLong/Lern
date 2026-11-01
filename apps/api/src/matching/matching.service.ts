@@ -13,6 +13,14 @@ import { MatchingRepository } from './matching.repository';
 const SWEEP_BATCH = 100;
 const RECONCILE_BATCH = 100;
 
+type ReconcileCount =
+  | 'lostTimers'
+  | 'staleOffers'
+  | 'reservedWithoutOffer'
+  | 'onTripWithoutRide'
+  | 'stuckNoHeartbeat'
+  | 'stuckOverCap';
+
 // Rolls an accept back when the offer or the ride is no longer in a state that allows it
 class NotAccepted extends Error {}
 
@@ -131,10 +139,11 @@ export class MatchingService {
     });
   }
 
-  // Box 7: repairs what a lost job or a bug left behind, through the same guarded moves as the normal path.
-  // Each count is rows found and handed to repair; anything above zero is logged (a metric with box 11).
-  async reconcile(): Promise<Record<'lostTimers' | 'staleOffers' | 'reservedWithoutOffer' | 'onTripWithoutRide', number>> {
-    const counts = { lostTimers: 0, staleOffers: 0, reservedWithoutOffer: 0, onTripWithoutRide: 0 };
+  // Box 7: repairs what a lost job or a bug left behind, through the same guarded moves as the normal path, and
+  // flags stuck trips for an admin (M5). Each count is rows found and repaired or flagged; anything above zero is
+  // logged.
+  async reconcile(): Promise<Record<ReconcileCount, number>> {
+    const counts = { lostTimers: 0, staleOffers: 0, reservedWithoutOffer: 0, onTripWithoutRide: 0, stuckNoHeartbeat: 0, stuckOverCap: 0 };
     for (const offerId of await this.offers.lostTimers(RECONCILE_BATCH)) {
       if (await this.safely(`expire ${offerId}`, () => this.expire(offerId))) counts.lostTimers++;
     }
@@ -155,7 +164,12 @@ export class MatchingService {
         if (repaired) counts[key]++;
       }
     }
-    if (Object.values(counts).some((n) => n > 0)) this.logger.warn(`reconciler repaired ${JSON.stringify(counts)}`);
+    await this.safely('flag stuck trips', async () => {
+      const opened = await this.rides.flagStuck(this.config.STUCK_GAP_SECONDS, this.config.STUCK_CAP_SECONDS, RECONCILE_BATCH);
+      counts.stuckNoHeartbeat = opened.noHeartbeat;
+      counts.stuckOverCap = opened.overCap;
+    });
+    if (Object.values(counts).some((n) => n > 0)) this.logger.warn(`reconciler found ${JSON.stringify(counts)}`);
     return counts;
   }
 

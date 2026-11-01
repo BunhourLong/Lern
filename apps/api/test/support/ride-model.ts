@@ -163,7 +163,7 @@ export function apply(m: Model, c: Command): Outcome {
     case 'reconcile': {
       const stale = m.offers.filter((o) => o.status === 'pending' && rideOf(m, o.ride).status !== 'searching');
       for (const o of stale) sync(m, o.ride);
-      return { lostTimers: 0, staleOffers: stale.length, reservedWithoutOffer: 0, onTripWithoutRide: 0 };
+      return { lostTimers: 0, staleOffers: stale.length, reservedWithoutOffer: 0, onTripWithoutRide: 0, stuckNoHeartbeat: 0, stuckOverCap: 0 };
     }
     case 'accept': {
       const o = offerOf(m, c.offer);

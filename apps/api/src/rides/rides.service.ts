@@ -141,4 +141,10 @@ export class RidesService {
     ]);
     return { rider: rider ?? null, driver: driver ?? null };
   }
+
+  // For the reconciler: flags opened this run, by reason
+  async flagStuck(gapS: number, capS: number, limit: number): Promise<{ noHeartbeat: number; overCap: number }> {
+    const reasons = await this.rides.flagStuck(gapS, capS, limit);
+    return { noHeartbeat: reasons.filter((r) => r === 'no_heartbeat').length, overCap: reasons.filter((r) => r === 'over_cap').length };
+  }
 }

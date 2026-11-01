@@ -27,6 +27,10 @@ const Env = z.object({
   PRESENCE_INTERVAL_MS: z.coerce.number().int().min(0).default(5000),
   DRIVER_STALE_SECONDS: z.coerce.number().int().min(1).default(30),
   DRIVER_TIMEOUT_SECONDS: z.coerce.number().int().min(1).default(300),
+  // Stuck trips (PLAN.md M5): an in_progress ride is flagged for admin after this long without a driver point, or
+  // after this long in progress at all
+  STUCK_GAP_SECONDS: z.coerce.number().int().min(1).default(600),
+  STUCK_CAP_SECONDS: z.coerce.number().int().min(1).default(7200),
   // Road ETAs for matching; when it can't answer, candidates keep straight-line order
   OSRM_URL: z.url({ protocol: /^https?$/ }).default('http://127.0.0.1:5050'),
 }).refine((env) => env.OTP_PROVIDER !== 'telegram' || env.TELEGRAM_GATEWAY_TOKEN, {

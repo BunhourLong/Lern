@@ -129,4 +129,31 @@ export class RidesRepository {
     );
     return row;
   }
+
+  // Stuck trips (PLAN.md M5): opens a flag for each in_progress ride whose driver sent no point for gapS (the trip
+  // start counts as a sign of life) or that has been in progress for capS. Flag only: the ride is not touched.
+  // Rides with an open flag for that reason are left out before the LIMIT, so they never crowd out new ones;
+  // ON CONFLICT covers two reconcilers racing. Returns the reasons of the flags opened.
+  async flagStuck(gapS: number, capS: number, limit: number): Promise<string[]> {
+    const rows = await this.db.query<{ reason: string }[]>(
+      `WITH trip AS (
+         SELECT r.id, l.received_at,
+                (SELECT max(e.created_at) FROM ride_events e WHERE e.ride_id = r.id AND e.status = 'in_progress') AS started_at
+         FROM rides r LEFT JOIN driver_locations l ON l.driver_id = r.driver_id
+         WHERE r.status = 'in_progress'
+       ), due AS (
+         SELECT id, 'no_heartbeat' AS reason FROM trip WHERE GREATEST(received_at, started_at) < now() - make_interval(secs => $1)
+         UNION ALL
+         SELECT id, 'over_cap' FROM trip WHERE started_at < now() - make_interval(secs => $2)
+       )
+       INSERT INTO ride_flags (ride_id, reason)
+       SELECT id, reason FROM due
+       WHERE NOT EXISTS (SELECT 1 FROM ride_flags f WHERE f.ride_id = due.id AND f.reason = due.reason AND f.resolved_at IS NULL)
+       LIMIT $3
+       ON CONFLICT (ride_id, reason) WHERE resolved_at IS NULL DO NOTHING
+       RETURNING reason`,
+      [gapS, capS, limit],
+    );
+    return rows.map((r) => r.reason);
+  }
 }

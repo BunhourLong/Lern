@@ -39,7 +39,7 @@ const setAvailability = (a: Actor, state: string) =>
   db().query('UPDATE drivers SET availability = $2 WHERE user_id = $1', [a.id, state]);
 const offerStatus = async (id: string) =>
   (await db().query<{ status: string }[]>('SELECT status FROM ride_offers WHERE id = $1', [id]))[0].status;
-const none = { lostTimers: 0, staleOffers: 0, reservedWithoutOffer: 0, onTripWithoutRide: 0 };
+const none = { lostTimers: 0, staleOffers: 0, reservedWithoutOffer: 0, onTripWithoutRide: 0, stuckNoHeartbeat: 0, stuckOverCap: 0 };
 
 it('finds nothing to repair in a healthy state: a driver holding an offer, a driver on a trip', async () => {
   const { ride } = await searchingRide();
@@ -110,4 +110,72 @@ it('keeps repairing past an item whose repair fails', async () => {
   expect(await availability(stuck)).toBe('available');
   jest.restoreAllMocks();
   expect(await reconcile()).toEqual({ ...none, lostTimers: 1 }); // the next run repairs it
+});
+
+// Stuck trips (PLAN.md M5, decided 2026-11-01): flag only, for an admin to resolve (M7). Last in the file: the
+// trips these tests leave in_progress would otherwise be found again by later tests.
+describe('stuck trips', () => {
+  // An in_progress trip whose driver last reported `silentS` ago and which started `startedS` ago
+  const trip = async (silentS: number | null, startedS: number) => {
+    const d = await verifiedDriver();
+    if (silentS !== null) {
+      await http().post('/drivers/me/locations').set(d.auth).send({ points: [{ lat: 11.5564, lng: 104.9282, recordedAt: new Date().toISOString() }] }).expect(200);
+      await db().query('UPDATE driver_locations SET received_at = now() - make_interval(secs => $2) WHERE driver_id = $1', [d.id, silentS]);
+    }
+    const ride = await assign(app, d, (await searchingRide()).ride.id);
+    for (const step of ['arrive', 'start']) await http().post(`/rides/${ride.id}/${step}`).set(d.auth).expect(200);
+    await db().query(`UPDATE ride_events SET created_at = now() - make_interval(secs => $2) WHERE ride_id = $1 AND status = 'in_progress'`, [
+      ride.id,
+      startedS,
+    ]);
+    return ride;
+  };
+  const flags = (rideId: string) =>
+    db().query<{ reason: string; resolved_at: Date | null }[]>('SELECT reason, resolved_at FROM ride_flags WHERE ride_id = $1 ORDER BY id', [rideId]);
+  const rideRow = async (id: string) =>
+    (await db().query<{ status: string; version: number }[]>('SELECT status, version FROM rides WHERE id = $1', [id]))[0];
+
+  it('flags a trip whose driver sent nothing for 10 min, once, and leaves the ride as it was', async () => {
+    const stuck = await trip(601, 900);
+    const fine = await trip(599, 900);
+
+    expect(await reconcile()).toEqual({ ...none, stuckNoHeartbeat: 1 });
+    expect(await reconcile()).toEqual(none); // already flagged and still open
+
+    expect(await flags(stuck.id)).toEqual([{ reason: 'no_heartbeat', resolved_at: null }]);
+    expect(await flags(fine.id)).toEqual([]);
+    expect(await rideRow(stuck.id)).toEqual({ status: 'in_progress', version: 4 });
+  });
+
+  it('counts the trip start as a sign of life for a driver who never sent a point', async () => {
+    const stuck = await trip(null, 601);
+    const fresh = await trip(null, 60);
+    expect(await reconcile()).toEqual({ ...none, stuckNoHeartbeat: 1 });
+    expect([(await flags(stuck.id)).length, (await flags(fresh.id)).length]).toEqual([1, 0]);
+  });
+
+  it('flags a trip in progress for more than 2 h even while its driver keeps reporting', async () => {
+    const long = await trip(0, 7201);
+    const short = await trip(0, 7199);
+    expect(await reconcile()).toEqual({ ...none, stuckOverCap: 1 });
+    expect(await flags(long.id)).toEqual([{ reason: 'over_cap', resolved_at: null }]);
+    expect(await flags(short.id)).toEqual([]);
+  });
+
+  it('flags again only after an admin resolved the previous flag', async () => {
+    const stuck = await trip(601, 900);
+    await reconcile();
+    await db().query(`UPDATE ride_flags SET resolved_at = now() WHERE ride_id = $1`, [stuck.id]);
+    expect(await reconcile()).toEqual({ ...none, stuckNoHeartbeat: 1 });
+    expect((await flags(stuck.id)).map((f) => f.resolved_at === null)).toEqual([false, true]);
+  });
+
+  it('never flags a ride that is not in_progress', async () => {
+    const d = await verifiedDriver();
+    await http().post('/drivers/me/locations').set(d.auth).send({ points: [{ lat: 11.5564, lng: 104.9282, recordedAt: new Date().toISOString() }] }).expect(200);
+    await db().query(`UPDATE driver_locations SET received_at = now() - interval '1 hour' WHERE driver_id = $1`, [d.id]);
+    const arrived = await assign(app, d, (await searchingRide()).ride.id);
+    await http().post(`/rides/${arrived.id}/arrive`).set(d.auth).expect(200);
+    expect(await reconcile()).toEqual(none);
+  });
 });
