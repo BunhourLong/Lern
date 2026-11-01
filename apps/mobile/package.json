@@ -17,8 +17,12 @@
     "@react-navigation/native-stack": "^7.21.0",
     "react": "19.3.0",
     "react-native": "0.88.0",
+    "react-native-keychain": "10.0.0",
+    "react-native-mmkv": "4.3.2",
+    "react-native-nitro-modules": "0.37.1",
     "react-native-safe-area-context": "^5.10.1",
     "react-native-screens": "^4.30.0",
+    "socket.io-client": "4.8.3",
     "zustand": "^5.0.15"
   },
   "devDependencies": {
