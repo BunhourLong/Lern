@@ -1,5 +1,6 @@
 import { DynamicModule, Module } from '@nestjs/common';
 import { DriversModule } from '../drivers/drivers.module';
+import { LocationModule } from '../location/location.module';
 import { OutboxModule } from '../outbox/outbox.module';
 import { RidesModule } from '../rides/rides.module';
 import { EtaProvider } from './eta.provider';
@@ -14,7 +15,7 @@ export class MatchingModule {
   static forRoot(config: MatchingConfig): DynamicModule {
     return {
       module: MatchingModule,
-      imports: [DriversModule, OutboxModule, RidesModule],
+      imports: [DriversModule, LocationModule, OutboxModule, RidesModule],
       controllers: [OffersController],
       providers: [{ provide: MATCHING_CONFIG, useValue: config }, EtaProvider, MatchingRepository, MatchingService, MatchingWorker],
     };

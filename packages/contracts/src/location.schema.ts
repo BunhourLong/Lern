@@ -40,3 +40,10 @@ export type NearbyDrivers = z.infer<typeof nearbyDriversSchema>;
 export const DRIVER_POSITION_EVENT = 'ride:driver-position';
 export const driverPositionSchema = pointSchema.extend({ rideId: z.uuid(), recordedAt: z.iso.datetime() });
 export type DriverPosition = z.infer<typeof driverPositionSchema>;
+
+// Server -> the rider of the driver's active ride, once when the driver goes silent (stale: true) and once when
+// points resume (stale: false), via the outbox. Not a ride event: no seq; lastSeenAt (the driver's last point,
+// server clock) only grows, so the client keeps the newest.
+export const DRIVER_CONNECTIVITY_EVENT = 'driver:connectivity';
+export const driverConnectivitySchema = z.object({ rideId: z.uuid(), stale: z.boolean(), lastSeenAt: z.iso.datetime() });
+export type DriverConnectivity = z.infer<typeof driverConnectivitySchema>;

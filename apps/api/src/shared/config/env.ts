@@ -22,6 +22,11 @@ const Env = z.object({
   // false = this instance only enqueues jobs, another one runs them
   MATCHING_WORKER: z.stringbool().default(true),
   QUEUE_PREFIX: z.string().min(1).default('lern'),
+  // Presence (PLAN.md M5): how often the sweep runs (0 = off), when a driver on a ride counts as silent, and when
+  // a silent available driver is taken offline
+  PRESENCE_INTERVAL_MS: z.coerce.number().int().min(0).default(5000),
+  DRIVER_STALE_SECONDS: z.coerce.number().int().min(1).default(30),
+  DRIVER_TIMEOUT_SECONDS: z.coerce.number().int().min(1).default(300),
   // Road ETAs for matching; when it can't answer, candidates keep straight-line order
   OSRM_URL: z.url({ protocol: /^https?$/ }).default('http://127.0.0.1:5050'),
 }).refine((env) => env.OTP_PROVIDER !== 'telegram' || env.TELEGRAM_GATEWAY_TOKEN, {

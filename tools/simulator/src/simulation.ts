@@ -17,7 +17,7 @@ export type SimOptions = {
   rand?: () => number;
   log?: (line: string) => void;
 };
-export type Summary = { completed: number; positions: number; stale: number };
+export type Summary = { completed: number; positions: number; stale: number; rejected: number };
 
 const CITY_SPEED_MPS = 8;
 
@@ -79,6 +79,7 @@ export class Simulation {
       completed: this.riders.reduce((s, r) => s + r.completed, 0),
       positions: this.riders.reduce((s, r) => s + r.positions.length, 0),
       stale: this.riders.reduce((s, r) => s + r.stale, 0),
+      rejected: this.riders.reduce((s, r) => s + r.rejected, 0),
     };
   }
 }

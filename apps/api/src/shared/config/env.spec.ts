@@ -24,6 +24,9 @@ it('returns typed config with defaults for a valid env', () => {
     MATCHING_WORKER: true,
     QUEUE_PREFIX: 'lern',
     OSRM_URL: 'http://127.0.0.1:5050',
+    PRESENCE_INTERVAL_MS: 5000,
+    DRIVER_STALE_SECONDS: 30,
+    DRIVER_TIMEOUT_SECONDS: 300,
   });
 });
 

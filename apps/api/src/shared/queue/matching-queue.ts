@@ -2,14 +2,14 @@ import { Logger } from '@nestjs/common';
 import { DelayedError, Queue, Worker } from 'bullmq';
 import type { Redis } from 'ioredis';
 
-type Jobs = { sync: { rideId: string }; 'offer-timeout': { offerId: string }; sweep: object; reconcile: object };
+type Jobs = { sync: { rideId: string }; 'offer-timeout': { offerId: string }; sweep: object; reconcile: object; presence: object };
 // A handler that finds its job early returns how long to wait; the same job then runs again that much later
 export type Retry = { retryInMs: number };
 export type MatchingHandlers = { [K in keyof Jobs]: (data: Jobs[K]) => Promise<void | Retry> };
 
 const NAME = 'matching';
 
-// Matching's durable jobs (invariant 9): handlers re-check state, so a duplicate or late job is harmless.
+// Matching's durable jobs (invariant 9), plus the presence sweep that shares its worker: handlers re-check state, so a duplicate or late job is harmless.
 // Lives in shared so rides can enqueue without importing matching, which imports rides.
 export class MatchingQueue {
   private readonly logger = new Logger(MatchingQueue.name);
@@ -47,7 +47,7 @@ export class MatchingQueue {
   }
 
   // Runs once per interval across all instances
-  async every(name: 'sweep' | 'reconcile', ms: number): Promise<void> {
+  async every(name: 'sweep' | 'reconcile' | 'presence', ms: number): Promise<void> {
     await this.queue.upsertJobScheduler(name, { every: ms }, { name, data: {} });
   }
 

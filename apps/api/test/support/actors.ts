@@ -19,6 +19,7 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
     MATCHING_WORKER: false,
     SWEEP_INTERVAL_MS: 0,
     RECONCILE_INTERVAL_MS: 0,
+    PRESENCE_INTERVAL_MS: 0,
     // Nothing listens on port 9, so no test reaches a dev OSRM (test spots are in Cambodia, it would re-rank them)
     OSRM_URL: 'http://127.0.0.1:9',
     ...overrides,
