@@ -134,7 +134,7 @@ export class RidesService {
     return ride;
   }
 
-  async active(userId: string): Promise<ActiveRides> {
+  async active(userId: string): Promise<Omit<ActiveRides, 'offer'>> {
     const [rider, driver] = await Promise.all([
       this.rides.findActive(userId, 'rider_id'),
       this.rides.findActive(userId, 'driver_id'),

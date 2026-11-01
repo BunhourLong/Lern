@@ -3,6 +3,7 @@ import { DriversModule } from '../drivers/drivers.module';
 import { LocationModule } from '../location/location.module';
 import { OutboxModule } from '../outbox/outbox.module';
 import { RidesModule } from '../rides/rides.module';
+import { ActiveRideController } from './active-ride.controller';
 import { EtaProvider } from './eta.provider';
 import { MATCHING_CONFIG, type MatchingConfig } from './matching.config';
 import { MatchingRepository } from './matching.repository';
@@ -16,7 +17,7 @@ export class MatchingModule {
     return {
       module: MatchingModule,
       imports: [DriversModule, LocationModule, OutboxModule, RidesModule],
-      controllers: [OffersController],
+      controllers: [ActiveRideController, OffersController],
       providers: [{ provide: MATCHING_CONFIG, useValue: config }, EtaProvider, MatchingRepository, MatchingService, MatchingWorker],
     };
   }

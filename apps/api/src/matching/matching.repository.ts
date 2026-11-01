@@ -146,6 +146,16 @@ export class MatchingRepository {
     return row?.offer;
   }
 
+  // The driver's pending offer that can still be accepted (at most one: partial unique), for the reconnect snapshot
+  async pendingFor(driverId: string): Promise<Offer | undefined> {
+    const [row] = await this.db.query<{ offer: Offer }[]>(
+      `SELECT ${OFFER} AS offer FROM ride_offers o JOIN rides r ON r.id = o.ride_id
+       WHERE o.driver_id = $1 AND o.status = 'pending' AND o.expires_at > now()`,
+      [driverId],
+    );
+    return row?.offer;
+  }
+
   async snapshot(offerId: string, driverId: string): Promise<Offer | undefined> {
     const [row] = await this.db.query<{ offer: Offer }[]>(
       `SELECT ${OFFER} AS offer FROM ride_offers o JOIN rides r ON r.id = o.ride_id WHERE o.id = $1 AND o.driver_id = $2`,

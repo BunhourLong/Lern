@@ -317,17 +317,17 @@ describe('GET /me/active-ride', () => {
   it('follows a ride from booking to the end, for its rider and its driver only', async () => {
     const rider = await signIn(app);
     const booked = (await book(rider, (await newQuote(rider)).id).expect(201)).body as Ride;
-    expect((await activeRides(rider).expect(200)).body).toEqual({ rider: booked, driver: null });
+    expect((await activeRides(rider).expect(200)).body).toEqual({ rider: booked, driver: null, offer: null });
 
     const driver = await verifiedDriver();
     const accepted = await assign(app, driver, booked.id);
-    expect((await activeRides(rider).expect(200)).body).toEqual({ rider: accepted, driver: null });
-    expect((await activeRides(driver).expect(200)).body).toEqual({ rider: null, driver: accepted });
-    expect((await activeRides(await verifiedDriver()).expect(200)).body).toEqual({ rider: null, driver: null });
+    expect((await activeRides(rider).expect(200)).body).toEqual({ rider: accepted, driver: null, offer: null });
+    expect((await activeRides(driver).expect(200)).body).toEqual({ rider: null, driver: accepted, offer: null });
+    expect((await activeRides(await verifiedDriver()).expect(200)).body).toEqual({ rider: null, driver: null, offer: null });
 
     await cancel(rider, booked.id).expect(200);
     for (const who of [rider, driver]) {
-      expect((await activeRides(who).expect(200)).body).toEqual({ rider: null, driver: null });
+      expect((await activeRides(who).expect(200)).body).toEqual({ rider: null, driver: null, offer: null });
     }
   });
 
@@ -335,7 +335,7 @@ describe('GET /me/active-ride', () => {
     const user = await signIn(app);
     const own = (await book(user, (await newQuote(user)).id).expect(201)).body as Ride;
     const driving = await assign(app, await verifiedDriver('remork', user), (await searchingRide()).id);
-    expect((await activeRides(await signIn(app, user.phone)).expect(200)).body).toEqual({ rider: own, driver: driving });
+    expect((await activeRides(await signIn(app, user.phone)).expect(200)).body).toEqual({ rider: own, driver: driving, offer: null });
   });
 
   it('is 401 without a token', async () => {

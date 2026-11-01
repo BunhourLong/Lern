@@ -115,6 +115,10 @@ export class MatchingService {
     return offer;
   }
 
+  async pendingOffer(driverId: string): Promise<Offer | null> {
+    return (await this.offers.pendingFor(driverId)) ?? null;
+  }
+
   // 404 unless it's the caller's offer; otherwise 409 with the offer to reconcile with
   private async conflict(driverId: string, offerId: string, verb: string): Promise<Error> {
     const offer = await this.offers.snapshot(offerId, driverId);
