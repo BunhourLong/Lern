@@ -113,5 +113,9 @@ it('delivers rows nobody kicked for (writer crashed after commit) and removes wh
     [RIDE_UPDATED_EVENT, rider.id],
   );
   expect(await r.take(1, 2500)).toEqual([{ orphan: true }]);
-  expect(await db().query('SELECT 1 FROM outbox_events WHERE id = $1', [id])).toEqual([]);
+  // The emit happens inside the claim's transaction, so the event can arrive just before the delete commits
+  for (const end = Date.now() + 2000; (await db().query<unknown[]>('SELECT 1 FROM outbox_events WHERE id = $1', [id])).length > 0; ) {
+    if (Date.now() > end) throw new Error('row still there after it was sent');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
 });

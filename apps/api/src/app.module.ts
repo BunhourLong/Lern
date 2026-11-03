@@ -8,6 +8,7 @@ import { DriversModule } from './drivers/drivers.module';
 import { HealthModule } from './health/health.module';
 import { LocationModule } from './location/location.module';
 import { MatchingModule } from './matching/matching.module';
+import { NotificationsModule } from './notifications/notifications.module';
 import { PricingModule } from './pricing/pricing.module';
 import { RealtimeModule } from './realtime/realtime.module';
 import { RidesModule } from './rides/rides.module';
@@ -33,6 +34,7 @@ export class AppModule {
         DriversModule,
         LocationModule,
         MatchingModule.forRoot(config),
+        NotificationsModule.forRoot(config),
         PricingModule,
         RidesModule,
         RealtimeModule,

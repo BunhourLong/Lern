@@ -74,6 +74,10 @@ yarn-error.log
 !.yarn/sdks
 !.yarn/versions
 
+# Firebase client config (per Firebase project; PLAN.md M5 FCM)
+google-services.json
+GoogleService-Info.plist
+
 # Expo
 .expo
 dist/

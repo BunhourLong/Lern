@@ -10,6 +10,7 @@ import {
   createOfflineQueue,
   type QueuedStep,
 } from '../services/offline-queue.service';
+import { createPush, type PushNative } from '../services/push.service';
 import { connectSocket, type RealtimeSocket } from '../services/socket.service';
 import type { KeyValueStore, SecretStore } from '../services/storage.service';
 import { createActiveRideStore } from '../stores/active-ride.store';
@@ -22,6 +23,7 @@ export type CoreDeps = {
   io: typeof io;
   kv: KeyValueStore; // MMKV in the app
   refreshToken: SecretStore; // Keychain in the app
+  push: PushNative; // React Native Firebase in the app
   sleep?: (ms: number) => Promise<void>; // backoff between offline retries
 };
 
@@ -40,6 +42,7 @@ export function createCore({
   io,
   kv,
   refreshToken,
+  push: pushNative,
   sleep = wait,
 }: CoreDeps) {
   const session = createSessionStore();
@@ -57,6 +60,7 @@ export function createCore({
     epoch++;
     socket?.close();
     socket = undefined;
+    push.stop();
     queue.clear();
     activeRide.getState().reset();
     driverMode.getState().setAvailability(null);
@@ -73,6 +77,14 @@ export function createCore({
         (err.body as { ride?: unknown } | null)?.ride,
       );
       if (ride.success) activeRide.getState().applyRide(ride.data, 'driver');
+    },
+  });
+
+  const push = createPush({
+    native: pushNative,
+    register: (token, platform) => api.registerDevice(token, platform),
+    onWake: () => {
+      resync();
     },
   });
 
@@ -105,6 +117,7 @@ export function createCore({
       handlers: {
         onConnect: () => {
           resync();
+          push.sync();
         },
         onRide: ride => activeRide.getState().applyRide(ride),
         onOffer: offer => activeRide.getState().applyOffer(offer),
@@ -136,6 +149,8 @@ export function createCore({
         const restored = api.accessToken() ? 'ok' : await api.restore();
         if (restored === 'none' || restored === 'refused') {
           session.getState().signedOut();
+          // A sign-out while offline couldn't delete the token: this is its next try (refused has just done it)
+          if (restored === 'none') push.stop();
           return;
         }
         if (restored === 'ok') {

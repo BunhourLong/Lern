@@ -10,6 +10,9 @@ const Env = z.object({
   TELEGRAM_GATEWAY_TOKEN: z.string().min(1).optional(),
   // Overridable so tests can point at a local fake of the API
   TELEGRAM_GATEWAY_URL: z.url({ protocol: /^https?$/ }).default('https://gatewayapi.telegram.org'),
+  // No default: a deploy that forgets it would silently send no pushes
+  PUSH_PROVIDER: z.enum(['dev', 'fcm']),
+  FIREBASE_SERVICE_ACCOUNT_PATH: z.string().min(1).optional(),
   // HS256 key: at least 256 bits; generate with `openssl rand -base64 48`
   JWT_SECRET: z.string().min(32),
   // Matching (PLAN.md §2.4)
@@ -36,6 +39,9 @@ const Env = z.object({
 }).refine((env) => env.OTP_PROVIDER !== 'telegram' || env.TELEGRAM_GATEWAY_TOKEN, {
   message: 'Required when OTP_PROVIDER is telegram',
   path: ['TELEGRAM_GATEWAY_TOKEN'],
+}).refine((env) => env.PUSH_PROVIDER !== 'fcm' || env.FIREBASE_SERVICE_ACCOUNT_PATH, {
+  message: 'Required when PUSH_PROVIDER is fcm',
+  path: ['FIREBASE_SERVICE_ACCOUNT_PATH'],
 });
 
 export type Config = z.infer<typeof Env>;

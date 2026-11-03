@@ -4,6 +4,7 @@ const valid = {
   DATABASE_URL: 'postgres://lern:lern@127.0.0.1:5432/lern',
   REDIS_URL: 'redis://127.0.0.1:6379',
   OTP_PROVIDER: 'dev',
+  PUSH_PROVIDER: 'dev',
   JWT_SECRET: 'a-test-secret-that-is-32-chars-long',
 };
 
@@ -66,4 +67,18 @@ it('requires a non-empty Gateway token when OTP_PROVIDER is telegram', () => {
   expect(() => parseEnv({ ...valid, OTP_PROVIDER: 'telegram', TELEGRAM_GATEWAY_TOKEN: '' })).toThrow(
     /TELEGRAM_GATEWAY_TOKEN/,
   );
+});
+
+it('has no default push provider, so no deploy silently sends no pushes', () => {
+  expect(() => parseEnv({ ...valid, PUSH_PROVIDER: undefined })).toThrow(/PUSH_PROVIDER/);
+  expect(() => parseEnv({ ...valid, PUSH_PROVIDER: 'apns' })).toThrow(/PUSH_PROVIDER/);
+});
+
+it('requires the service account path when PUSH_PROVIDER is fcm', () => {
+  expect(() => parseEnv({ ...valid, PUSH_PROVIDER: 'fcm' })).toThrow(/FIREBASE_SERVICE_ACCOUNT_PATH/);
+  expect(() => parseEnv({ ...valid, PUSH_PROVIDER: 'fcm', FIREBASE_SERVICE_ACCOUNT_PATH: '' })).toThrow(
+    /FIREBASE_SERVICE_ACCOUNT_PATH/,
+  );
+  const config = parseEnv({ ...valid, PUSH_PROVIDER: 'fcm', FIREBASE_SERVICE_ACCOUNT_PATH: '/secrets/firebase.json' });
+  expect(config.FIREBASE_SERVICE_ACCOUNT_PATH).toBe('/secrets/firebase.json');
 });

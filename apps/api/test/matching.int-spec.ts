@@ -354,6 +354,8 @@ describe('MatchingService.expire', () => {
     const ride = await book(await signIn(app), spot);
     await sync(ride.id);
     const [{ id }] = await db().query<{ id: string }[]>(`SELECT id FROM ride_offers WHERE ride_id = $1`, [ride.id]);
+    // Sent before anyone listens: a socket opened while this offer's event is still on its way would receive it too
+    await until(async () => (await db().query<unknown[]>('SELECT 1 FROM outbox_events LIMIT 1')).length === 0, 2000, 'outbox drained');
     return { first, next, ride, offerId: id };
   };
   const due = (offerId: string) =>

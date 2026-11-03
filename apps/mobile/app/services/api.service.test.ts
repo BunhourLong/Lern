@@ -93,6 +93,21 @@ it('signs in with a code, keeps the refresh token in the secret store, and sends
   });
 });
 
+it('registers this phone for pushes, with a key, and accepts the empty 204', async () => {
+  const s = server({ status: 200, body: tokens(1) }, { status: 204 });
+  const { api: client } = api(s);
+  await client.verifyOtp('+85512345678', '000000');
+  await expect(client.registerDevice('fcm-token', 'android')).resolves.toBeUndefined();
+  expect(s.calls[1]).toMatchObject({
+    method: 'PUT',
+    path: '/me/device-token',
+    body: { token: 'fcm-token', platform: 'android' },
+  });
+  expect(
+    idempotencyKeySchema.safeParse(s.calls[1].headers[IDEMPOTENCY_KEY_HEADER]).success,
+  ).toBe(true);
+});
+
 it('sends an Idempotency-Key on a mutating call: the caller’s on a retry, a fresh one otherwise', async () => {
   const s = server(
     { status: 200, body: tokens(1) },

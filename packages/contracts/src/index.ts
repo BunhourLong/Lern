@@ -12,3 +12,4 @@ export * from './quote.schema';
 export * from './idempotency.schema';
 export * from './location.schema';
 export * from './offer.schema';
+export * from './push.schema';

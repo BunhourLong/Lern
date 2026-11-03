@@ -1,5 +1,6 @@
 import { RIDE_UPDATED_EVENT } from '@lern/contracts';
 import type { io } from 'socket.io-client';
+import type { PushNative } from '../services/push.service';
 import type { KeyValueStore, SecretStore } from '../services/storage.service';
 import { createCore } from './core';
 
@@ -52,11 +53,29 @@ function fakeIo() {
   const fire = (e: string, ...a: unknown[]) => handlers.get(e)?.(...a);
   return { io: jest.fn(() => socket) as unknown as typeof io, socket, fire };
 }
+// Notifications refused unless a test says otherwise, so other tests see no registration requests
+function fakePush(overrides: Partial<PushNative> = {}) {
+  const messages: (() => void)[] = [];
+  const native: PushNative = {
+    platform: 'android',
+    requestPermission: async () => false,
+    getToken: async () => 'fcm-token',
+    deleteToken: jest.fn(async () => undefined),
+    onTokenRefresh: () => () => undefined,
+    onMessage: cb => {
+      messages.push(cb);
+      return () => undefined;
+    },
+    ...overrides,
+  };
+  return { native, messages };
+}
 function deps(
   s: ReturnType<typeof server>,
   f: ReturnType<typeof fakeIo>,
   refresh?: string,
   sleep: () => Promise<void> = async () => undefined,
+  push: PushNative = fakePush().native,
 ) {
   const m = new Map<string, string>();
   const kv: KeyValueStore = {
@@ -84,6 +103,7 @@ function deps(
     io: f.io,
     kv,
     refreshToken,
+    push,
     sleep,
     secret: () => secret,
   };
@@ -285,4 +305,127 @@ it('retries only /me (not the refresh) when the server fails it at boot, also on
   await core.boot();
   expect(core.stores.session.getState().status).toBe('signed_in');
   expect(s.calls.filter(c => c === 'POST /auth/refresh')).toHaveLength(1);
+});
+
+describe('push', () => {
+  const registered = { 'PUT /me/device-token': () => ({ status: 204 }) };
+  const count = (calls: string[], route: string) =>
+    calls.filter(c => c === route).length;
+  const allowed = (overrides: Partial<PushNative> = {}) =>
+    fakePush({ requestPermission: async () => true, ...overrides });
+  const nap = async () => undefined;
+
+  it('registers the phone once connected, not again on a reconnect', async () => {
+    const s = server(routes(registered));
+    const f = fakeIo();
+    const core = createCore(deps(s, f, 'r'.repeat(43), nap, allowed().native));
+    await core.boot();
+    expect(count(s.calls, 'PUT /me/device-token')).toBe(0);
+    f.fire('connect');
+    await settle();
+    f.fire('connect');
+    await settle();
+    expect(count(s.calls, 'PUT /me/device-token')).toBe(1);
+  });
+
+  it('reads the snapshot when a push arrives with the app in front', async () => {
+    const s = server(routes(registered));
+    const f = fakeIo();
+    const push = allowed();
+    const core = createCore(deps(s, f, 'r'.repeat(43), nap, push.native));
+    await core.boot();
+    f.fire('connect');
+    await settle();
+    const before = count(s.calls, 'GET /me/active-ride');
+    push.messages[0]();
+    await settle();
+    expect(count(s.calls, 'GET /me/active-ride')).toBe(before + 1);
+  });
+
+  it('gives up the token on sign-out, and on a refused session', async () => {
+    const s = server(routes(registered));
+    const f = fakeIo();
+    const push = allowed();
+    const core = createCore(deps(s, f, 'r'.repeat(43), nap, push.native));
+    await core.boot();
+    f.fire('connect');
+    await settle();
+    await core.signOut();
+    expect(push.native.deleteToken).toHaveBeenCalledTimes(1);
+
+    const refused = server(
+      routes({ 'POST /auth/refresh': () => ({ status: 401 }) }),
+    );
+    const other = allowed();
+    const again = createCore(
+      deps(refused, fakeIo(), 'r'.repeat(43), nap, other.native),
+    );
+    await again.boot();
+    expect(other.native.deleteToken).toHaveBeenCalledTimes(1);
+  });
+
+  // A sign-out while offline couldn't delete it; the next start without a session gets another try
+  it('gives up the token when the app starts signed out', async () => {
+    const push = allowed();
+    const core = createCore(deps(server({}), fakeIo(), undefined, nap, push.native));
+    await core.boot();
+    expect(push.native.deleteToken).toHaveBeenCalledTimes(1);
+  });
+
+  it('registers again for the next user on the same phone', async () => {
+    const s = server(
+      routes({ ...registered, 'POST /auth/otp/verify': () => ({ status: 200, body: pair }) }),
+    );
+    const f = fakeIo();
+    const core = createCore(deps(s, f, 'r'.repeat(43), nap, allowed().native));
+    await core.boot();
+    f.fire('connect');
+    await settle();
+    await core.signOut();
+    await core.signIn('+85512345678', '000000');
+    f.fire('connect');
+    await settle();
+    expect(count(s.calls, 'PUT /me/device-token')).toBe(2);
+  });
+
+  it('signs out cleanly when the token cannot be deleted', async () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const s = server(routes(registered));
+    const f = fakeIo();
+    const core = createCore(
+      deps(
+        s,
+        f,
+        'r'.repeat(43),
+        nap,
+        allowed({ deleteToken: async () => Promise.reject(new Error('offline')) }).native,
+      ),
+    );
+    await core.boot();
+    await core.signOut();
+    await settle();
+    expect(core.stores.session.getState().status).toBe('signed_out');
+    warn.mockRestore();
+  });
+
+  it('keeps working when the phone has no token (iOS without APNs)', async () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const s = server(routes(registered));
+    const f = fakeIo();
+    const core = createCore(
+      deps(
+        s,
+        f,
+        'r'.repeat(43),
+        nap,
+        allowed({ getToken: async () => Promise.reject(new Error('no APNs')) }).native,
+      ),
+    );
+    await core.boot();
+    f.fire('connect');
+    await settle();
+    expect(core.stores.activeRide.getState().driver).toEqual(ride('in_progress', 4));
+    expect(count(s.calls, 'PUT /me/device-token')).toBe(0);
+    warn.mockRestore();
+  });
 });
