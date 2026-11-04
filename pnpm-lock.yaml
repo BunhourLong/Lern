@@ -165,6 +165,7 @@ settings:
 overrides:
   multer@<2.5.0: 2.5.0
   body-parser@>=2 <2.4.0: ^2.4.0
+  '@grpc/grpc-js@<1.13.6': 1.14.6
 
 patchedDependencies:
   expo-modules-core@58.0.28: ffb40109ba909661e1bd31765640b5f4d67769471d0f7f76f217017f977e5bf9
@@ -207,7 +208,7 @@ importers:
         version: 6.3.15(ioredis@6.0.0(supports-color@8.1.1))(pg@8.23.1)
       firebase-admin:
         specifier: 14.5.0
-        version: 14.5.0(supports-color@8.1.1)
+        version: 14.5.0(@firebase/app-compat@0.5.20)(@firebase/app@0.16.4)(supports-color@8.1.1)
       ioredis:
         specifier: 6.0.0
         version: 6.0.0(supports-color@8.1.1)
@@ -1699,10 +1700,6 @@ packages:
   '@grpc/grpc-js@1.14.6':
     resolution: {integrity: sha512-SgC/B3/VZ8lTyOZ4Cwk6f1skWhmkNAaVfiX90qd5u1rRXGKk1//8FTUEN9GvOUq7rfWIqAYkA3CoyumYVpOS6g==}
     engines: {node: '>=12.10.0'}
-
-  '@grpc/grpc-js@1.9.16':
-    resolution: {integrity: sha512-wE4Ut/olIzfKqp631XrG+wbF0v1vWFN4YL9FyXC2LJiG33DsV7PLzURjrCvY/6je2ntdRkeLpPDluzSRGaVltQ==}
-    engines: {node: ^8.13.0 || >=10.10.0}
 
   '@grpc/proto-loader@0.7.15':
     resolution: {integrity: sha512-tMXdRCfYVixjuFK+Hk0Q1s38gV9zDiDJfWL3h1rv4Qc39oILCu1TRTDt7+fGUI8K4G1Fj125Hx/ru3azECWTyQ==}
@@ -5008,8 +5005,8 @@ packages:
   jimp-compact@0.16.1:
     resolution: {integrity: sha512-dZ6Ra7u1G8c4Letq/B5EzAxj4tLFHL+cGtdpR+PVm4yzPDj+lCk+AbivWt1eOM+ikzkowtyV7qSqX6qr3t71Ww==}
 
-  joi@17.13.8:
-    resolution: {integrity: sha512-iPKOGmiRw1jxf/JOPwxmCcUQAOdF359mdzYiP2DJ+TMX0YK2zjK3D+zYOaGjpumWxOFF/l2xVWjRVK5bGSLdEw==}
+  joi@17.13.9:
+    resolution: {integrity: sha512-llFCT2rVtfwgBCaIqxtjim+iHqrgss4ONiGSYiiGH9jnjWq90ppSRffqmqKvwpa8W+YfILyQV6XyGcegXX2T4g==}
 
   jose@6.2.15:
     resolution: {integrity: sha512-qdF6ewcZARtef63fJ9AKKZPgxw+t7USH6HLXYcD4CrdmSvDp79rpJSPFEKc90QBeGS63u1KQtN2MZQHC0yDIzA==}
@@ -8537,15 +8534,6 @@ snapshots:
       '@firebase/util': 1.15.3
       tslib: 2.8.1
 
-  '@firebase/database-compat@2.1.7':
-    dependencies:
-      '@firebase/component': 0.7.5
-      '@firebase/database': 1.1.5
-      '@firebase/database-types': 1.0.22
-      '@firebase/logger': 0.5.2
-      '@firebase/util': 1.15.3
-      tslib: 2.8.1
-
   '@firebase/database-compat@2.1.7(@firebase/app-compat@0.5.20)(@firebase/app@0.16.4)':
     dependencies:
       '@firebase/component': 0.7.5
@@ -8597,7 +8585,7 @@ snapshots:
       '@firebase/logger': 0.5.2
       '@firebase/util': 1.15.3
       '@firebase/webchannel-wrapper': 1.0.7
-      '@grpc/grpc-js': 1.9.16
+      '@grpc/grpc-js': 1.14.6
       '@grpc/proto-loader': 0.7.15
       re2js: 2.9.1
       tslib: 2.8.1
@@ -8802,11 +8790,6 @@ snapshots:
     dependencies:
       '@grpc/proto-loader': 0.8.1
       '@js-sdsl/ordered-map': 4.4.2
-
-  '@grpc/grpc-js@1.9.16':
-    dependencies:
-      '@grpc/proto-loader': 0.7.15
-      '@types/node': 24.19.2
 
   '@grpc/proto-loader@0.7.15':
     dependencies:
@@ -9048,7 +9031,7 @@ snapshots:
 
   '@jest/pattern@30.5.0':
     dependencies:
-      '@types/node': 26.6.5
+      '@types/node': 24.19.2
       jest-regex-util: 30.5.0
 
   '@jest/reporters@29.7.0(supports-color@8.1.1)':
@@ -9218,7 +9201,7 @@ snapshots:
       '@jest/schemas': 30.5.0
       '@types/istanbul-lib-coverage': 2.0.6
       '@types/istanbul-reports': 3.0.4
-      '@types/node': 26.6.5
+      '@types/node': 24.19.2
       '@types/yargs': 17.0.35
       chalk: 4.1.2
 
@@ -9536,7 +9519,7 @@ snapshots:
       cosmiconfig: 9.0.2(typescript@6.0.3)
       deepmerge: 4.3.1
       fast-glob: 3.3.3
-      joi: 17.13.8
+      joi: 17.13.9
       picocolors: 1.1.1
     transitivePeerDependencies:
       - typescript
@@ -9613,7 +9596,7 @@ snapshots:
 
   '@react-native-community/cli-types@20.2.0':
     dependencies:
-      joi: 17.13.8
+      joi: 17.13.9
 
   '@react-native-community/cli@20.2.0(supports-color@8.1.1)(typescript@6.0.3)':
     dependencies:
@@ -12046,10 +12029,10 @@ snapshots:
       locate-path: 6.0.0
       path-exists: 4.0.0
 
-  firebase-admin@14.5.0(supports-color@8.1.1):
+  firebase-admin@14.5.0(@firebase/app-compat@0.5.20)(@firebase/app@0.16.4)(supports-color@8.1.1):
     dependencies:
       '@fastify/busboy': 3.2.4
-      '@firebase/database-compat': 2.1.7
+      '@firebase/database-compat': 2.1.7(@firebase/app-compat@0.5.20)(@firebase/app@0.16.4)
       '@firebase/database-types': 1.0.22
       fast-deep-equal: 3.1.3
       google-auth-library: 11.3.2(supports-color@8.1.1)
@@ -13024,7 +13007,7 @@ snapshots:
     dependencies:
       '@jest/types': 30.5.1
       '@parcel/watcher': 2.6.0
-      '@types/node': 26.6.5
+      '@types/node': 24.19.2
       anymatch: 3.1.3
       fb-watchman: 2.0.4
       fdir: 6.5.0(picomatch@4.0.7)
@@ -13311,7 +13294,7 @@ snapshots:
   jest-util@30.5.1:
     dependencies:
       '@jest/types': 30.5.1
-      '@types/node': 26.6.5
+      '@types/node': 24.19.2
       chalk: 4.1.2
       ci-info: 4.4.0
       graceful-fs: 4.2.11
@@ -13366,7 +13349,7 @@ snapshots:
 
   jest-worker@30.5.1:
     dependencies:
-      '@types/node': 26.6.5
+      '@types/node': 24.19.2
       '@ungap/structured-clone': 1.4.0
       jest-util: 30.5.1
       merge-stream: 2.0.0
@@ -13399,7 +13382,7 @@ snapshots:
 
   jimp-compact@0.16.1: {}
 
-  joi@17.13.8:
+  joi@17.13.9:
     dependencies:
       '@hapi/hoek': 9.3.0
       '@hapi/topo': 5.1.0
