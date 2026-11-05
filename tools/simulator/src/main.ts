@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { osrmRouter } from './osrm.router';
 import { Simulation } from './simulation';
 
-// pnpm sim --drivers 5 --riders 3 --speed 4   (dev stack + api with OTP_PROVIDER=dev; Ctrl-C prints the summary)
+// pnpm sim --drivers 5 --riders 3 --speed 4 [--chaos-ms 5000]   (dev stack + api with OTP_PROVIDER=dev; Ctrl-C prints the summary)
 const { values } = parseArgs({
   options: {
     api: { type: 'string', default: 'http://127.0.0.1:3000' },
@@ -11,16 +11,24 @@ const { values } = parseArgs({
     drivers: { type: 'string', default: '5' },
     riders: { type: 'string', default: '3' },
     speed: { type: 'string', default: '1' },
+    'chaos-ms': { type: 'string' }, // drop one random socket this often; clients must recover
   },
 });
 const count = z.coerce.number().int().min(1).max(500);
 const flags = z
-  .object({ api: z.url(), osrm: z.url(), drivers: count, riders: count, speed: z.coerce.number().min(0.1).max(1000) })
+  .object({
+    api: z.url(),
+    osrm: z.url(),
+    drivers: count,
+    riders: count,
+    speed: z.coerce.number().min(0.1).max(1000),
+    'chaos-ms': z.coerce.number().int().min(1).optional(),
+  })
   .parse(values);
 const databaseUrl = z.string().min(1, 'DATABASE_URL is not set (read from apps/api/.env)').parse(process.env.DATABASE_URL);
 
 async function main(): Promise<void> {
-  const sim = await Simulation.start({ ...flags, databaseUrl, router: osrmRouter(flags.osrm) });
+  const sim = await Simulation.start({ ...flags, chaosMs: flags['chaos-ms'], databaseUrl, router: osrmRouter(flags.osrm) });
   console.log(`running: ${flags.drivers} drivers, ${flags.riders} riders; Ctrl-C to stop`);
   process.once('SIGINT', () => {
     void sim.stop().then((summary) => console.log(JSON.stringify(summary)));

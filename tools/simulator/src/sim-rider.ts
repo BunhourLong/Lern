@@ -23,11 +23,15 @@ const DONE = new Set<Ride['status']>(['completed', 'cancelled', 'no_driver_found
 // One rider: books a ride, waits until it ends, pauses, books again. Keeps what the socket delivered:
 // ride:updated snapshots (an event not newer than the last one seen counts as stale), driver positions and
 // driver:connectivity signals (newest lastSeenAt per ride; built in SQL, so parsed here and counted when malformed).
+// On every socket reconnect it reads GET /me/active-ride (like mobile) and applies the snapshot only if it is
+// newer than what it holds, so a terminal event missed while the socket was down still ends the ride.
 // shortcut: updates/positions grow for the whole run; keep counts only if long runs need it (M8 load test).
 export class SimRider {
   completed = 0;
   stale = 0;
   rejected = 0;
+  reconnects = 0;
+  recovered = 0;
   readonly updates: Ride[] = [];
   readonly positions: DriverPosition[] = [];
   readonly connectivity: DriverConnectivity[] = [];
@@ -45,6 +49,8 @@ export class SimRider {
     socket.on(RIDE_UPDATED_EVENT, (ride: Ride) => this.onUpdate(ride));
     socket.on(DRIVER_POSITION_EVENT, (p: DriverPosition) => this.positions.push(p));
     socket.on(DRIVER_CONNECTIVITY_EVENT, (raw: unknown) => this.onConnectivity(raw));
+    // Already connected when passed in, so this fires only on reconnects
+    socket.on('connect', () => void this.resync());
     this.loop = this.run();
   }
 
@@ -70,6 +76,22 @@ export class SimRider {
         this.wake = resolve;
         setTimeout(resolve, this.deps.pauseMs).unref();
       });
+    }
+  }
+
+  private async resync(): Promise<void> {
+    this.reconnects++;
+    try {
+      const { token } = this.session;
+      const { rider } = await this.deps.api.activeRides(token);
+      const ride = rider ?? (this.current && (await this.deps.api.ride(token, this.current.id)));
+      // Compared after the awaits: an event delivered during the fetch wins
+      const held = this.updates.findLast((r) => r.id === ride?.id)?.version ?? 0;
+      if (!ride || ride.version <= held) return;
+      this.recovered++;
+      this.onUpdate(ride);
+    } catch (err) {
+      this.deps.log(`rider ${this.session.userId.slice(0, 8)}: resync failed: ${(err as Error).message}`);
     }
   }
 

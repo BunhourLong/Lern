@@ -16,12 +16,17 @@ export type DriverDeps = {
 
 // One driver, online the whole run: wanders while idle; offered a ride, accepts it, drives to pickup, arrives,
 // starts, drives to dropoff and completes. Every tick reports its position over the socket, like the app's
-// foreground path. All REST commands run inside the one loop, so a driver never sends two at once.
+// foreground path (skipped while the socket is down). All REST commands run inside the one loop, so a driver
+// never sends two at once. After a socket reconnect or a failed tick it reads GET /me/active-ride and continues
+// from that snapshot: a pending offer is accepted, a ride is driven on from its server status.
 export class SimDriver {
   private route: Point[];
   private travelled = 0;
   private ride?: Ride;
   private offer?: Offer;
+  reconnects = 0;
+  recovered = 0;
+  private resyncDue = false;
   private stopped = false;
   private readonly loop: Promise<void>;
 
@@ -32,6 +37,10 @@ export class SimDriver {
     private readonly deps: DriverDeps,
   ) {
     socket.on(OFFER_UPDATED_EVENT, (o: Offer) => this.onOffer(o));
+    socket.on('connect', () => {
+      this.reconnects++;
+      this.resyncDue = true;
+    });
     this.route = [position];
     this.loop = this.run();
   }
@@ -58,17 +67,16 @@ export class SimDriver {
       try {
         await this.tick();
       } catch (err) {
-        // shortcut: a ride whose command failed is dropped (its rider waits); re-queue it when M5's chaos mode makes failures normal
-        const dropped = this.ride ? `, ride ${this.ride.id.slice(0, 8)} dropped` : '';
-        this.deps.log(`driver ${this.id.slice(0, 8)}: ${(err as Error).message}${dropped}`);
-        // An offer that arrived while the failing tick ran is still this driver's: the next tick accepts it
-        this.ride = undefined;
+        this.deps.log(`driver ${this.id.slice(0, 8)}: ${(err as Error).message}`);
+        // The held ride may have moved on, or the command may have landed: the snapshot decides
+        this.resyncDue = true;
       }
       await new Promise((resolve) => setTimeout(resolve, this.deps.tickMs));
     }
   }
 
   private async tick(): Promise<void> {
+    if (this.resyncDue) await this.resync();
     if (this.offer) {
       const { id } = this.offer;
       this.offer = undefined;
@@ -78,15 +86,30 @@ export class SimDriver {
     this.travelled += (this.deps.speedMps * this.deps.tickMs) / 1000;
     const { point, done } = positionAt(this.route, this.travelled);
     this.position = point;
-    await this.socket.timeout(5000).emitWithAck(DRIVER_LOCATION_EVENT, { ...point, recordedAt: new Date().toISOString() });
+    // A queued ack would stall the loop for 5 s while the socket is down
+    if (this.socket.connected) {
+      await this.socket.timeout(5000).emitWithAck(DRIVER_LOCATION_EVENT, { ...point, recordedAt: new Date().toISOString() });
+    }
     if (done) await this.reached();
   }
 
+  private async resync(): Promise<void> {
+    const { driver: ride, offer } = await this.deps.api.activeRides(this.session.token);
+    this.resyncDue = false;
+    if (offer) this.offer = offer; // never clear: a push may have landed during the fetch; a stale one 409s and resyncs
+    const held = this.ride;
+    this.ride = ride ?? undefined;
+    if (ride && (ride.id !== held?.id || ride.status !== held.status)) {
+      this.recovered++;
+      await this.driveTo(ride.status === 'in_progress' ? ride.dropoff : ride.pickup);
+    }
+  }
+
   private async reached(): Promise<void> {
-    const ride = this.ride;
+    let ride = this.ride;
     if (!ride) return this.driveTo(randomPoint(this.deps.rand)); // wander
-    if (ride.status === 'driver_assigned') {
-      await this.move(ride, 'arrive');
+    if (ride.status === 'driver_assigned') this.ride = ride = await this.move(ride, 'arrive');
+    if (ride.status === 'driver_arrived') {
       this.ride = await this.move(ride, 'start');
       return this.driveTo(ride.dropoff);
     }
@@ -98,6 +121,7 @@ export class SimDriver {
     return this.deps.api.move(this.session.token, ride.id, action);
   }
 
+  // shortcut: a router failure right after accept keeps the old route, so the driver reaches pickup from the wrong place; the server doesn't check position, fix it if a test ever does
   private async driveTo(to: Point): Promise<void> {
     this.route = await this.deps.router(this.position, to);
     this.travelled = 0;
