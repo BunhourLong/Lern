@@ -15,6 +15,7 @@ import { connectSocket, type RealtimeSocket } from '../services/socket.service';
 import type { KeyValueStore, SecretStore } from '../services/storage.service';
 import { createActiveRideStore } from '../stores/active-ride.store';
 import { createDriverModeStore } from '../stores/driver-mode.store';
+import { createRawEventsStore } from '../stores/raw-events.store';
 import { createSessionStore } from '../stores/session.store';
 
 export type CoreDeps = {
@@ -48,6 +49,7 @@ export function createCore({
   const session = createSessionStore();
   const activeRide = createActiveRideStore();
   const driverMode = createDriverModeStore();
+  const rawEvents = createRawEventsStore();
   let socket: RealtimeSocket | undefined;
   // Bumped on sign-out: an answer to a request sent before it must not land in the next user's stores
   let epoch = 0;
@@ -64,6 +66,7 @@ export function createCore({
     queue.clear();
     activeRide.getState().reset();
     driverMode.getState().setAvailability(null);
+    rawEvents.getState().reset(); // the next user on this phone must not see the last one's rides
     session.getState().signedOut();
   };
   const api = createApi({ baseUrl, fetch, refreshToken, onSignedOut: forget });
@@ -108,6 +111,7 @@ export function createCore({
     if (!current()) return;
     session.getState().signedIn(user);
     driverMode.getState().setAvailability(availability);
+    socket?.close();
     socket = connectSocket({
       url: baseUrl,
       io,
@@ -115,6 +119,7 @@ export function createCore({
       refresh: api.restore,
       sleep,
       handlers: {
+        onRaw: (event, payload) => rawEvents.getState().add(event, payload),
         onConnect: () => {
           resync();
           push.sync();
@@ -137,7 +142,7 @@ export function createCore({
   }
 
   return {
-    stores: { session, activeRide, driverMode },
+    stores: { session, activeRide, driverMode, rawEvents },
     api,
     queue,
     // App start: a stored refresh token becomes a session. Offline keeps the session 'restoring' (the token stays,

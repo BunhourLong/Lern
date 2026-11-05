@@ -28,6 +28,7 @@ const point = {
 // A stand-in for socket.io-client's io(): records options, lets the test fire server events and set acks
 function fakeIo() {
   const handlers = new Map<string, (...args: unknown[]) => unknown>();
+  let any: ((...args: unknown[]) => unknown) | undefined;
   const state = {
     options: undefined as Record<string, unknown> | undefined,
     connects: 0,
@@ -38,6 +39,9 @@ function fakeIo() {
     connected: false,
     on: (event: string, h: (...args: unknown[]) => unknown) =>
       handlers.set(event, h),
+    onAny: (h: (...args: unknown[]) => unknown) => {
+      any = h;
+    },
     connect: () => {
       state.connects++;
     },
@@ -54,8 +58,12 @@ function fakeIo() {
     state.options = options;
     return socket;
   });
-  const fire = (event: string, ...args: unknown[]) =>
-    handlers.get(event)!(...args);
+  // Server events pass through onAny first, as in socket.io; lifecycle events do not
+  const fire = (event: string, ...args: unknown[]) => {
+    if (!['connect', 'disconnect', 'connect_error'].includes(event))
+      any?.(event, ...args);
+    return handlers.get(event)!(...args);
+  };
   return { io: ioFn as unknown as typeof io, socket, state, fire };
 }
 const handlers = (): jest.Mocked<SocketHandlers> => ({
@@ -65,6 +73,7 @@ const handlers = (): jest.Mocked<SocketHandlers> => ({
   onConnectivity: jest.fn(),
   onConnect: jest.fn(),
   onRejected: jest.fn(),
+  onRaw: jest.fn(),
 });
 const flush = () => new Promise<void>(resolve => setImmediate(() => resolve()));
 
@@ -242,4 +251,46 @@ it('keeps trying to re-authenticate while the refresh is only offline, and stops
     f.state.connects,
     sleep.mock.calls.length,
   ]).toEqual([3, 1, 2]);
+});
+
+it('shows every event raw, malformed ones too, without changing what the handlers get', () => {
+  const f = fakeIo();
+  const h = handlers();
+  connectSocket({
+    url: 'http://api.test',
+    io: f.io,
+    token: () => 't',
+    refresh: async () => 'ok' as const,
+    handlers: h,
+  });
+  const bad = { ...ride, version: 'two' };
+  f.fire(RIDE_UPDATED_EVENT, ride);
+  f.fire(RIDE_UPDATED_EVENT, bad);
+  expect(h.onRaw.mock.calls).toEqual([
+    [RIDE_UPDATED_EVENT, ride],
+    [RIDE_UPDATED_EVENT, bad],
+  ]);
+  expect(h.onRide).toHaveBeenCalledTimes(1);
+  expect(h.onRide).toHaveBeenCalledWith(ride);
+  expect(h.onRejected).toHaveBeenCalledWith(RIDE_UPDATED_EVENT, bad);
+});
+
+it('shows connect, disconnect and connect_error raw', () => {
+  const f = fakeIo();
+  const h = handlers();
+  connectSocket({
+    url: 'http://api.test',
+    io: f.io,
+    token: () => 't',
+    refresh: async () => 'ok' as const,
+    handlers: h,
+  });
+  f.fire('connect');
+  f.fire('disconnect', 'transport close');
+  f.fire('connect_error', new Error('boom'));
+  expect(h.onRaw.mock.calls).toEqual([
+    ['connect'],
+    ['disconnect', 'transport close'],
+    ['connect_error', 'boom'],
+  ]);
 });

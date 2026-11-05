@@ -25,6 +25,7 @@ export type SocketHandlers = {
   onPosition(position: DriverPosition): void;
   onConnectivity(connectivity: DriverConnectivity): void;
   onRejected(event: string, raw: unknown): void; // a payload the contract refused
+  onRaw(event: string, payload?: unknown): void; // everything seen, before validation (debug log)
 };
 export type SocketDeps = {
   url: string;
@@ -57,6 +58,9 @@ export function connectSocket({
     auth: cb => cb({ token: token() }),
   });
 
+  socket.onAny((event: string, payload: unknown) =>
+    handlers.onRaw(event, payload),
+  );
   const on = <T>(
     event: string,
     schema: {
@@ -82,6 +86,7 @@ export function connectSocket({
   let reauthed = false;
   socket.on('connect', () => {
     reauthed = false;
+    handlers.onRaw('connect');
     handlers.onConnect();
   });
 
@@ -99,9 +104,11 @@ export function connectSocket({
     }
   };
   socket.on('connect_error', (err: Error) => {
+    handlers.onRaw('connect_error', err.message);
     if (err.message === 'Unauthorized') reauth();
   });
   socket.on('disconnect', (reason: string) => {
+    handlers.onRaw('disconnect', reason);
     if (reason === 'io server disconnect') reauth();
   });
 

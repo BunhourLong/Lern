@@ -46,12 +46,20 @@ function fakeIo() {
   const socket = {
     connected: false,
     on: (e: string, h: (...a: unknown[]) => unknown) => handlers.set(e, h),
+    onAny: jest.fn(),
     connect: jest.fn(),
     disconnect: jest.fn(),
     timeout: () => ({ emitWithAck: async () => ({ dropped: 0 }) }),
   };
   const fire = (e: string, ...a: unknown[]) => handlers.get(e)?.(...a);
-  return { io: jest.fn(() => socket) as unknown as typeof io, socket, fire };
+  const anyHandler = () =>
+    socket.onAny.mock.calls[0][0] as (...a: unknown[]) => void;
+  return {
+    io: jest.fn(() => socket) as unknown as typeof io,
+    socket,
+    fire,
+    anyHandler,
+  };
 }
 // Notifications refused unless a test says otherwise, so other tests see no registration requests
 function fakePush(overrides: Partial<PushNative> = {}) {
@@ -231,6 +239,37 @@ it('signs out completely: secret, stores, queue and socket', async () => {
   expect(core.stores.driverMode.getState().availability).toBeNull();
   expect(core.queue.pending().points).toBe(0);
   expect(f.socket.disconnect).toHaveBeenCalled();
+});
+
+it('logs raw socket events, and sign-out empties the log', async () => {
+  const f = fakeIo();
+  const core = createCore(deps(server(routes()), f, 'r'.repeat(43)));
+  await core.boot();
+  f.anyHandler()('ride.updated', { id: 'x' });
+  expect(core.stores.rawEvents.getState().events[0]).toMatchObject({
+    event: 'ride.updated',
+    payload: { id: 'x' },
+  });
+  await core.signOut();
+  expect(core.stores.rawEvents.getState().events).toEqual([]);
+});
+
+it('closes the previous socket when a session starts again, so none outlives sign-out', async () => {
+  const first = fakeIo();
+  const second = fakeIo();
+  const d = deps(server(routes()), first, 'r'.repeat(43));
+  const core = createCore({
+    ...d,
+    io: jest
+      .fn()
+      .mockReturnValueOnce(first.socket)
+      .mockReturnValueOnce(second.socket) as unknown as typeof io,
+  });
+  await core.boot();
+  await core.boot(); // starts the session again, as a second Verify does
+  expect(first.socket.disconnect).toHaveBeenCalledTimes(1);
+  await core.signOut();
+  expect(second.socket.disconnect).toHaveBeenCalledTimes(1);
 });
 
 it('stays restoring while booting offline, keeps the session, and finishes once the network is back', async () => {
