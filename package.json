@@ -9,7 +9,7 @@
     "dev": "pnpm --filter @lern/mobile start",
     "lint": "pnpm -r lint",
     "typecheck": "pnpm -r typecheck",
-    "test": "pnpm -r test",
+    "test": "pnpm -r test && node --test tools/glm/*.test.mjs",
     "test:integration": "pnpm -r test:integration",
     "infra:up": "infra/docker/osrm/prepare.sh && docker compose -f infra/docker/compose.yml up -d --wait",
     "infra:down": "docker compose -f infra/docker/compose.yml down",
