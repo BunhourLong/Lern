@@ -1,4 +1,4 @@
-// The evidence pack Opus reads instead of the whole diff. The model only makes claims: every snippet is cut
+// The evidence pack the main session reads instead of the whole diff. The model only makes claims: every snippet is cut
 // from the real file here, and every changed hunk no claim cites is shown in full, so nothing can be hidden.
 import { quoteIsReal } from './findings.mjs';
 

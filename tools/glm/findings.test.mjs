@@ -5,7 +5,7 @@ import { createServer } from 'node:net';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { diffProblems, isUsageLimit, lineSplitter, parseJsonReply, quoteIsReal, resolveInside, sandboxProfile } from './findings.mjs';
+import { diffProblems, isUsageLimit, lineSplitter, parseJsonReply, probeStatus, quoteIsReal, resolveInside, sandboxProfile } from './findings.mjs';
 
 test('parseJsonReply reads fenced JSON and rejects prose', () => {
   assert.deepEqual(parseJsonReply('Here:\n```json\n{"findings":[]}\n```'), { findings: [] });
@@ -128,4 +128,14 @@ test('sandbox blocks the ssh-agent socket path', { skip: !existsSync('/usr/bin/s
   const profile = sandboxProfile({ home, repo: '/nonexistent', worktree: '/nonexistent/w', runDir: '/nonexistent/r', agentHome: '/nonexistent/a' });
   assert.equal(await connect((code) => [process.execPath, ['-e', code]]), 0, 'control: reachable without the sandbox');
   assert.equal(await connect((code) => ['/usr/bin/sandbox-exec', ['-p', profile, process.execPath, '-e', code]]), 3);
+});
+
+test('probeStatus reads a probe turn: the cap, an answer, or neither', () => {
+  const limit = '{"type":"error","error":{"type":"provider.go-limit","message":"OpenCode Go weekly usage limit reached.","status":429}}';
+  const answer = '{"type":"text","part":{"text":"OK"}}';
+  assert.equal(probeStatus(`not json\n${limit}\n`), 'LIMIT');
+  assert.equal(probeStatus(`{"type":"step_start"}\n${answer}\n`), 'OK');
+  // No answer and no limit event (network down, bad key) must never read as OK.
+  assert.equal(probeStatus('null\n{"type":"error","error":{"type":"provider.auth"}}\n'), 'UNKNOWN');
+  assert.equal(probeStatus(''), 'UNKNOWN');
 });

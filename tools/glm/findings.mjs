@@ -52,6 +52,23 @@ export function diffProblems(diff) {
 // The Go plan's weekly cap: a parsed `opencode run --format json` event. It doesn't clear within a run.
 export const isUsageLimit = (event) => event?.type === 'error' && event.error?.type === 'provider.go-limit';
 
+// What a one-word probe turn (`opencode run --format json` output) says about the plan. No answer and no
+// limit event is UNKNOWN, never OK: a dead network or a bad key must not start a run.
+export function probeStatus(output) {
+  let answered = false;
+  for (const line of output.split('\n')) {
+    let event;
+    try {
+      event = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (isUsageLimit(event)) return 'LIMIT';
+    if (event?.type === 'text' && event.part?.text?.trim()) answered = true;
+  }
+  return answered ? 'OK' : 'UNKNOWN';
+}
+
 // Stdout and stderr interleave at any byte, so each stream needs its own buffer.
 export function lineSplitter(onLine) {
   let buffered = '';

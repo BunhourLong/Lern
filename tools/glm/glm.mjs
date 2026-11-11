@@ -1,19 +1,21 @@
 #!/usr/bin/env node
-// Optional OpenCode Go model work in a sandboxed worktree. The default workflow doesn't need it: the Go plan has
-// a weekly cap, a run ends with Status: LIMIT when it is hit, and /task carries on without it.
+// Every Lern subagent: OpenCode Go models in a sandboxed worktree. The Go plan has a weekly cap; a run ends
+// with Status: LIMIT when it is hit, and /task then pauses the task until the cap resets (nothing takes over).
 // Full loop: implement, gates, review, verify, fix. --patch: review an existing diff and report only; its
 // exit 0 means the review ran, not that it passed, so read the summary.
-// Usage: node tools/glm/glm.mjs --task M5.11 --brief <file> [--rounds 3] [--parallel 4] [--resume] [--patch <diff>]
-// --resume keeps the existing worktree and starts again from the gates, without implementing.
-import { execFileSync, spawn } from 'node:child_process';
-import { appendFileSync, copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
+// Usage: node tools/glm/glm.mjs --task M5.11 --brief <file> [--rounds 3] [--parallel 4] [--resume [--feedback <file>]] [--patch <diff>]
+//        node tools/glm/glm.mjs --check    prints "Go plan: OK | LIMIT | UNKNOWN" (exit 0 only on OK)
+// --resume keeps the existing worktree and starts again from the gates, without implementing; with --feedback
+// the implementer first gets that file (an answer to its question, or a defect to fix).
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
+import { appendFileSync, copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { DatabaseSync } from 'node:sqlite';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { applyMutation, buildEvidence, changedHunks, completionStatus, mutationResult, renderEvidence, requirementIds, validMutation } from './evidence.mjs';
-import { diffProblems, isUsageLimit, lineSplitter, parseJsonReply, quoteIsReal, resolveInside, sandboxProfile } from './findings.mjs';
+import { diffProblems, isUsageLimit, lineSplitter, parseJsonReply, probeStatus, quoteIsReal, resolveInside, sandboxProfile } from './findings.mjs';
 
 // The paid OpenCode Go plan only: its weekly cap ends a run with Status: LIMIT, and every other provider is
 // disabled, so a run can never bill pay-per-token Zen with the same key. Long implementer sessions are mostly
@@ -31,7 +33,8 @@ const LENSES = {
   spec: 'Spec compliance: every requirement in the brief is met, nothing is misunderstood, and every changed line traces to the brief (unrelated edits are findings).',
   invariants: 'The CLAUDE.md §3 invariants the change touches, race conditions, transaction boundaries, and timers or ordering that depend on luck.',
   tests: 'Do the tests prove the behaviour? For each new test, name the production line that would make it fail if removed. A test that would still pass, asserts on its own setup, depends on timing, or only tests a mock is a finding.',
-  security: 'Crossed trust boundaries: missing auth or ownership checks (IDOR), unvalidated input, unbounded queries, and error handling at boundaries.',
+  security:
+    'Crossed trust boundaries: missing auth or ownership checks (IDOR), unvalidated input, unbounded queries, and error handling at boundaries. If the diff touches auth, OTP, sessions, ownership checks, sockets or money, first read the matching file in `~/.claude/skills/security-audit/` (`WEB-PROTOCOL-AND-AUTH.md`, `DATA-ISOLATION-AND-LIFECYCLE.md`, `PROTOCOLS-RPC-AND-MESSAGING.md` for sockets) and check only what it says applies.',
   edges: 'Failure paths: null and empty values, reconnects, retries, partial failure, resource leaks, and callers the change broke.',
 };
 
@@ -42,17 +45,25 @@ const { values: args } = parseArgs({
     rounds: { type: 'string', default: '3' },
     parallel: { type: 'string', default: '4' },
     resume: { type: 'boolean', default: false },
+    feedback: { type: 'string' },
     patch: { type: 'string' },
+    check: { type: 'boolean', default: false },
   },
 });
-if (!args.task || !args.brief) {
-  console.error('usage: glm.mjs --task <id> --brief <file> [--rounds n] [--parallel n] [--resume] [--patch <diff>]');
-  process.exit(2);
-}
-// --patch replaces its own previous run, so it must never share a name with a full run's work.
-if (Boolean(args.patch) !== args.task.endsWith('-review')) {
-  console.error('a task id ending in -review goes with --patch, and only then');
-  process.exit(2);
+if (!args.check) {
+  if (!args.task || !args.brief) {
+    console.error('usage: glm.mjs --task <id> --brief <file> [--rounds n] [--parallel n] [--resume [--feedback <file>]] [--patch <diff>] | --check');
+    process.exit(2);
+  }
+  // --patch replaces its own previous run, so it must never share a name with a full run's work.
+  if (Boolean(args.patch) !== args.task.endsWith('-review')) {
+    console.error('a task id ending in -review goes with --patch, and only then');
+    process.exit(2);
+  }
+  if (args.feedback && (!args.resume || args.patch)) {
+    console.error('--feedback goes with --resume: it is for an implementer whose worktree already exists');
+    process.exit(2);
+  }
 }
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -77,6 +88,19 @@ const goEnv = (() => {
   const config = { enabled_providers: [PROVIDER], small_model: REVIEW_MODEL.split('#')[0] };
   return { OPENCODE_API_KEY: key, OPENCODE_CONFIG_CONTENT: JSON.stringify(config) };
 })();
+// Has the weekly cap cleared? One one-word turn in an empty folder: no repo to read and no tool to approve.
+if (args.check) {
+  const model = REVIEW_MODEL.split('#')[0];
+  const { stdout, stderr } = spawnSync('opencode', ['run', '--standalone', '-m', model, '--format', 'json', 'Reply with the single word OK.'], {
+    cwd: mkdtempSync(join(tmpdir(), 'go-check-')),
+    env: { ...process.env, ...goEnv, OPENCODE_DISABLE_AUTOUPDATE: '1' },
+    encoding: 'utf8',
+    timeout: 120_000,
+  });
+  const status = probeStatus(`${stdout ?? ''}\n${stderr ?? ''}`);
+  console.log(`Go plan: ${status}${status === 'UNKNOWN' ? ` (no answer and no limit event from ${model}: check the network and \`opencode auth\`)` : ''}`);
+  process.exit(status === 'OK' ? 0 : 1);
+}
 const brief = readFileSync(resolve(args.brief), 'utf8');
 const worktree = join(repo, '.worktrees', `glm-${args.task}`);
 const runDir = join(repo, '.superpowers/glm', args.task);
@@ -429,6 +453,10 @@ function writeSummary(state) {
   console.log(`\n${text}`);
 }
 
+// A new implementer session that continues existing work instead of starting the brief again.
+const withWorkSoFar = (feedback) =>
+  `${prompt('implementer')}\n# Brief\n${brief}\n\nThe work so far is already in the working tree (see \`git diff --cached\`).\n\n${feedback}`;
+
 async function main() {
   // The worktree's own HEAD on resume: the main checkout may have moved on since the run started.
   const base = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: args.resume ? worktree : repo, encoding: 'utf8' }).trim();
@@ -447,6 +475,9 @@ async function main() {
       setupDone = true;
       log(`worktree ready, implementing ${args.task}`);
       turn = await ask('impl', `${prompt('implementer')}\n# Brief\n${brief}`);
+    } else if (args.feedback) {
+      log(`resuming ${args.task} with feedback`);
+      turn = await ask('impl', withWorkSoFar(`The orchestrator says:\n${readFileSync(resolve(args.feedback), 'utf8')}`));
     }
     state.reply = turn?.text ?? '(resumed: no implementer turn)';
     let session = turn?.session;
@@ -495,9 +526,7 @@ async function main() {
       state.fixes += 1;
       log(`fix round ${state.fixes} of ${maxFixes}`);
       const fresh = !session || (peaks.impl ?? 0) > FRESH_SESSION_AT;
-      const message = fresh
-        ? `${prompt('implementer')}\n# Brief\n${brief}\n\nThe work so far is already in the working tree (see \`git diff --cached\`).\n\n${feedback}`
-        : `${feedback}\n\nEnd with the same reply format, starting with the Status line.`;
+      const message = fresh ? withWorkSoFar(feedback) : `${feedback}\n\nEnd with the same reply format, starting with the Status line.`;
       if (fresh) peaks.impl = 0;
       turn = await ask('impl', message, { session: fresh ? undefined : session });
       session = turn.session;
