@@ -14,6 +14,7 @@ import { randomPoint } from './geo';
 export type RiderDeps = {
   api: ApiClient;
   pauseMs: number;
+  jitterMs?: number; // each ride:updated packet is held for an independent random 0..jitterMs before the handler
   rand: () => number;
   log: (line: string) => void;
 };
@@ -33,10 +34,12 @@ export class SimRider {
   reconnects = 0;
   recovered = 0;
   readonly updates: Ride[] = [];
+  readonly received: Ride[] = [];
   readonly positions: DriverPosition[] = [];
   readonly connectivity: DriverConnectivity[] = [];
   private current?: Ride;
   private ended?: () => void;
+  private held = new Set<NodeJS.Timeout>();
   private stopped = false;
   private wake?: () => void;
   private readonly loop: Promise<void>;
@@ -46,7 +49,7 @@ export class SimRider {
     private readonly socket: Socket,
     private readonly deps: RiderDeps,
   ) {
-    socket.on(RIDE_UPDATED_EVENT, (ride: Ride) => this.onUpdate(ride));
+    socket.on(RIDE_UPDATED_EVENT, (ride: Ride) => this.deliver(ride));
     socket.on(DRIVER_POSITION_EVENT, (p: DriverPosition) => this.positions.push(p));
     socket.on(DRIVER_CONNECTIVITY_EVENT, (raw: unknown) => this.onConnectivity(raw));
     // Already connected when passed in, so this fires only on reconnects
@@ -58,6 +61,8 @@ export class SimRider {
     this.stopped = true;
     this.ended?.();
     this.wake?.();
+    for (const timer of this.held) clearTimeout(timer);
+    this.held.clear();
     await this.loop;
     this.socket.disconnect();
   }
@@ -95,7 +100,20 @@ export class SimRider {
     }
   }
 
+  // Holds each packet for an independent random 0..jitterMs, so later versions can overtake earlier ones.
+  // Math.random, not rand: tests narrow rand, which would bias the delays (same reason as the chaos timer).
+  private deliver(ride: Ride): void {
+    if (this.stopped) return; // a packet landing during stop must not schedule a timer past the clear below
+    if (!this.deps.jitterMs) return this.onUpdate(ride);
+    const timer = setTimeout(() => {
+      this.held.delete(timer);
+      this.onUpdate(ride);
+    }, Math.random() * this.deps.jitterMs).unref();
+    this.held.add(timer);
+  }
+
   private onUpdate(ride: Ride): void {
+    this.received.push(ride);
     const last = this.updates.findLast((r) => r.id === ride.id);
     if (last && ride.version <= last.version) {
       this.stale++;

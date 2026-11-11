@@ -10,6 +10,7 @@ export type DriverDeps = {
   router: Router;
   speedMps: number;
   tickMs: number;
+  jitterMs?: number; // each location emit is held for an independent random 0..jitterMs, so later points reach the server first
   rand: () => number;
   log: (line: string) => void;
 };
@@ -26,6 +27,14 @@ export class SimDriver {
   private offer?: Offer;
   reconnects = 0;
   recovered = 0;
+  discarded = 0;
+  // The recordedAt of every point whose ack came back; the newest is what invariant 12 means the stored
+  // recorded_at holds after this run
+  readonly acked: string[] = [];
+  private sent = 0;
+  private newestAcked = 0;
+  private heldLocations = new Set<NodeJS.Timeout>();
+  private sending = new Set<Promise<void>>();
   private resyncDue = false;
   private stopped = false;
   private readonly loop: Promise<void>;
@@ -58,6 +67,9 @@ export class SimDriver {
 
   async stop(): Promise<void> {
     this.stopped = true;
+    for (const timer of this.heldLocations) clearTimeout(timer);
+    this.heldLocations.clear();
+    await Promise.all(this.sending); // settle in-flight emits: the socket's 5 s timer bounds each
     await this.loop;
     this.socket.disconnect();
   }
@@ -86,11 +98,47 @@ export class SimDriver {
     this.travelled += (this.deps.speedMps * this.deps.tickMs) / 1000;
     const { point, done } = positionAt(this.route, this.travelled);
     this.position = point;
-    // A queued ack would stall the loop for 5 s while the socket is down
     if (this.socket.connected) {
-      await this.socket.timeout(5000).emitWithAck(DRIVER_LOCATION_EVENT, { ...point, recordedAt: new Date().toISOString() });
+      const { jitterMs } = this.deps;
+      const payload = { ...point, recordedAt: new Date().toISOString() };
+      if (jitterMs) {
+        // Hold the send for an independent random 0..jitterMs so later points can reach the server first;
+        // recordedAt stays at tick time and invariant 12 decides the order at the server. Math.random, not
+        // rand: tests narrow rand, which would bias the delays (same reason as the chaos timer).
+        void this.sendDelayed(++this.sent, payload, jitterMs);
+      } else {
+        // A queued ack would stall the loop for 5 s while the socket is down
+        await this.socket.timeout(5000).emitWithAck(DRIVER_LOCATION_EVENT, payload);
+      }
     }
     if (done) await this.reached();
+  }
+
+  private sendDelayed(idx: number, payload: Point & { recordedAt: string }, jitterMs: number): void {
+    if (this.stopped) return; // a tick finishing during stop must not schedule a timer past the clear below
+    const timer = setTimeout(() => {
+      this.heldLocations.delete(timer);
+      const task = this.emitAndCheck(idx, payload);
+      this.sending.add(task);
+      void task.then(() => this.sending.delete(task));
+    }, Math.random() * jitterMs);
+    this.heldLocations.add(timer);
+    timer.unref();
+  }
+
+  // An ack only resolves for a point the server handled; socket delivery returns them in arrival order, so if
+  // a newer point's ack already came back, this point arrived late and was discarded (invariant 12 kept the
+  // newer one). A timeout rejection means no ack came back: not counted.
+  private async emitAndCheck(idx: number, payload: Point & { recordedAt: string }): Promise<void> {
+    if (!this.socket.connected || this.stopped) return;
+    try {
+      await this.socket.timeout(5000).emitWithAck(DRIVER_LOCATION_EVENT, payload);
+    } catch {
+      return;
+    }
+    this.acked.push(payload.recordedAt);
+    if (idx < this.newestAcked) this.discarded++;
+    else this.newestAcked = idx;
   }
 
   private async resync(): Promise<void> {

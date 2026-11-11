@@ -162,3 +162,88 @@ describe('SimDriver reconnect recovery', () => {
     expect(router).toHaveBeenCalled(); // the route ended: wandering continues
   });
 });
+
+describe('SimDriver location jitter', () => {
+  type EmitCall = { lat: number; lng: number; recordedAt: string };
+  const hangRoute = <T>() => new Promise<T>(() => undefined); // parks the loop like the other tests
+  const jitterBuild = (emit: (payload: EmitCall) => Promise<unknown>, jitters?: { jitterMs: number; tickMs: number }, connected = true) => {
+    const handlers = new Map<string, (o: unknown) => void>();
+    const disconnect = jest.fn();
+    const socket = {
+      connected,
+      on: (event: string, h: (o: unknown) => void) => handlers.set(event, h),
+      timeout: () => ({ emitWithAck: (_event: string, payload: EmitCall) => emit(payload) }),
+      disconnect,
+    } as unknown as Socket;
+    let routed = 0;
+    const router = jest.fn((from: typeof at, to: typeof at): Promise<(typeof at)[]> => (++routed > 40 ? hangRoute() : Promise.resolve([from, to])));
+    const driver = new SimDriver({ userId: 'd', token: 't' }, socket, at, {
+      api: { accept: jest.fn(), activeRides: () => Promise.resolve({ rider: null, driver: null }) } as unknown as ApiClient,
+      router,
+      speedMps: 1e9,
+      tickMs: jitters?.tickMs ?? 1,
+      jitterMs: jitters?.jitterMs,
+      rand: () => 0.5,
+      log: () => undefined,
+    });
+    return { driver, router, disconnect, push: (o: Offer) => handlers.get(OFFER_UPDATED_EVENT)!(o) };
+  };
+
+  it('counts a point whose ack returns after a newer point’s (discarded as older)', async () => {
+    const delay = jest.spyOn(global.Math, 'random').mockReturnValueOnce(0.8).mockReturnValueOnce(0.1).mockReturnValue(0.999999);
+    const emits: EmitCall[] = [];
+    const { driver } = jitterBuild(
+      (payload) => {
+        emits.push(payload);
+        return Promise.resolve({ dropped: 0 });
+      },
+      { jitterMs: 100, tickMs: 20 },
+    );
+    try {
+      await until(() => driver.discarded >= 1);
+      // the first point went out 80 ms late: its recordedAt was fixed at tick 1, before tick 2's send
+      expect(Date.parse(emits[1].recordedAt)).toBeLessThan(Date.parse(emits[0].recordedAt));
+    } finally {
+      delay.mockRestore();
+    }
+  });
+
+  it('keeps ticking while a delayed point is in flight', async () => {
+    // Three holds due in the same timer turn: the poll observes 3, not 2, so an exact count would fail a correct loop
+    const delay = jest.spyOn(global.Math, 'random').mockReturnValueOnce(0.91).mockReturnValueOnce(0.71).mockReturnValueOnce(0.51);
+    const emit = jest.fn(() => new Promise(() => undefined)); // the ack never comes back
+    try {
+      jitterBuild(emit, { jitterMs: 100, tickMs: 20 });
+      await until(() => emit.mock.calls.length >= 2);
+      expect(emit.mock.calls.length).toBeGreaterThanOrEqual(2); // the loop kept ticking while the first ack hung
+    } finally {
+      delay.mockRestore();
+    }
+  });
+
+  it('sends nothing while the socket is down, also with jitter on', async () => {
+    const emit = jest.fn(() => Promise.resolve({ dropped: 0 }));
+    const { router } = jitterBuild(emit, { jitterMs: 100, tickMs: 5 }, false);
+    await until(() => router.mock.calls.length >= 2); // the loop kept running
+    expect(emit).not.toHaveBeenCalled();
+  });
+
+  it('does not send a held point after stop', async () => {
+    const delay = jest.spyOn(global.Math, 'random').mockReturnValue(0.999999);
+    const emit = jest.fn(() => Promise.resolve({ dropped: 0 }));
+    const { driver, router, disconnect } = jitterBuild(emit, { jitterMs: 300, tickMs: 5 });
+    const held = (driver as unknown as { heldLocations: Set<NodeJS.Timeout> }).heldLocations;
+    try {
+      await until(() => router.mock.calls.length >= 2); // the loop lived past two ticks
+      expect(held.size).toBeGreaterThan(0); // both holds are still due, so a leak would be observable below
+      expect(emit).not.toHaveBeenCalled();
+      await driver.stop();
+      expect(held.size).toBe(0); // stop cleared the pending timers instead of leaving them to fire
+      await new Promise((resolve) => setTimeout(resolve, 400)); // past the 300 ms hold: a surviving timer would fire
+      expect(emit).not.toHaveBeenCalled(); // and would not have landed after the socket closed
+      expect(disconnect).toHaveBeenCalledTimes(1);
+    } finally {
+      delay.mockRestore();
+    }
+  });
+});

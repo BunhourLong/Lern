@@ -16,10 +16,19 @@ export type SimOptions = {
   tickMs?: number;
   pauseMs?: number; // between a rider's rides
   chaosMs?: number; // every chaosMs one random connected client loses its socket abruptly; socket.io reconnects it
+  jitterMs?: number; // ride updates and location emits are held for an independent random 0..jitterMs, so packets arrive late and out of order
   rand?: () => number;
   log?: (line: string) => void;
 };
-export type Summary = { completed: number; positions: number; stale: number; rejected: number; reconnects: number; recovered: number };
+export type Summary = {
+  completed: number;
+  positions: number;
+  stale: number;
+  rejected: number;
+  reconnects: number;
+  recovered: number;
+  discarded: number; // driver points the server reports as discarded for being older (invariant 12)
+};
 
 const CITY_SPEED_MPS = 8;
 
@@ -57,6 +66,7 @@ export class Simulation {
             router: o.router,
             speedMps: CITY_SPEED_MPS * o.speed,
             tickMs: o.tickMs ?? 1000,
+            jitterMs: o.jitterMs,
             rand,
             log,
           }),
@@ -70,6 +80,7 @@ export class Simulation {
           new SimRider(session, socket, {
             api,
             pauseMs: o.pauseMs ?? 5000,
+            jitterMs: o.jitterMs,
             rand,
             log,
           }),
@@ -102,6 +113,7 @@ export class Simulation {
       positions: this.riders.reduce((s, r) => s + r.positions.length, 0),
       stale: this.riders.reduce((s, r) => s + r.stale, 0),
       rejected: this.riders.reduce((s, r) => s + r.rejected, 0),
+      discarded: this.drivers.reduce((s, d) => s + d.discarded, 0),
     };
   }
 }
