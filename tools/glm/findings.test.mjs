@@ -2,10 +2,15 @@ import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { diffProblems, isUsageLimit, lineSplitter, parseJsonReply, probeStatus, quoteIsReal, resolveInside, sandboxProfile } from './findings.mjs';
+
+// The two sandbox tests below measure what the profile blocks, so they need to run unsandboxed
+// (nested sandbox-exec is denied, and the profile denies the $HOME writes their setups need).
+// glm.mjs sets this inside every sandboxed process, including the gates: there the tests say nothing.
+const insideSandbox = process.env.GLM_SANDBOXED === '1';
 
 test('parseJsonReply reads fenced JSON and rejects prose', () => {
   assert.deepEqual(parseJsonReply('Here:\n```json\n{"findings":[]}\n```'), { findings: [] });
@@ -54,7 +59,7 @@ test('lineSplitter keeps streams apart and flushes a last line with no newline',
 });
 
 test('resolveInside refuses traversal, symlink escapes, missing files and non-strings', (t) => {
-  const root = realpathSync(mkdtempSync(join(homedir(), '.glm-test-')));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), '.glm-test-')));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const inner = join(root, 'wt');
   mkdirSync(join(inner, 'src'), { recursive: true });
@@ -71,7 +76,7 @@ test('resolveInside refuses traversal, symlink escapes, missing files and non-st
   assert.equal(resolveInside(inner, 'src'), null); // a directory: reading it would throw
 });
 
-test('sandbox blocks secrets and writes outside the worktree', { skip: !existsSync('/usr/bin/sandbox-exec') }, (t) => {
+test('sandbox blocks secrets and writes outside the worktree', { skip: insideSandbox || !existsSync('/usr/bin/sandbox-exec') }, (t) => {
   // Not under the system temp dir: the profile leaves that writable, which would hide an escape.
   const home = realpathSync(mkdtempSync(join(homedir(), '.glm-test-')));
   t.after(() => rmSync(home, { recursive: true, force: true }));
@@ -110,7 +115,7 @@ test('sandbox blocks secrets and writes outside the worktree', { skip: !existsSy
 });
 
 // Only the /private/tmp form: macOS keeps the usual path, /var/run/com.apple.launchd.*, writable by root alone.
-test('sandbox blocks the ssh-agent socket path', { skip: !existsSync('/usr/bin/sandbox-exec') }, async (t) => {
+test('sandbox blocks the ssh-agent socket path', { skip: insideSandbox || !existsSync('/usr/bin/sandbox-exec') }, async (t) => {
   const dir = mkdtempSync('/private/tmp/com.apple.launchd.glmtest');
   const socket = join(dir, 'Listeners');
   const server = createServer((c) => c.end());

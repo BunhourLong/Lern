@@ -141,7 +141,9 @@ function agentEnv(agentHome) {
   mkdirSync(bin, { recursive: true });
   writeFileSync(join(bin, 'watchman'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
   env.PATH = `${bin}:${env.PATH}`;
-  return { ...env, DOCKER_CONFIG: join(agentHome, 'docker'), GIT_CONFIG_GLOBAL: '/dev/null', OPENCODE_DISABLE_AUTOUPDATE: '1' };
+  // Sandbox-wide flag, not per-call: the gates and mutation runners must not run tests that can
+  // only measure sandbox blocking from outside it (see the skip in findings.test.mjs).
+  return { ...env, GLM_SANDBOXED: '1', DOCKER_CONFIG: join(agentHome, 'docker'), GIT_CONFIG_GLOBAL: '/dev/null', OPENCODE_DISABLE_AUTOUPDATE: '1' };
 }
 
 function sandboxed(cmd, cmdArgs, { label, readOnly, stdoutFile, onLine, env = {} }) {
