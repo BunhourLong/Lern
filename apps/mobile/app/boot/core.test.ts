@@ -86,6 +86,8 @@ function deps(
   push: PushNative = fakePush().native,
 ) {
   const m = new Map<string, string>();
+  // A stored token means this install existed before; a test simulating a reinstall removes the flag
+  if (refresh !== undefined) m.set('install', '1');
   const kv: KeyValueStore = {
     get: k => m.get(k),
     set: (k, v) => {
@@ -165,6 +167,64 @@ it('boots signed out without a stored refresh token, and never opens a socket', 
   await core.boot();
   expect(core.stores.session.getState().status).toBe('signed_out');
   expect(f.io).not.toHaveBeenCalled();
+});
+
+it('drops a stored refresh token when the install flag is missing, as after a reinstall', async () => {
+  const s = server(routes());
+  const f = fakeIo();
+  const d = deps(s, f, 'r'.repeat(43));
+  d.kv.remove('install'); // MMKV was wiped by the uninstall; the Keychain token survived it
+  const core = createCore(d);
+  await core.boot();
+  expect(core.stores.session.getState().status).toBe('signed_out');
+  expect(d.secret()).toBeUndefined();
+  expect(d.kv.get('install')).toBe('1');
+  expect(f.io).not.toHaveBeenCalled();
+});
+
+it('sets the install flag only after the stale token is gone, so a crash in between retries next boot', async () => {
+  const s = server(routes());
+  const f = fakeIo();
+  const d = deps(s, f, 'r'.repeat(43));
+  d.kv.remove('install'); // MMKV was wiped by the uninstall; the Keychain token survived it
+  const clear = d.refreshToken.clear;
+  let crash = true;
+  d.refreshToken.clear = async () => {
+    if (crash) {
+      crash = false;
+      throw new Error('killed before the clear finished'); // the app dies inside the check
+    }
+    await clear();
+  };
+  const core = createCore(d);
+  await expect(core.boot()).rejects.toThrow('killed before the clear finished');
+  expect(d.kv.get('install')).toBeUndefined(); // the flag must not precede the clear
+  await core.boot();
+  expect(d.secret()).toBeUndefined();
+  expect(core.stores.session.getState().status).toBe('signed_out');
+  expect(f.io).not.toHaveBeenCalled();
+});
+
+it('keeps the stored refresh token when the install flag is present', async () => {
+  const s = server(routes());
+  const f = fakeIo();
+  const d = deps(s, f, 'r'.repeat(43));
+  const core = createCore(d);
+  await core.boot();
+  expect(core.stores.session.getState()).toMatchObject({
+    status: 'signed_in',
+    me,
+  });
+  expect(d.secret()).toBe(pair.refreshToken);
+});
+
+it('sets the install flag on a fresh install with no stored token', async () => {
+  const f = fakeIo();
+  const d = deps(server(routes()), f);
+  const core = createCore(d);
+  await core.boot();
+  expect(core.stores.session.getState().status).toBe('signed_out');
+  expect(d.kv.get('install')).toBe('1');
 });
 
 it('queues a trip step while offline and sends it once the socket is back', async () => {

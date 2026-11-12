@@ -28,6 +28,9 @@ export type CoreDeps = {
   sleep?: (ms: number) => Promise<void>; // backoff between offline retries
 };
 
+// MMKV (kv) is wiped on uninstall, the iOS Keychain is not: its absence marks a new install.
+const INSTALL_FLAG = 'install';
+
 const wait = (ms: number) =>
   new Promise<void>(resolve => setTimeout(resolve, ms));
 // Worth retrying at boot: no answer or a server failure, not a refusal
@@ -148,6 +151,12 @@ export function createCore({
     // App start: a stored refresh token becomes a session. Offline keeps the session 'restoring' (the token stays,
     // the queue keeps filling) and tries again with backoff; only none or refused means sign in again.
     async boot(): Promise<void> {
+      // A reinstall can still find the old token in the iOS Keychain: drop it before any restore attempt.
+      // Clear first, then set the flag, so a crash in between checks again instead of keeping the stale token.
+      if (kv.get(INSTALL_FLAG) === undefined) {
+        await refreshToken.clear();
+        kv.set(INSTALL_FLAG, '1');
+      }
       const current = live();
       for (let delay = 1000; current(); delay = Math.min(delay * 2, 60_000)) {
         // A retry after /me failed keeps the access token it got: no second refresh rotation
