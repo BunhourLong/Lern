@@ -33,6 +33,9 @@ export class SessionsService {
     const tokenHash = hash(refreshToken);
     // Returns null rather than throwing, so the family revocation commits
     const pair = await this.db.transaction(async (tx) => {
+      // Serialise with logout before claiming: see SessionsRepository.lockFamily
+      const familyId = await this.sessions.familyOf(tx, tokenHash);
+      if (familyId) await this.sessions.lockFamily(tx, familyId);
       const claimed = await this.sessions.claim(tx, tokenHash);
       if (claimed) return this.issue(tx, claimed.userId, claimed.familyId);
       await this.sessions.revokeFamilyIfReused(tx, tokenHash);
@@ -40,6 +43,18 @@ export class SessionsService {
     });
     if (!pair) throw new UnauthorizedException('Invalid refresh token');
     return pair;
+  }
+
+  // Revokes the family of the presented token, whatever that row's own liveness, so repeat calls
+  // succeed; unknown tokens revoking nothing is the IDOR property (the token is the proof).
+  // Always 204: no 401 for unknown tokens, or the endpoint becomes a token-validity oracle.
+  async logout(refreshToken: string): Promise<void> {
+    await this.db.transaction(async (tx) => {
+      const familyId = await this.sessions.familyOf(tx, hash(refreshToken));
+      if (!familyId) return;
+      await this.sessions.lockFamily(tx, familyId);
+      await this.sessions.revokeFamily(tx, familyId);
+    });
   }
 
   private async issue(tx: EntityManager, userId: string, familyId: string): Promise<TokenPair> {

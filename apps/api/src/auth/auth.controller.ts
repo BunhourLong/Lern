@@ -4,6 +4,7 @@ import { ZodSerializerDto } from 'nestjs-zod';
 import { Public } from './auth.decorators';
 import { RefreshSessionDto } from './dto/refresh-session.dto';
 import { RequestOtpDto } from './dto/request-otp.dto';
+import { LogoutDto } from './dto/logout.dto';
 import { TokenPairDto } from './dto/token-pair.dto';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { Idempotent } from '../shared/idempotency/idempotency.interceptor';
@@ -41,5 +42,14 @@ export class AuthController {
   @ZodSerializerDto(TokenPairDto)
   refresh(@Body() body: RefreshSessionDto): Promise<TokenPair> {
     return this.sessions.refresh(body.refreshToken);
+  }
+
+  // Not @Idempotent: the result is constant 204, so a retry after a lost response is idempotent
+  // by construction. Revokes only refresh-token families — access tokens stay valid until they
+  // expire (≤15 min), and no answer distinguishes unknown tokens (no validity oracle).
+  @Post('logout')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  logout(@Body() body: LogoutDto): Promise<void> {
+    return this.sessions.logout(body.refreshToken);
   }
 }
