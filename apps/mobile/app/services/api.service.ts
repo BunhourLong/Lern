@@ -120,10 +120,10 @@ export function createApi(deps: ApiDeps) {
   // being offline doesn't
   function refresh(): Promise<Refreshed> {
     refreshing ??= (async (): Promise<Refreshed> => {
-      const token = await deps.refreshToken.get();
-      if (!token) return 'none';
-      refreshKey ??= uuid();
       try {
+        const token = await deps.refreshToken.get();
+        if (!token) return 'none';
+        refreshKey ??= uuid();
         const pair = await send('POST', '/auth/refresh', tokenPairSchema, {
           body: { refreshToken: token },
           key: refreshKey,

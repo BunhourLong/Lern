@@ -347,6 +347,40 @@ it('refuses the session all the same when the Keychain cannot be cleared on a re
   expect(onSignedOut).toHaveBeenCalledTimes(1);
 });
 
+it('keeps the session, offline, when the Keychain refuses to hand over the token at boot', async () => {
+  const s = server();
+  const { api: client, onSignedOut } = api(
+    s,
+    failingSecret('get', tokens(1).refreshToken),
+  );
+  await expect(client.restore()).resolves.toBe('offline');
+  expect(s.calls).toEqual([]);
+  expect(onSignedOut).not.toHaveBeenCalled();
+});
+
+it('tells a request offline, not the Keychain’s Error, when a 401 refresh cannot read the token', async () => {
+  const s = server({ status: 401 });
+  const { api: client, onSignedOut } = api(
+    s,
+    failingSecret('get', tokens(1).refreshToken),
+  );
+  await expect(client.activeRide()).rejects.toEqual(new ApiError(0, null));
+  expect(s.calls).toHaveLength(1);
+  expect(onSignedOut).not.toHaveBeenCalled();
+});
+
+it('restores normally once the Keychain works again after refusing at boot', async () => {
+  const refresh = secret(tokens(1).refreshToken);
+  jest
+    .spyOn(refresh.store, 'get')
+    .mockRejectedValueOnce(new Error('Keychain unavailable'));
+  const s = server({ status: 200, body: tokens(2) });
+  const { api: client } = api(s, refresh);
+  expect(await client.restore()).toBe('offline');
+  expect(await client.restore()).toBe('ok');
+  expect(client.accessToken()).toBe('access-2');
+});
+
 it('retries a refresh whose answer was lost with the same Idempotency-Key, so the server replays it', async () => {
   const s = server('offline', { status: 200, body: tokens(2) });
   const { api: client } = api(s, secret(tokens(1).refreshToken));
