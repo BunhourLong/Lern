@@ -138,7 +138,7 @@ export function createApi(deps: ApiDeps) {
         // Only a clear refusal ends the session: 401 rotated/reused/revoked, or a token the server can't read.
         // Anything else (offline, 5xx, 429, a mangled 2xx, 409 still running) keeps it for another try.
         if ([400, 401, 403, 404].includes(status)) {
-          await signOut();
+          await forget();
           return 'refused';
         }
         if (status === 422) refreshKey = undefined; // the key met another token: start a new action
@@ -148,11 +148,28 @@ export function createApi(deps: ApiDeps) {
     return refreshing;
   }
 
-  async function signOut(): Promise<void> {
+  // The local half of sign-out: the session is gone from this phone whatever the server says
+  async function forget(): Promise<void> {
     accessToken = undefined;
     refreshKey = undefined;
     await deps.refreshToken.clear();
     deps.onSignedOut();
+  }
+
+  // Local sign-out first, so an offline sign-out is instant and core's session epoch already drops late answers;
+  // then tell the server to revoke the family. A lost logout is not retried (see the catch below).
+  async function signOut(): Promise<void> {
+    const token = await deps.refreshToken.get();
+    await forget();
+    if (!token) return;
+    try {
+      await send('POST', '/auth/logout', empty, {
+        body: { refreshToken: token },
+        auth: false,
+      });
+    } catch {
+      // shortcut: a lost logout is not retried; the token is already gone from this phone, so the family just expires. Retry from the offline queue if forced logout must be guaranteed.
+    }
   }
 
   return {

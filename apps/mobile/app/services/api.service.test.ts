@@ -186,16 +186,98 @@ it('runs one refresh for several requests that hit a 401 at once', async () => {
   expect(s.calls.filter(c => c.path === '/auth/refresh')).toHaveLength(1);
 });
 
-it('signs out when the server refuses the refresh token, and not when the phone is offline', async () => {
-  const refused = api(
-    server({ status: 401 }, { status: 401 }),
-    secret(tokens(1).refreshToken),
+it('signs out on the server with the stored refresh token, and forgets the session locally', async () => {
+  const s = server({ status: 200, body: tokens(1) }, { status: 204 });
+  const { api: client, refresh, onSignedOut } = api(s);
+  await client.verifyOtp('+85512345678', '000000');
+  await expect(client.signOut()).resolves.toBeUndefined();
+  expect(s.calls.map(c => c.path)).toEqual([
+    '/auth/otp/verify',
+    '/auth/logout',
+  ]);
+  expect(s.calls[1]).toMatchObject({
+    method: 'POST',
+    path: '/auth/logout',
+    body: { refreshToken: tokens(1).refreshToken },
+  });
+  expect(s.calls[1].headers).not.toHaveProperty('authorization');
+  expect(s.calls[1].headers).not.toHaveProperty(IDEMPOTENCY_KEY_HEADER);
+  expect([
+    refresh.now(),
+    client.accessToken(),
+    onSignedOut.mock.calls.length,
+  ]).toEqual([undefined, undefined, 1]);
+});
+
+it('signs out locally even when the logout gets no answer or an error', async () => {
+  for (const reply of ['offline', { status: 500 }, { status: 401 }] as const) {
+    const s = server({ status: 200, body: tokens(1) }, reply);
+    const { api: client, refresh, onSignedOut } = api(s);
+    await client.verifyOtp('+85512345678', '000000');
+    await expect(client.signOut()).resolves.toBeUndefined();
+    expect([
+      refresh.now(),
+      client.accessToken(),
+      onSignedOut.mock.calls.length,
+    ]).toEqual([undefined, undefined, 1]);
+    // A 401 must not start a refresh: the session is already gone
+    if (typeof reply === 'object' && reply.status === 401)
+      expect(s.calls.map(c => c.path)).toEqual([
+        '/auth/otp/verify',
+        '/auth/logout',
+      ]);
+  }
+});
+
+it('forgets the session before the logout is answered', async () => {
+  let answer: (res: unknown) => void = () => undefined;
+  const fetch = jest.fn((url: string) =>
+    url.endsWith('/auth/otp/verify')
+      ? Promise.resolve({
+          status: 200,
+          ok: true,
+          text: async () => JSON.stringify(tokens(1)),
+        })
+      : new Promise(resolve => (answer = resolve)),
   );
+  const refresh = secret();
+  const onSignedOut = jest.fn();
+  const client = createApi({
+    baseUrl: 'http://api.test',
+    fetch: fetch as unknown as typeof globalThis.fetch,
+    refreshToken: refresh.store,
+    onSignedOut,
+  });
+  await client.verifyOtp('+85512345678', '000000');
+  const done = client.signOut();
+  await new Promise<void>(resolve => setImmediate(() => resolve()));
+  expect([
+    refresh.now(),
+    client.accessToken(),
+    onSignedOut.mock.calls.length,
+  ]).toEqual([undefined, undefined, 1]);
+  expect(fetch).toHaveBeenCalledTimes(2); // verify + logout, still unanswered
+  answer({ status: 204, ok: true, text: async () => '' });
+  await expect(done).resolves.toBeUndefined();
+});
+
+it('sends no logout when no refresh token is stored', async () => {
+  const s = server();
+  const { api: client, onSignedOut } = api(s);
+  await expect(client.signOut()).resolves.toBeUndefined();
+  expect(s.calls).toEqual([]);
+  expect(onSignedOut).toHaveBeenCalledTimes(1);
+});
+
+it('signs out when the server refuses the refresh token, and not when the phone is offline', async () => {
+  const refusedServer = server({ status: 401 }, { status: 401 });
+  const refused = api(refusedServer, secret(tokens(1).refreshToken));
   await expect(refused.api.activeRide()).rejects.toMatchObject({ status: 401 });
   expect([
     refused.refresh.now(),
     refused.onSignedOut.mock.calls.length,
   ]).toEqual([undefined, 1]);
+  expect(refusedServer.calls.map(c => c.path)).not.toContain('/auth/logout');
 
   const offline = api(
     server({ status: 401 }, 'offline'),

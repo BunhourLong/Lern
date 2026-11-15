@@ -293,6 +293,7 @@ it('signs out completely: secret, stores, queue and socket', async () => {
 
   await core.signOut();
 
+  expect(s.calls).toContain('POST /auth/logout');
   expect(d.secret()).toBeUndefined();
   expect(core.stores.session.getState().status).toBe('signed_out');
   expect(core.stores.activeRide.getState().driver).toBeNull();
