@@ -62,6 +62,24 @@ function secret(initial?: string) {
   };
   return { store, now: () => value };
 }
+// A Keychain that rejects, like a locked device or one that cannot be reached
+function failingSecret(fails: 'get' | 'clear', initial?: string) {
+  let value = initial;
+  const store: SecretStore = {
+    get: async () => {
+      if (fails === 'get') throw new Error('Keychain unavailable');
+      return value;
+    },
+    set: async v => {
+      value = v;
+    },
+    clear: async () => {
+      if (fails === 'clear') throw new Error('Keychain unavailable');
+      value = undefined;
+    },
+  };
+  return { store, now: () => value };
+}
 const api = (
   s: ReturnType<typeof server>,
   refresh = secret(),
@@ -229,6 +247,23 @@ it('signs out locally even when the logout gets no answer or an error', async ()
   }
 });
 
+it('signs out locally when the Keychain refuses to clear', async () => {
+  const s = server({ status: 200, body: tokens(1) }, { status: 204 });
+  const { api: client, onSignedOut } = api(s, failingSecret('clear'));
+  await client.verifyOtp('+85512345678', '000000');
+  await expect(client.signOut()).resolves.toBeUndefined();
+  expect([client.accessToken(), onSignedOut.mock.calls.length]).toEqual([
+    undefined,
+    1,
+  ]);
+  // The phone kept the token, so the logout must still carry it for the server to revoke the family
+  expect(s.calls[1]).toMatchObject({
+    method: 'POST',
+    path: '/auth/logout',
+    body: { refreshToken: tokens(1).refreshToken },
+  });
+});
+
 it('forgets the session before the logout is answered', async () => {
   let answer: (res: unknown) => void = () => undefined;
   const fetch = jest.fn((url: string) =>
@@ -269,6 +304,18 @@ it('sends no logout when no refresh token is stored', async () => {
   expect(onSignedOut).toHaveBeenCalledTimes(1);
 });
 
+it('signs out locally, and sends no logout, when the Keychain refuses to hand over the token', async () => {
+  const s = server({ status: 200, body: tokens(1) });
+  const { api: client, onSignedOut } = api(s, failingSecret('get'));
+  await client.verifyOtp('+85512345678', '000000');
+  await expect(client.signOut()).resolves.toBeUndefined();
+  expect([client.accessToken(), onSignedOut.mock.calls.length]).toEqual([
+    undefined,
+    1,
+  ]);
+  expect(s.calls.map(c => c.path)).toEqual(['/auth/otp/verify']);
+});
+
 it('signs out when the server refuses the refresh token, and not when the phone is offline', async () => {
   const refusedServer = server({ status: 401 }, { status: 401 });
   const refused = api(refusedServer, secret(tokens(1).refreshToken));
@@ -288,6 +335,16 @@ it('signs out when the server refuses the refresh token, and not when the phone 
     offline.refresh.now(),
     offline.onSignedOut.mock.calls.length,
   ]).toEqual([tokens(1).refreshToken, 0]);
+});
+
+it('refuses the session all the same when the Keychain cannot be cleared on a refused refresh', async () => {
+  const s = server({ status: 401 }, { status: 401 });
+  const { api: client, onSignedOut } = api(
+    s,
+    failingSecret('clear', tokens(1).refreshToken),
+  );
+  await expect(client.activeRide()).rejects.toMatchObject({ status: 401 });
+  expect(onSignedOut).toHaveBeenCalledTimes(1);
 });
 
 it('retries a refresh whose answer was lost with the same Idempotency-Key, so the server replays it', async () => {

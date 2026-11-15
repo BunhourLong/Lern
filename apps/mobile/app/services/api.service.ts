@@ -152,14 +152,16 @@ export function createApi(deps: ApiDeps) {
   async function forget(): Promise<void> {
     accessToken = undefined;
     refreshKey = undefined;
-    await deps.refreshToken.clear();
+    // A Keychain that refuses to clear must not keep the session alive; the token expires on the server instead
+    await deps.refreshToken.clear().catch(() => undefined);
     deps.onSignedOut();
   }
 
   // Local sign-out first, so an offline sign-out is instant and core's session epoch already drops late answers;
   // then tell the server to revoke the family. A lost logout is not retried (see the catch below).
   async function signOut(): Promise<void> {
-    const token = await deps.refreshToken.get();
+    // A Keychain that refuses to hand over the token must not block sign-out; with no token there is nothing to revoke
+    const token = await deps.refreshToken.get().catch(() => undefined);
     await forget();
     if (!token) return;
     try {
