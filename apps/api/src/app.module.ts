@@ -3,6 +3,7 @@ import { APP_INTERCEPTOR, APP_PIPE } from '@nestjs/core';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { LoggerModule } from 'nestjs-pino';
 import { ZodSerializerInterceptor, ZodValidationPipe } from 'nestjs-zod';
+import { AppConfigModule } from './app-config/app-config.module';
 import { AuthModule } from './auth/auth.module';
 import { DriversModule } from './drivers/drivers.module';
 import { HealthModule } from './health/health.module';
@@ -30,6 +31,7 @@ export class AppModule {
         RedisModule.forRoot(config.REDIS_URL),
         QueueModule.forRoot(config.QUEUE_PREFIX),
         HealthModule,
+        AppConfigModule.forRoot(config),
         AuthModule.forRoot(config),
         DriversModule,
         LocationModule,

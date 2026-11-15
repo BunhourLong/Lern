@@ -1,3 +1,4 @@
+import { appVersionSchema, storeUrlSchema } from '@lern/contracts';
 import { z } from 'zod';
 
 const Env = z.object({
@@ -36,12 +37,30 @@ const Env = z.object({
   STUCK_CAP_SECONDS: z.coerce.number().int().min(1).default(7200),
   // Road ETAs for matching; when it can't answer, candidates keep straight-line order
   OSRM_URL: z.url({ protocol: /^https?$/ }).default('http://127.0.0.1:5050'),
+  // App config (GET /app-config): a minimum version is shown to users with its store link, so the pair travels together
+  APP_MIN_VERSION_IOS: appVersionSchema.optional(),
+  APP_STORE_URL_IOS: storeUrlSchema.optional(),
+  APP_MIN_VERSION_ANDROID: appVersionSchema.optional(),
+  APP_STORE_URL_ANDROID: storeUrlSchema.optional(),
+  MAINTENANCE: z.stringbool().default(false),
 }).refine((env) => env.OTP_PROVIDER !== 'telegram' || env.TELEGRAM_GATEWAY_TOKEN, {
   message: 'Required when OTP_PROVIDER is telegram',
   path: ['TELEGRAM_GATEWAY_TOKEN'],
 }).refine((env) => env.PUSH_PROVIDER !== 'fcm' || env.FIREBASE_SERVICE_ACCOUNT_PATH, {
   message: 'Required when PUSH_PROVIDER is fcm',
   path: ['FIREBASE_SERVICE_ACCOUNT_PATH'],
+}).refine((env) => env.APP_MIN_VERSION_IOS === undefined || env.APP_STORE_URL_IOS !== undefined, {
+  message: 'Required with its minimum version',
+  path: ['APP_STORE_URL_IOS'],
+}).refine((env) => env.APP_STORE_URL_IOS === undefined || env.APP_MIN_VERSION_IOS !== undefined, {
+  message: 'Required with its store URL',
+  path: ['APP_MIN_VERSION_IOS'],
+}).refine((env) => env.APP_MIN_VERSION_ANDROID === undefined || env.APP_STORE_URL_ANDROID !== undefined, {
+  message: 'Required with its minimum version',
+  path: ['APP_STORE_URL_ANDROID'],
+}).refine((env) => env.APP_STORE_URL_ANDROID === undefined || env.APP_MIN_VERSION_ANDROID !== undefined, {
+  message: 'Required with its store URL',
+  path: ['APP_MIN_VERSION_ANDROID'],
 });
 
 export type Config = z.infer<typeof Env>;
