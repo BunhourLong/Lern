@@ -62,7 +62,7 @@ Ask only what CLAUDE.md, PLAN.md and the conversation don't already answer.
      check). Reuse a `gate()` helper in the spec if one exists; otherwise add one there (a
      `LOCK TABLE rides` gate, per concurrency-test's Postgres file).
    Check: removing the new `MAY_MOVE` fragment or the status guard fails at least one test.
-7. **Docs.** Tick the PLAN.md box, add a PLAN-notes entry, and add a §9 gotcha if one bit you.
+7. **Docs.** Tick the PLAN.md box, add a PLAN-notes entry, and add a gotcha to `.claude/rules/gotchas-api.md` if one bit you.
 
 ## Verify
 `pnpm lint && pnpm typecheck && pnpm test && pnpm test:integration` all pass, and the mutation from

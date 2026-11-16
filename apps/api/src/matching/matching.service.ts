@@ -6,11 +6,20 @@ import { OutboxService } from '../outbox/outbox.service';
 import { RidesService } from '../rides/rides.service';
 import { MatchingQueue, type Retry } from '../shared/queue/matching-queue';
 import { searchRadiusM } from './domain/search-radius';
+import { EtaProvider } from './eta.provider';
 import { MATCHING_CONFIG, type MatchingConfig } from './matching.config';
 import { MatchingRepository } from './matching.repository';
 
 const SWEEP_BATCH = 100;
 const RECONCILE_BATCH = 100;
+
+type ReconcileCount =
+  | 'lostTimers'
+  | 'staleOffers'
+  | 'reservedWithoutOffer'
+  | 'onTripWithoutRide'
+  | 'stuckNoHeartbeat'
+  | 'stuckOverCap';
 
 // Rolls an accept back when the offer or the ride is no longer in a state that allows it
 class NotAccepted extends Error {}
@@ -23,6 +32,7 @@ export class MatchingService {
     @Inject(MATCHING_CONFIG) private readonly config: MatchingConfig,
     private readonly db: DataSource,
     private readonly drivers: DriversService,
+    private readonly eta: EtaProvider,
     private readonly offers: MatchingRepository,
     private readonly outbox: OutboxService,
     private readonly queue: MatchingQueue,
@@ -46,7 +56,10 @@ export class MatchingService {
         await this.rides.expire(m, rideId);
         return;
       }
-      const candidate = await this.offers.candidate(m, { ...ride, rideId, radiusM: searchRadiusM(ride.elapsedS) });
+      const nearest = await this.offers.nearest(m, { ...ride, rideId, radiusM: searchRadiusM(ride.elapsedS) });
+      const ranked = await this.eta.rank(ride.pickup, nearest);
+      const driverId = await this.offers.lockFirst(m, ranked.map((c) => c.driverId));
+      const candidate = ranked.find((c) => c.driverId === driverId);
       if (!candidate) return; // the sweep tries again
       // The candidate row is locked and was available, so this can't miss
       if (!(await this.drivers.move(m, candidate.driverId, 'reserve'))) throw new Error('locked candidate not available');
@@ -85,6 +98,8 @@ export class MatchingService {
       ride = await this.db.transaction(async (m) => {
         const offer = await this.offers.findForDriver(m, offerId, driverId);
         if (!offer) throw new NotFoundException('Offer not found');
+        // Before assign: its write of rides.driver_id FK-locks the driver row, hiding them from SKIP LOCKED matching
+        if (!offer.live) throw new NotAccepted();
         const assigned = await this.rides.assign(m, driverId, offer.rideId);
         if (!assigned || !(await this.offers.accept(m, offerId, driverId))) throw new NotAccepted();
         if (!(await this.drivers.move(m, driverId, 'assign'))) throw new NotAccepted();
@@ -110,6 +125,10 @@ export class MatchingService {
     return offer;
   }
 
+  async pendingOffer(driverId: string): Promise<Offer | null> {
+    return (await this.offers.pendingFor(driverId)) ?? null;
+  }
+
   // 404 unless it's the caller's offer; otherwise 409 with the offer to reconcile with
   private async conflict(driverId: string, offerId: string, verb: string): Promise<Error> {
     const offer = await this.offers.snapshot(offerId, driverId);
@@ -122,10 +141,11 @@ export class MatchingService {
     });
   }
 
-  // Box 7: repairs what a lost job or a bug left behind, through the same guarded moves as the normal path.
-  // Each count is rows found and handed to repair; anything above zero is logged (a metric with box 11).
-  async reconcile(): Promise<Record<'lostTimers' | 'staleOffers' | 'reservedWithoutOffer' | 'onTripWithoutRide', number>> {
-    const counts = { lostTimers: 0, staleOffers: 0, reservedWithoutOffer: 0, onTripWithoutRide: 0 };
+  // Box 7: repairs what a lost job or a bug left behind, through the same guarded moves as the normal path, and
+  // flags stuck trips for an admin (M5). Each count is rows found and repaired or flagged; anything above zero is
+  // logged.
+  async reconcile(): Promise<Record<ReconcileCount, number>> {
+    const counts = { lostTimers: 0, staleOffers: 0, reservedWithoutOffer: 0, onTripWithoutRide: 0, stuckNoHeartbeat: 0, stuckOverCap: 0 };
     for (const offerId of await this.offers.lostTimers(RECONCILE_BATCH)) {
       if (await this.safely(`expire ${offerId}`, () => this.expire(offerId))) counts.lostTimers++;
     }
@@ -146,7 +166,12 @@ export class MatchingService {
         if (repaired) counts[key]++;
       }
     }
-    if (Object.values(counts).some((n) => n > 0)) this.logger.warn(`reconciler repaired ${JSON.stringify(counts)}`);
+    await this.safely('flag stuck trips', async () => {
+      const opened = await this.rides.flagStuck(this.config.STUCK_GAP_SECONDS, this.config.STUCK_CAP_SECONDS, RECONCILE_BATCH);
+      counts.stuckNoHeartbeat = opened.noHeartbeat;
+      counts.stuckOverCap = opened.overCap;
+    });
+    if (Object.values(counts).some((n) => n > 0)) this.logger.warn(`reconciler found ${JSON.stringify(counts)}`);
     return counts;
   }
 

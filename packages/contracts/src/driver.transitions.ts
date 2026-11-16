@@ -9,6 +9,7 @@ const DRIVER_TRANSITIONS: Record<DriverAvailabilityAction, { from: DriverAvailab
   release: { from: 'reserved', to: 'available' },
   assign: { from: 'reserved', to: 'on_trip' },
   finish: { from: 'on_trip', to: 'available' },
+  time_out: { from: 'available', to: 'offline' },
 };
 
 export function driverTransition(action: DriverAvailabilityAction): { from: DriverAvailability; to: DriverAvailability } {

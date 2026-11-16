@@ -6,6 +6,7 @@ import type { App } from 'supertest/types';
 import { DataSource } from 'typeorm';
 import { MatchingService } from '../src/matching/matching.service';
 import { type Actor, bootApp, signIn } from './support/actors';
+import { lockTable } from './support/gate';
 import { isolatedDatabase } from './support/isolated-database';
 import { offer } from './support/offers';
 
@@ -162,20 +163,9 @@ describe('POST /offers/:id/accept', () => {
       const ride = await book(await signIn(app));
       const driver = await verifiedDriver();
       const offerId = await offer(app, driver, ride.id);
-      const gate = db().createQueryRunner();
-      await gate.connect();
-      await gate.startTransaction();
-      await gate.query('LOCK TABLE rides IN ACCESS EXCLUSIVE MODE');
+      const gate = await lockTable(db(), 'rides');
       const racing = Array.from({ length: N }, () => accept(driver, offerId).then((r) => r));
-      for (const end = Date.now() + 10_000; ; ) {
-        const [{ n }] = await db().query<{ n: number }[]>(
-          `SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'`,
-        );
-        if (n === N) break;
-        if (Date.now() > end) throw new Error(`not all ${N} accepts arrived (${n})`);
-        await new Promise((resolve) => setTimeout(resolve, 20));
-      }
-      await gate.commitTransaction();
+      await gate.arrived(N);
       await gate.release();
 
       const statuses = (await Promise.all(racing)).map((r) => r.status).sort();
@@ -186,6 +176,72 @@ describe('POST /offers/:id/accept', () => {
         [ride.id],
       );
       expect(n).toBe(1);
+    }
+  });
+
+  // Invariant 3 at the deadline: the accept's transaction (and so its now()) began before expires_at, the timer's
+  // after it, so both time guards pass and only `status = 'pending'` can decide. The gate picks who reaches the
+  // offer first: on ride_offers both wait before touching it (either wins); on the availability log the accept
+  // already holds the offer row and waits to move its driver, while the timer waits for that row (accept wins).
+  it.each(['ride_offers', 'driver_availability_events'])(
+    'lets exactly one of an accept and the offer timer win at the expiry instant (gate on %s)',
+    async (table) => {
+      for (let round = 0; round < 3; round++) {
+        const ride = await book(await signIn(app));
+        const driver = await verifiedDriver();
+        const offerId = await offer(app, driver, ride.id);
+        await db().query(`UPDATE ride_offers SET expires_at = now() + interval '300 milliseconds' WHERE id = $1`, [offerId]);
+        const { at } = await row<{ at: Date }>('SELECT expires_at AS at FROM ride_offers WHERE id = $1', [offerId]);
+        const gate = await lockTable(db(), table);
+        const accepting = accept(driver, offerId).then((r) => r);
+        await gate.arrived(1);
+        while (!(await row<{ due: boolean }>('SELECT now() >= $1::timestamptz AS due', [at])).due) {
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        const expiring = app.get(MatchingService).expire(offerId);
+        await gate.arrived(2);
+        await gate.release();
+
+        const [res] = await Promise.all([accepting, expiring]);
+        const { status } = await offerRow(offerId);
+        expect(['accepted', 'expired']).toContain(status);
+        const outcome = {
+          accepted: [HttpStatus.OK, { status: 'driver_assigned', version: 2, driver_id: driver.id }, 'on_trip'],
+          expired: [HttpStatus.CONFLICT, { status: 'searching', version: 1, driver_id: null }, 'available'],
+        }[status];
+        expect([res.status, await rideRow(ride.id), await availability(driver)]).toEqual(outcome);
+      }
+    },
+  );
+
+  // The rider may cancel from searching and from driver_assigned, so either order is legal; whichever commits
+  // first, the ride ends cancelled and the driver free. Gate: rides, where both guarded UPDATEs wait.
+  it('ends cancelled with the driver free when the rider cancels as the driver accepts', async () => {
+    for (let round = 0; round < 6; round++) {
+      const rider = await signIn(app);
+      const ride = await book(rider);
+      const driver = await verifiedDriver();
+      const offerId = await offer(app, driver, ride.id);
+      const gate = await lockTable(db(), 'rides');
+      const cancel = () => http().post(`/rides/${ride.id}/cancel`).set(rider.auth).send({ reason: 'changed_mind' }).then((r) => r);
+      const accepting = () => accept(driver, offerId).then((r) => r);
+      // Alternate who queues first at the lock
+      const [first, second] = round % 2 === 0 ? [cancel, accepting] : [accepting, cancel];
+      const queued = [first()];
+      await gate.arrived(1);
+      queued.push(second());
+      await gate.arrived(2);
+      await gate.release();
+      const [c, a] = round % 2 === 0 ? await Promise.all(queued) : (await Promise.all(queued)).reverse();
+      await app.get(MatchingService).sync(ride.id); // what cancel queues: ends a still-pending offer
+
+      expect(c.status).toBe(HttpStatus.OK);
+      const outcome = {
+        [HttpStatus.OK]: [{ status: 'cancelled', version: 3, driver_id: driver.id }, 'accepted'],
+        [HttpStatus.CONFLICT]: [{ status: 'cancelled', version: 2, driver_id: null }, 'cancelled'],
+      }[a.status];
+      expect([await rideRow(ride.id), (await offerRow(offerId)).status]).toEqual(outcome);
+      expect(await availability(driver)).toBe('available');
     }
   });
 });

@@ -4,6 +4,7 @@ const valid = {
   DATABASE_URL: 'postgres://lern:lern@127.0.0.1:5432/lern',
   REDIS_URL: 'redis://127.0.0.1:6379',
   OTP_PROVIDER: 'dev',
+  PUSH_PROVIDER: 'dev',
   JWT_SECRET: 'a-test-secret-that-is-32-chars-long',
 };
 
@@ -23,11 +24,66 @@ it('returns typed config with defaults for a valid env', () => {
     RECONCILE_INTERVAL_MS: 30000,
     MATCHING_WORKER: true,
     QUEUE_PREFIX: 'lern',
+    OSRM_URL: 'http://127.0.0.1:5050',
+    PRESENCE_INTERVAL_MS: 5000,
+    DRIVER_STALE_SECONDS: 30,
+    DRIVER_TIMEOUT_SECONDS: 300,
+    STUCK_GAP_SECONDS: 600,
+    STUCK_CAP_SECONDS: 7200,
+    MAINTENANCE: false,
   });
 });
 
 it('reads MATCHING_WORKER=false as off, not as a truthy string', () => {
   expect(parseEnv({ ...valid, MATCHING_WORKER: 'false' }).MATCHING_WORKER).toBe(false);
+});
+
+it('reads MAINTENANCE=true as on and MAINTENANCE=false as off, not as a truthy string', () => {
+  expect(parseEnv({ ...valid, MAINTENANCE: 'true' }).MAINTENANCE).toBe(true);
+  expect(parseEnv({ ...valid, MAINTENANCE: 'false' }).MAINTENANCE).toBe(false);
+});
+
+it('requires the iOS store URL with a minimum version, and the reverse, naming the missing key', () => {
+  const noStoreUrl = () => parseEnv({ ...valid, APP_MIN_VERSION_IOS: '1.2.3' });
+  expect(noStoreUrl).toThrow(/APP_STORE_URL_IOS/);
+  expect(noStoreUrl).not.toThrow(/APP_MIN_VERSION_IOS/);
+  const noMinVersion = () => parseEnv({ ...valid, APP_STORE_URL_IOS: 'https://apps.apple.com/app/id1' });
+  expect(noMinVersion).toThrow(/APP_MIN_VERSION_IOS/);
+  expect(noMinVersion).not.toThrow(/APP_STORE_URL_IOS/);
+});
+
+it('requires the Android store URL with a minimum version, and the reverse, naming the missing key', () => {
+  const noStoreUrl = () => parseEnv({ ...valid, APP_MIN_VERSION_ANDROID: '4.5' });
+  expect(noStoreUrl).toThrow(/APP_STORE_URL_ANDROID/);
+  expect(noStoreUrl).not.toThrow(/APP_MIN_VERSION_ANDROID/);
+  const noMinVersion = () => parseEnv({ ...valid, APP_STORE_URL_ANDROID: 'https://play.google.com/store/apps/details?id=com.lern.app' });
+  expect(noMinVersion).toThrow(/APP_MIN_VERSION_ANDROID/);
+  expect(noMinVersion).not.toThrow(/APP_STORE_URL_ANDROID/);
+});
+
+it('rejects app versions the stores would not show, and a store URL that is not https', () => {
+  const storeUrl = { APP_STORE_URL_IOS: 'https://apps.apple.com/app/id1' };
+  expect(() => parseEnv({ ...valid, ...storeUrl, APP_MIN_VERSION_IOS: 'v1.2' })).toThrow(/APP_MIN_VERSION_IOS/);
+  expect(() => parseEnv({ ...valid, ...storeUrl, APP_MIN_VERSION_IOS: '1.2.3.4' })).toThrow(/APP_MIN_VERSION_IOS/);
+  expect(() =>
+    parseEnv({ ...valid, APP_MIN_VERSION_IOS: '1.2', APP_STORE_URL_IOS: 'http://apps.apple.com/app/id1' }),
+  ).toThrow(/APP_STORE_URL_IOS/);
+});
+
+it('parses a minimum version and store URL for both platforms', () => {
+  const config = parseEnv({
+    ...valid,
+    APP_MIN_VERSION_IOS: '1.2.3',
+    APP_STORE_URL_IOS: 'https://apps.apple.com/app/id1',
+    APP_MIN_VERSION_ANDROID: '4.5',
+    APP_STORE_URL_ANDROID: 'https://play.google.com/store/apps/details?id=com.lern.app',
+  });
+  expect(config).toMatchObject({
+    APP_MIN_VERSION_IOS: '1.2.3',
+    APP_STORE_URL_IOS: 'https://apps.apple.com/app/id1',
+    APP_MIN_VERSION_ANDROID: '4.5',
+    APP_STORE_URL_ANDROID: 'https://play.google.com/store/apps/details?id=com.lern.app',
+  });
 });
 
 it('coerces PORT from the string the environment provides', () => {
@@ -60,4 +116,18 @@ it('requires a non-empty Gateway token when OTP_PROVIDER is telegram', () => {
   expect(() => parseEnv({ ...valid, OTP_PROVIDER: 'telegram', TELEGRAM_GATEWAY_TOKEN: '' })).toThrow(
     /TELEGRAM_GATEWAY_TOKEN/,
   );
+});
+
+it('has no default push provider, so no deploy silently sends no pushes', () => {
+  expect(() => parseEnv({ ...valid, PUSH_PROVIDER: undefined })).toThrow(/PUSH_PROVIDER/);
+  expect(() => parseEnv({ ...valid, PUSH_PROVIDER: 'apns' })).toThrow(/PUSH_PROVIDER/);
+});
+
+it('requires the service account path when PUSH_PROVIDER is fcm', () => {
+  expect(() => parseEnv({ ...valid, PUSH_PROVIDER: 'fcm' })).toThrow(/FIREBASE_SERVICE_ACCOUNT_PATH/);
+  expect(() => parseEnv({ ...valid, PUSH_PROVIDER: 'fcm', FIREBASE_SERVICE_ACCOUNT_PATH: '' })).toThrow(
+    /FIREBASE_SERVICE_ACCOUNT_PATH/,
+  );
+  const config = parseEnv({ ...valid, PUSH_PROVIDER: 'fcm', FIREBASE_SERVICE_ACCOUNT_PATH: '/secrets/firebase.json' });
+  expect(config.FIREBASE_SERVICE_ACCOUNT_PATH).toBe('/secrets/firebase.json');
 });

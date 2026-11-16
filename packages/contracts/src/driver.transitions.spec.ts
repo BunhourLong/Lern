@@ -9,6 +9,7 @@ const LEGAL = new Set([
   'reserved release',
   'reserved assign',
   'on_trip finish',
+  'available time_out',
 ]);
 
 const combos = driverAvailabilitySchema.options.flatMap((from) =>
@@ -27,4 +28,8 @@ it('goes online, holds an offer, drives the trip and is free again', () => {
   }
   expect(state).toBe('offline');
   expect(driverTransition('release').to).toBe('available');
+});
+
+it('times out a silent available driver to offline', () => {
+  expect(driverTransition('time_out')).toEqual({ from: 'available', to: 'offline' });
 });

@@ -1,6 +1,18 @@
-import type { DriverPosition, LocationPoint, LocationResult, Point } from '@lern/contracts';
+import { DRIVER_CONNECTIVITY_EVENT, type DriverPosition, type LocationPoint, type LocationResult, type Point } from '@lern/contracts';
 import { Injectable } from '@nestjs/common';
 import { DataSource } from 'typeorm';
+
+const ACTIVE = `('driver_assigned', 'driver_arrived', 'in_progress')`;
+
+// Invariant 7: the statement that changes stale_ride_id (CTE `l`: ride_id, rider_id, received_at) also queues
+// driver:connectivity to that ride's rider. lastSeenAt is ISO-8601 UTC, server clock.
+const CONNECTIVITY = (stale: boolean) => `outbox AS (
+  INSERT INTO outbox_events (topic, recipients, payload)
+  SELECT '${DRIVER_CONNECTIVITY_EVENT}', ARRAY[l.rider_id], json_build_object(
+    'rideId', l.ride_id, 'stale', ${stale},
+    'lastSeenAt', to_char(l.received_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'))::jsonb
+  FROM l
+)`;
 
 export type NearbyDriver = { driverId: string; distanceM: number; lat: number; lng: number };
 // share = the point that moved the stored position forward and the rider who may see it, if any
@@ -70,5 +82,54 @@ export class LocationRepository {
        LIMIT $4`,
       [p.lng, p.lat, radiusM, limit],
     );
+  }
+
+  // Presence (PLAN.md M5). stale_ride_id = the ride whose rider was told the driver went silent: the flag
+  // belongs to a ride, so a still-silent driver assigned again is announced to the new rider too. Bounded by the
+  // drivers on active rides.
+  async markStale(staleS: number): Promise<void> {
+    await this.db.query(
+      `WITH l AS (
+         UPDATE driver_locations l SET stale_ride_id = r.id
+         FROM rides r
+         WHERE r.driver_id = l.driver_id AND r.status IN ${ACTIVE}
+           AND l.received_at < now() - make_interval(secs => $1)
+           AND l.stale_ride_id IS DISTINCT FROM r.id
+         RETURNING r.id AS ride_id, r.rider_id, l.received_at
+       ), ${CONNECTIVITY(true)}
+       SELECT 1`,
+      [staleS],
+    );
+  }
+
+  // Points resumed: the flag clears, and only the rider who was told, if that ride is still active, hears it
+  async markFresh(staleS: number): Promise<void> {
+    await this.db.query(
+      `WITH cleared AS (
+         UPDATE driver_locations l SET stale_ride_id = NULL
+         WHERE l.stale_ride_id IS NOT NULL AND l.received_at >= now() - make_interval(secs => $1)
+         RETURNING OLD.stale_ride_id AS ride_id, l.received_at
+       ), l AS (
+         SELECT c.ride_id, r.rider_id, c.received_at FROM cleared c JOIN rides r ON r.id = c.ride_id AND r.status IN ${ACTIVE}
+       ), ${CONNECTIVITY(false)}
+       SELECT 1`,
+      [staleS],
+    );
+  }
+
+  // Available drivers with no sign of life for timeoutS: neither a point nor an availability move (going online
+  // counts, so a driver who never sent a point isn't timed out at once). Longest silent first, bounded.
+  async silentAvailable(timeoutS: number, limit: number): Promise<string[]> {
+    const rows = await this.db.query<{ id: string }[]>(
+      `SELECT d.user_id AS id FROM drivers d
+       LEFT JOIN driver_locations l ON l.driver_id = d.user_id
+       CROSS JOIN LATERAL (
+         SELECT GREATEST(l.received_at, (SELECT max(e.created_at) FROM driver_availability_events e WHERE e.driver_id = d.user_id)) AS seen
+       ) s
+       WHERE d.availability = 'available' AND s.seen < now() - make_interval(secs => $1)
+       ORDER BY s.seen LIMIT $2`,
+      [timeoutS, limit],
+    );
+    return rows.map((r) => r.id);
   }
 }

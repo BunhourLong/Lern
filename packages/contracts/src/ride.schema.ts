@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { vehicleTypeSchema } from './driver.schema';
 import { pointSchema } from './geo.schema';
 import { moneySchema } from './money.schema';
+import { offerSchema } from './offer.schema';
 
 export const rideStatusSchema = z.enum([
   'searching',
@@ -54,6 +55,12 @@ export type CancelReason = z.infer<typeof cancelReasonSchema>;
 export const cancelRideSchema = z.object({ reason: cancelReasonSchema });
 export type CancelRide = z.infer<typeof cancelRideSchema>;
 
-// One user may hold both roles, and the two partial uniques allow one active ride on each side
-export const activeRidesSchema = z.object({ rider: rideSchema.nullable(), driver: rideSchema.nullable() });
+// The reconnect snapshot (PLAN.md M5): one user may hold both roles, and the two partial uniques allow one active
+// ride on each side; offer = the caller's pending, unexpired offer as a driver. Optional only so a snapshot from
+// before M5 still parses.
+export const activeRidesSchema = z.object({
+  rider: rideSchema.nullable(),
+  driver: rideSchema.nullable(),
+  offer: offerSchema.nullish(),
+});
 export type ActiveRides = z.infer<typeof activeRidesSchema>;

@@ -28,21 +28,34 @@ jobs:
     # Fork PRs get no secrets; skip rather than fail. Never switch to pull_request_target here.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-26.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0, version from packageManager
+        with:
+          cache: true
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
-      # Reads pnpm-lock.yaml and Podfile.lock directly, so no install step.
-      # shortcut: android/ is excluded because a Gradle scan needs a JDK plus node_modules; add it when native modules land (M5).
+      # JDK 17 for the Gradle scan; the Android SDK comes from the runner (ANDROID_HOME)
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: '17'
+      # Gradle projects (apps/mobile/android and the RN native modules) resolve from node_modules
+      - run: pnpm install --frozen-lockfile
+      # snyk test --all-projects exits 0 when Gradle can't resolve (it only warns), so fail here first
+      # shortcut: catches build configuration failures, not one module's unresolved dep (`dependencies` still exits 0); monitor on main exits 2 on those. Assert Snyk's Gradle project count if one ever slips through.
+      - run: ./gradlew -q :app:dependencies --configuration releaseRuntimeClasspath > /dev/null
+        working-directory: apps/mobile/android
+      # Release runtime only: test/instrumentation classpaths carry tooling CVEs that never ship.
       # Fails on high/critical only; accepted risks go in .snyk with a reason and an expiry.
-      - run: npx --yes "$SNYK" test --all-projects --exclude=android --severity-threshold=high
+      - run: npx --yes "$SNYK" test --all-projects --configuration-matching='^releaseRuntimeClasspath$' --severity-threshold=high
         # Token only on the steps that call Snyk, not every action in the job
         env: { SNYK_TOKEN: '${{ secrets.SNYK_TOKEN }}' }
       # Snapshot main so Snyk re-checks it daily and emails when a new CVE hits a shipped dependency
       - if: github.ref == 'refs/heads/main'
-        run: npx --yes "$SNYK" monitor --all-projects --exclude=android --target-reference=main
+        run: npx --yes "$SNYK" monitor --all-projects --configuration-matching='^releaseRuntimeClasspath$' --target-reference=main
         env: { SNYK_TOKEN: '${{ secrets.SNYK_TOKEN }}' }
 
   snyk-code:

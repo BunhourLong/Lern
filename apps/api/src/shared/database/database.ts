@@ -14,6 +14,14 @@ import { CreateTripPoints1792593369866 } from './migrations/1792593369866-create
 import { CreateOutboxEvents1792629104815 } from './migrations/1792629104815-create-outbox-events';
 import { DriversAvailability1793241466000 } from './migrations/1793241466000-drivers-availability';
 import { CreateRideOffers1793241933000 } from './migrations/1793241933000-create-ride-offers';
+import { CreateDriverAvailabilityEvents1793255695994 } from './migrations/1793255695994-create-driver-availability-events';
+import { RideOffersEta1793433600000 } from './migrations/1793433600000-ride-offers-eta';
+import { DriverLocationsStaleRide1793520000000 } from './migrations/1793520000000-driver-locations-stale-ride';
+import { CreateRideFlags1793606400000 } from './migrations/1793606400000-create-ride-flags';
+import { CreateDeviceTokens1793692800000 } from './migrations/1793692800000-create-device-tokens';
+import { DeviceTokensLocale1794816000000 } from './migrations/1794816000000-device-tokens-locale';
+import { CreateRateCards1794902400000 } from './migrations/1794902400000-create-rate-cards';
+import { QuotesDuration1794988800000 } from './migrations/1794988800000-quotes-duration';
 
 // Migrations are listed, not globbed, so the same list works from ts (tests) and dist (CLI)
 export const migrations = [
@@ -32,6 +40,14 @@ export const migrations = [
   CreateOutboxEvents1792629104815,
   DriversAvailability1793241466000,
   CreateRideOffers1793241933000,
+  CreateDriverAvailabilityEvents1793255695994,
+  RideOffersEta1793433600000,
+  DriverLocationsStaleRide1793520000000,
+  CreateRideFlags1793606400000,
+  CreateDeviceTokens1793692800000,
+  DeviceTokensLocale1794816000000,
+  CreateRateCards1794902400000,
+  QuotesDuration1794988800000,
 ];
 
 export function dataSourceOptions(url: string): DataSourceOptions {

@@ -11,6 +11,7 @@
     "lint": "eslint .",
     "migration:run": "pnpm run build && node --env-file-if-exists=.env ../../node_modules/typeorm/cli.js migration:run -d dist/shared/database/data-source.js",
     "migration:revert": "pnpm run build && node --env-file-if-exists=.env ../../node_modules/typeorm/cli.js migration:revert -d dist/shared/database/data-source.js",
+    "stats": "pnpm run build && node --env-file-if-exists=.env dist/matching/matching-stats.cli.js",
     "migration:generate": "pnpm run build && node --env-file-if-exists=.env ../../node_modules/typeorm/cli.js migration:generate -d dist/shared/database/data-source.js"
   },
   "dependencies": {
@@ -24,6 +25,7 @@
     "@nestjs/websockets": "11.2.7",
     "@socket.io/redis-adapter": "8.3.0",
     "bullmq": "6.3.15",
+    "firebase-admin": "14.5.0",
     "ioredis": "6.0.0",
     "nestjs-pino": "5.3.1",
     "nestjs-zod": "5.5.0",
@@ -46,6 +48,7 @@
     "@types/pg": "8.23.1",
     "@types/supertest": "7.2.1",
     "eslint": "10.13.0",
+    "fast-check": "4.10.2",
     "jest": "30.5.2",
     "socket.io-client": "4.8.3",
     "supertest": "7.3.1",

@@ -1,6 +1,15 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Online drivers report their position from a foreground service (PLAN.md M5 background location spike),
+         started while the app is visible, so foreground location is enough: no ACCESS_BACKGROUND_LOCATION and no
+         Play background-location review. Fine/coarse location and the service come from expo-location's manifest;
+         Play Console still needs the foreground service (location) declaration before release. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <!-- expo-task-manager hands locations to JS through a persisted JobScheduler job, which Android refuses (and
+         the app crashes) without this; Expo's config plugin adds it in prebuild projects, a bare app must -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <application
       android:name=".MainApplication"

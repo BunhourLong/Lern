@@ -5,6 +5,8 @@ import { DataSource } from 'typeorm';
 import { DriversModule } from '../src/drivers/drivers.module';
 import { VerifiedDriver } from '../src/drivers/verified-driver.guard';
 import { bootApp, signIn } from './support/actors';
+import { lockTable } from './support/gate';
+import { isolatedDatabase } from './support/isolated-database';
 
 type Tokens = { accessToken: string; refreshToken: string };
 
@@ -35,7 +37,8 @@ const setVerification = async (t: Tokens, status: string) => {
 };
 
 beforeAll(async () => {
-  app = await (await bootApp({ imports: [ProbeModule] })).init();
+  // Own database: the double-tap race counts lock waiters across the whole database
+  app = await (await bootApp({ imports: [ProbeModule] }, { DATABASE_URL: await isolatedDatabase() })).init();
 });
 
 afterAll(() => app.close());
@@ -113,6 +116,14 @@ describe('PUT /drivers/me/availability', () => {
     return tokens;
   };
   const stored = async (t: Tokens) => ((await http().get('/drivers/me').set(auth(t))).body as { availability: string }).availability;
+  const idOf = async (t: Tokens) => ((await http().get('/me').set(auth(t))).body as { id: string }).id;
+  const history = async (t: Tokens) =>
+    app
+      .get(DataSource)
+      .query<{ action: string; from: string; to: string }[]>(
+        'SELECT action, from_state AS "from", to_state AS "to" FROM driver_availability_events WHERE driver_id = $1 ORDER BY id',
+        [await idOf(t)],
+      );
 
   it('starts offline, goes online and offline, and repeating a state changes nothing', async () => {
     const t = await driver();
@@ -123,6 +134,11 @@ describe('PUT /drivers/me/availability', () => {
       expect(res.body).toEqual({ availability });
       expect(await stored(t)).toBe(availability);
     }
+    // Only real moves are logged: repeating a state writes nothing
+    expect(await history(t)).toEqual([
+      { action: 'go_online', from: 'offline', to: 'available' },
+      { action: 'go_offline', from: 'available', to: 'offline' },
+    ]);
   });
 
   it.each(['pending', 'suspended'])('keeps a %s driver offline, but lets them go offline', async (verification) => {
@@ -138,7 +154,7 @@ describe('PUT /drivers/me/availability', () => {
 
   it('is 409 with the current state while reserved or on a trip, and changes nothing', async () => {
     const t = await driver();
-    const { id } = (await http().get('/me').set(auth(t))).body as { id: string };
+    const id = await idOf(t);
     for (const state of ['reserved', 'on_trip']) {
       await app.get(DataSource).query('UPDATE drivers SET availability = $2 WHERE user_id = $1', [id, state]);
       for (const online of [true, false]) {
@@ -147,6 +163,27 @@ describe('PUT /drivers/me/availability', () => {
         expect(res.body).toMatchObject({ availability: state });
       }
       expect(await stored(t)).toBe(state);
+    }
+    expect(await history(t)).toEqual([]);
+  });
+
+  // Found by the model-based test: both requests read `available`, one moves the driver, and the other's guarded
+  // move then misses. Gate: the availability log, which each move writes in the same statement, so both requests
+  // have read the state and wait to move.
+  it.each([
+    [true, 'available'],
+    [false, 'offline'],
+  ] as const)('answers both of two simultaneous {online: %s} with 200 %s', async (online, availability) => {
+    for (let round = 0; round < 3; round++) {
+      const t = await driver();
+      if (!online) await put(t, { online: true }).expect(HttpStatus.OK);
+      const gate = await lockTable(app.get(DataSource), 'driver_availability_events');
+      const racing = [put(t, { online }), put(t, { online })].map((r) => r.then((res) => res));
+      await gate.arrived(2);
+      await gate.release();
+      const results = await Promise.all(racing);
+      expect(results.map((r) => [r.status, r.body as unknown])).toEqual(Array(2).fill([HttpStatus.OK, { availability }]));
+      expect(await stored(t)).toBe(availability);
     }
   });
 

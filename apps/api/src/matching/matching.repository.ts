@@ -17,10 +17,21 @@ const OUTBOX = `outbox AS (
   SELECT '${OFFER_UPDATED_EVENT}', ARRAY[o.driver_id], (${OFFER})::jsonb FROM o JOIN rides r ON r.id = o.ride_id
 )`;
 
-// Nearest candidates read per sync; the ETA re-rank (next plan) reorders these
+// Nearest candidates read per sync; EtaProvider reorders these by road ETA
 const TOP_K = 5;
 
-export type Candidate = { driverId: string; distanceM: number };
+export type MatchingStats = {
+  booked: number;
+  matched: number;
+  noDriverFound: number;
+  cancelledSearching: number;
+  timeToMatchS: { p50: number; p95: number } | null;
+  offersPerMatchedRide: number | null;
+  offers: Record<'accepted' | 'declined' | 'expired', number>;
+};
+
+export type Candidate = Point & { driverId: string; distanceM: number };
+export type RankedCandidate = Candidate & { etaS: number };
 
 // What must exist for a driver (alias d) to be in each state
 export type Unbackable = 'reserved' | 'on_trip';
@@ -39,15 +50,14 @@ export class MatchingRepository {
     return rows.length > 0;
   }
 
-  // Invariant 4: the nearest available driver by straight line, row-locked until the caller's tx ends; a driver
-  // another matcher holds is skipped, not waited for. Two statements on purpose: FOR UPDATE on the join itself
-  // fails ("failed to fetch tuple for EvalPlanQual recheck") when a concurrent matcher just reserved the row, so
-  // the nearest TOP_K are read unlocked, then the first still available is locked on drivers alone, which
-  // re-checks its state against the newest row version.
-  async candidate(m: EntityManager, q: CandidateQuery): Promise<Candidate | undefined> {
-    const nearest = await m.query<Candidate[]>(
+  // The nearest TOP_K fit drivers by straight line, unlocked: lockFirst takes the lock. Two statements on purpose:
+  // FOR UPDATE on this join fails ("failed to fetch tuple for EvalPlanQual recheck") when a concurrent matcher
+  // just reserved the row.
+  async nearest(m: EntityManager, q: CandidateQuery): Promise<Candidate[]> {
+    return m.query<Candidate[]>(
       `SELECT d.user_id AS "driverId",
-              round(ST_Distance(l.position, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography))::int AS "distanceM"
+              round(ST_Distance(l.position, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography))::int AS "distanceM",
+              ST_Y(l.position::geometry) AS lat, ST_X(l.position::geometry) AS lng
        FROM driver_locations l JOIN drivers d ON d.user_id = l.driver_id
        WHERE ST_DWithin(l.position, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography, $3)
          AND l.received_at > now() - interval '60 seconds'
@@ -60,28 +70,32 @@ export class MatchingRepository {
        LIMIT ${TOP_K}`,
       [q.pickup.lng, q.pickup.lat, q.radiusM, q.vehicleType, q.riderId, q.rideId],
     );
-    if (nearest.length === 0) return undefined;
-    const ids = nearest.map((c) => c.driverId);
+  }
+
+  // Invariant 4: the first of driverIds (in that order) still available, row-locked until the caller's tx ends;
+  // a driver another matcher holds is skipped, not waited for. Locking drivers alone re-checks its state
+  // against the newest row version.
+  async lockFirst(m: EntityManager, driverIds: string[]): Promise<string | undefined> {
     const [locked] = await m.query<{ driverId: string }[]>(
       `SELECT user_id AS "driverId" FROM drivers
        WHERE user_id = ANY($1::uuid[]) AND availability = 'available' AND verification = 'verified'
        ORDER BY array_position($1::uuid[], user_id)
        LIMIT 1
        FOR UPDATE SKIP LOCKED`,
-      [ids],
+      [driverIds],
     );
-    return locked && nearest.find((c) => c.driverId === locked.driverId);
+    return locked?.driverId;
   }
 
-  async insert(m: EntityManager, rideId: string, c: Candidate, ttlS: number): Promise<string> {
+  async insert(m: EntityManager, rideId: string, c: RankedCandidate, ttlS: number): Promise<string> {
     const [row] = await m.query<{ id: string }[]>(
       `WITH o AS (
-         INSERT INTO ride_offers (ride_id, driver_id, distance_m, expires_at)
-         VALUES ($1, $2, $3, now() + make_interval(secs => $4))
+         INSERT INTO ride_offers (ride_id, driver_id, distance_m, eta_s, expires_at)
+         VALUES ($1, $2, $3, $5, now() + make_interval(secs => $4))
          RETURNING *
        ), ${OUTBOX}
        SELECT id FROM o`,
-      [rideId, c.driverId, c.distanceM, ttlS],
+      [rideId, c.driverId, c.distanceM, ttlS, c.etaS],
     );
     return row.id;
   }
@@ -100,10 +114,12 @@ export class MatchingRepository {
     return row?.driverId;
   }
 
-  // Ownership lives in the WHERE: another driver's offer reads as not found
-  async findForDriver(m: EntityManager, offerId: string, driverId: string): Promise<{ rideId: string } | undefined> {
-    const [row] = await m.query<{ rideId: string }[]>(
-      'SELECT ride_id AS "rideId" FROM ride_offers WHERE id = $1 AND driver_id = $2',
+  // Ownership lives in the WHERE: another driver's offer reads as not found. `live` is advisory (accept's guarded
+  // UPDATE decides): it lets a dead offer's accept stop before writing rides.driver_id locks the driver row.
+  async findForDriver(m: EntityManager, offerId: string, driverId: string): Promise<{ rideId: string; live: boolean } | undefined> {
+    const [row] = await m.query<{ rideId: string; live: boolean }[]>(
+      `SELECT ride_id AS "rideId", status = 'pending' AND expires_at > now() AS live
+       FROM ride_offers WHERE id = $1 AND driver_id = $2`,
       [offerId, driverId],
     );
     return row;
@@ -128,6 +144,16 @@ export class MatchingRepository {
        )
        SELECT ${OFFER} AS offer FROM o JOIN rides r ON r.id = o.ride_id`,
       [offerId, driverId],
+    );
+    return row?.offer;
+  }
+
+  // The driver's pending offer that can still be accepted (at most one: partial unique), for the reconnect snapshot
+  async pendingFor(driverId: string): Promise<Offer | undefined> {
+    const [row] = await this.db.query<{ offer: Offer }[]>(
+      `SELECT ${OFFER} AS offer FROM ride_offers o JOIN rides r ON r.id = o.ride_id
+       WHERE o.driver_id = $1 AND o.status = 'pending' AND o.expires_at > now()`,
+      [driverId],
     );
     return row?.offer;
   }
@@ -204,6 +230,37 @@ export class MatchingRepository {
       driverId,
     ]);
     return !backed;
+  }
+
+  // Matching report over the rides booked in the last sinceS seconds: an ops/load-test read, bounded by the window.
+  // Matched = assigned at some point (a later cancel still counts); answered offers exclude ones the ride cancelled.
+  async stats(sinceS: number): Promise<MatchingStats> {
+    const [row] = await this.db.query<(Omit<MatchingStats, 'timeToMatchS'> & { p50: number | null; p95: number | null })[]>(
+      `WITH r AS (
+         SELECT r.id, r.status, extract(epoch FROM
+                  (SELECT min(e.created_at) FROM ride_events e WHERE e.ride_id = r.id AND e.status = 'driver_assigned') - r.created_at
+                ) AS match_s
+         FROM rides r WHERE r.created_at >= now() - make_interval(secs => $1)
+       ), per_ride AS (
+         SELECT count(*) AS n FROM ride_offers o JOIN r ON r.id = o.ride_id WHERE r.match_s IS NOT NULL GROUP BY o.ride_id
+       )
+       SELECT count(*)::int AS booked,
+              count(match_s)::int AS matched,
+              count(*) FILTER (WHERE status = 'no_driver_found')::int AS "noDriverFound",
+              count(*) FILTER (WHERE status = 'cancelled' AND match_s IS NULL)::int AS "cancelledSearching",
+              percentile_cont(0.5) WITHIN GROUP (ORDER BY match_s) AS p50,
+              percentile_cont(0.95) WITHIN GROUP (ORDER BY match_s) AS p95,
+              (SELECT avg(n)::float FROM per_ride) AS "offersPerMatchedRide",
+              (SELECT json_build_object(
+                 'accepted', count(*) FILTER (WHERE o.status = 'accepted'),
+                 'declined', count(*) FILTER (WHERE o.status = 'declined'),
+                 'expired', count(*) FILTER (WHERE o.status = 'expired'))
+               FROM ride_offers o JOIN r ON r.id = o.ride_id) AS offers
+       FROM r`,
+      [sinceS],
+    );
+    const { p50, p95, ...rest } = row;
+    return { ...rest, timeToMatchS: p50 === null ? null : { p50: Math.round(p50), p95: Math.round(p95!) } };
   }
 
   // Oldest first and bounded: a backlog drains over several ticks instead of one long one

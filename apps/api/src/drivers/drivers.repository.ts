@@ -39,14 +39,20 @@ export class DriversRepository {
     return row?.verification;
   }
 
-  // One guarded move of the availability machine; false = the driver isn't in the move's `from` state
+  // One guarded move of the availability machine, logged in the same statement; false = the driver isn't in
+  // the move's `from` state
   async move(m: EntityManager, driverId: string, action: DriverAvailabilityAction): Promise<boolean> {
     const { from, to } = driverTransition(action);
-    const [, count] = await m.query<[unknown, number]>(
-      'UPDATE drivers SET availability = $3 WHERE user_id = $1 AND availability = $2',
-      [driverId, from, to],
+    const rows = await m.query<unknown[]>(
+      `WITH moved AS (
+         UPDATE drivers SET availability = $3 WHERE user_id = $1 AND availability = $2 RETURNING user_id
+       )
+       INSERT INTO driver_availability_events (driver_id, action, from_state, to_state)
+       SELECT user_id, $4, $2, $3 FROM moved
+       RETURNING id`,
+      [driverId, from, to, action],
     );
-    return count === 1;
+    return rows.length === 1;
   }
 
   async state(userId: string): Promise<{ verification: DriverVerification; availability: DriverAvailability } | undefined> {

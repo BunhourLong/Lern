@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import {
+  activeRidesSchema,
+  type ActiveRides,
   availabilitySchema,
   driverProfileSchema,
   IDEMPOTENCY_KEY_HEADER,
@@ -33,6 +35,14 @@ export class ApiClient {
 
   async applyDriver(token: string): Promise<void> {
     await this.send('POST', '/drivers/me', driverProfileSchema, token, { vehicleType: 'remork', plate: 'SIM 1A-0000' });
+  }
+
+  activeRides(token: string): Promise<ActiveRides> {
+    return this.send('GET', '/me/active-ride', activeRidesSchema, token);
+  }
+
+  ride(token: string, id: string): Promise<Ride> {
+    return this.send('GET', `/rides/${id}`, rideSchema, token);
   }
 
   async book(token: string, pickup: Point, dropoff: Point): Promise<Ride> {

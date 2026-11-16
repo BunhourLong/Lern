@@ -1,3 +1,4 @@
+import { appVersionSchema, storeUrlSchema } from '@lern/contracts';
 import { z } from 'zod';
 
 const Env = z.object({
@@ -10,6 +11,9 @@ const Env = z.object({
   TELEGRAM_GATEWAY_TOKEN: z.string().min(1).optional(),
   // Overridable so tests can point at a local fake of the API
   TELEGRAM_GATEWAY_URL: z.url({ protocol: /^https?$/ }).default('https://gatewayapi.telegram.org'),
+  // No default: a deploy that forgets it would silently send no pushes
+  PUSH_PROVIDER: z.enum(['dev', 'fcm']),
+  FIREBASE_SERVICE_ACCOUNT_PATH: z.string().min(1).optional(),
   // HS256 key: at least 256 bits; generate with `openssl rand -base64 48`
   JWT_SECRET: z.string().min(32),
   // Matching (PLAN.md §2.4)
@@ -22,9 +26,41 @@ const Env = z.object({
   // false = this instance only enqueues jobs, another one runs them
   MATCHING_WORKER: z.stringbool().default(true),
   QUEUE_PREFIX: z.string().min(1).default('lern'),
+  // Presence (PLAN.md M5): how often the sweep runs (0 = off), when a driver on a ride counts as silent, and when
+  // a silent available driver is taken offline
+  PRESENCE_INTERVAL_MS: z.coerce.number().int().min(0).default(5000),
+  DRIVER_STALE_SECONDS: z.coerce.number().int().min(1).default(30),
+  DRIVER_TIMEOUT_SECONDS: z.coerce.number().int().min(1).default(300),
+  // Stuck trips (PLAN.md M5): an in_progress ride is flagged for admin after this long without a driver point, or
+  // after this long in progress at all
+  STUCK_GAP_SECONDS: z.coerce.number().int().min(1).default(600),
+  STUCK_CAP_SECONDS: z.coerce.number().int().min(1).default(7200),
+  // Road ETAs for matching; when it can't answer, candidates keep straight-line order
+  OSRM_URL: z.url({ protocol: /^https?$/ }).default('http://127.0.0.1:5050'),
+  // App config (GET /app-config): a minimum version is shown to users with its store link, so the pair travels together
+  APP_MIN_VERSION_IOS: appVersionSchema.optional(),
+  APP_STORE_URL_IOS: storeUrlSchema.optional(),
+  APP_MIN_VERSION_ANDROID: appVersionSchema.optional(),
+  APP_STORE_URL_ANDROID: storeUrlSchema.optional(),
+  MAINTENANCE: z.stringbool().default(false),
 }).refine((env) => env.OTP_PROVIDER !== 'telegram' || env.TELEGRAM_GATEWAY_TOKEN, {
   message: 'Required when OTP_PROVIDER is telegram',
   path: ['TELEGRAM_GATEWAY_TOKEN'],
+}).refine((env) => env.PUSH_PROVIDER !== 'fcm' || env.FIREBASE_SERVICE_ACCOUNT_PATH, {
+  message: 'Required when PUSH_PROVIDER is fcm',
+  path: ['FIREBASE_SERVICE_ACCOUNT_PATH'],
+}).refine((env) => env.APP_MIN_VERSION_IOS === undefined || env.APP_STORE_URL_IOS !== undefined, {
+  message: 'Required with its minimum version',
+  path: ['APP_STORE_URL_IOS'],
+}).refine((env) => env.APP_STORE_URL_IOS === undefined || env.APP_MIN_VERSION_IOS !== undefined, {
+  message: 'Required with its store URL',
+  path: ['APP_MIN_VERSION_IOS'],
+}).refine((env) => env.APP_MIN_VERSION_ANDROID === undefined || env.APP_STORE_URL_ANDROID !== undefined, {
+  message: 'Required with its minimum version',
+  path: ['APP_STORE_URL_ANDROID'],
+}).refine((env) => env.APP_STORE_URL_ANDROID === undefined || env.APP_MIN_VERSION_ANDROID !== undefined, {
+  message: 'Required with its store URL',
+  path: ['APP_MIN_VERSION_ANDROID'],
 });
 
 export type Config = z.infer<typeof Env>;
