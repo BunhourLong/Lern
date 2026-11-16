@@ -303,6 +303,24 @@ it('signs out completely: secret, stores, queue and socket', async () => {
   expect(f.socket.disconnect).toHaveBeenCalled();
 });
 
+it('reports the socket as connected only while it is, and not after sign-out', async () => {
+  const s = server(routes());
+  const f = fakeIo();
+  const core = createCore(deps(s, f, 'r'.repeat(43)));
+  await core.boot();
+  const connected = () => core.stores.connection.getState().connected;
+  expect(connected()).toBe(false); // booted, but the socket has not connected yet
+  f.fire('connect');
+  expect(connected()).toBe(true);
+  f.fire('disconnect', 'transport close');
+  expect(connected()).toBe(false);
+  f.fire('connect'); // back after the drop
+  expect(connected()).toBe(true);
+  await settle();
+  await core.signOut();
+  expect(connected()).toBe(false);
+});
+
 it('logs raw socket events, and sign-out empties the log', async () => {
   const f = fakeIo();
   const core = createCore(deps(server(routes()), f, 'r'.repeat(43)));

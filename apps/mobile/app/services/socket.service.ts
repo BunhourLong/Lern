@@ -20,6 +20,7 @@ import type { Refreshed } from './api.service';
 
 export type SocketHandlers = {
   onConnect(): void; // the caller fetches the REST snapshot then: nothing missed while away is replayed
+  onDisconnect(): void; // any reason: a socket that dropped cannot receive offers
   onRide(ride: Ride): void;
   onOffer(offer: Offer): void;
   onPosition(position: DriverPosition): void;
@@ -109,6 +110,7 @@ export function connectSocket({
   });
   socket.on('disconnect', (reason: string) => {
     handlers.onRaw('disconnect', reason);
+    handlers.onDisconnect();
     if (reason === 'io server disconnect') reauth();
   });
 

@@ -72,6 +72,7 @@ const handlers = (): jest.Mocked<SocketHandlers> => ({
   onPosition: jest.fn(),
   onConnectivity: jest.fn(),
   onConnect: jest.fn(),
+  onDisconnect: jest.fn(),
   onRejected: jest.fn(),
   onRaw: jest.fn(),
 });
@@ -185,6 +186,21 @@ it('leaves a network failure to socket.io’s own reconnection', async () => {
   f.fire('disconnect', 'transport close');
   await flush();
   expect([refresh.mock.calls.length, f.state.connects]).toEqual([0, 0]);
+});
+
+it('reports a disconnect whatever the reason, so the app knows it is offline', () => {
+  const f = fakeIo();
+  const h = handlers();
+  connectSocket({
+    url: 'http://api.test',
+    io: f.io,
+    token: () => 't',
+    refresh: async () => 'ok' as const,
+    handlers: h,
+  });
+  f.fire('disconnect', 'transport close');
+  f.fire('disconnect', 'io server disconnect');
+  expect(h.onDisconnect).toHaveBeenCalledTimes(2);
 });
 
 it('reports a position over the socket, false when it is down or the server refused or did not ack', async () => {

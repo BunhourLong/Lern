@@ -15,6 +15,7 @@ import { connectSocket, type RealtimeSocket } from '../services/socket.service';
 import type { KeyValueStore, SecretStore } from '../services/storage.service';
 import { createActiveRideStore } from '../stores/active-ride.store';
 import { appGate, createAppConfigStore } from '../stores/app-config.store';
+import { createConnectionStore } from '../stores/connection.store';
 import { createDriverModeStore } from '../stores/driver-mode.store';
 import { createRawEventsStore } from '../stores/raw-events.store';
 import { createSessionStore } from '../stores/session.store';
@@ -57,6 +58,7 @@ export function createCore({
   const driverMode = createDriverModeStore();
   const rawEvents = createRawEventsStore();
   const appConfig = createAppConfigStore();
+  const connection = createConnectionStore();
   let socket: RealtimeSocket | undefined;
   // Bumped on sign-out: an answer to a request sent before it must not land in the next user's stores
   let epoch = 0;
@@ -69,6 +71,7 @@ export function createCore({
     epoch++;
     socket?.close();
     socket = undefined;
+    connection.getState().setConnected(false); // close() fires disconnect only while connected; reset here so sign-out never relies on it
     push.stop();
     queue.clear();
     activeRide.getState().reset();
@@ -143,9 +146,11 @@ export function createCore({
       handlers: {
         onRaw: (event, payload) => rawEvents.getState().add(event, payload),
         onConnect: () => {
+          connection.getState().setConnected(true);
           resync();
           push.sync();
         },
+        onDisconnect: () => connection.getState().setConnected(false),
         onRide: ride => activeRide.getState().applyRide(ride),
         onOffer: offer => activeRide.getState().applyOffer(offer),
         onPosition: position => activeRide.getState().applyPosition(position),
@@ -164,7 +169,14 @@ export function createCore({
   }
 
   return {
-    stores: { session, activeRide, driverMode, rawEvents, appConfig },
+    stores: {
+      session,
+      activeRide,
+      driverMode,
+      rawEvents,
+      appConfig,
+      connection,
+    },
     api,
     queue,
     // App start: a stored refresh token becomes a session. Offline keeps the session 'restoring' (the token stays,
