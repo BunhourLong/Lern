@@ -43,4 +43,28 @@ ignore:
           REVISIT: at expiry; sooner if picomatch publishes a fix (upgrade, delete this entry).
         expires: 2027-01-19T00:00:00.000Z
         created: 2026-10-21T00:00:00.000Z
+  SNYK-JS-OPEN-22112123:
+    - '*':
+        reason: >-
+          WHAT: open <11.0.0 (CVE-2026-119025, CWE-116, published 2026-11-01). Per Snyk's advisory
+          the Windows launch path builds a shell command from the target without escaping it, so a
+          caller that passes an attacker-influenced target can have the command altered.
+          WHERE THE FLAW RUNS: only on Windows or WSL. Both installed copies were read: open@8.4.2
+          takes the PowerShell branch only when `platform === 'win32'` or WSL, open@6.4.0 takes the
+          `cmd /c start` branch on the same condition. On macOS and Linux both spawn `open` /
+          `xdg-open` with an argument array and no shell.
+          HOW IT REACHES US: only React Native's dev server, in apps/mobile: @react-native-community/cli
+          > cli-server-api > open@6.4.0 (the `/open-url` endpoint) and react-native >
+          community-cli-plugin > dev-middleware > open@8.4.2 (opens the debugger window). It runs on
+          a developer machine while Metro is up; it is not in the app bundle. Development is on
+          macOS, and CI (Linux) never starts the dev server, so the flawed branch is unreachable.
+          NO COMPATIBLE FIX: 11.0.0 is the only fixed line. The newest tooling still asks for the
+          old ones (dev-middleware 0.88.1: ^8.4.2, cli-server-api 21.0.0: ^6.2.0). A pnpm override
+          to 11 was tried on 2026-11-16: open 11 is ESM-only, so dev-middleware's
+          `const open = require("open"); open(url)` fallback gets an object and throws.
+          API NOT AFFECTED: `pnpm why open --filter @lern/api` is empty as of 2026-11-16.
+          REVISIT: at expiry; sooner if React Native or its CLI moves to open >=11 (upgrade, delete
+          this entry), or if anyone develops on Windows or WSL (then fix before running Metro there).
+        expires: 2027-02-14T00:00:00.000Z
+        created: 2026-11-16T00:00:00.000Z
 patch: {}
