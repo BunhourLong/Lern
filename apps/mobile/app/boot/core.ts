@@ -117,7 +117,8 @@ export function createCore({
 
   const push = createPush({
     native: pushNative,
-    register: (token, platform) => api.registerDevice(token, platform),
+    register: (token, platform, locale) =>
+      api.registerDevice(token, platform, locale),
     onWake: () => {
       resync();
     },

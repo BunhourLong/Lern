@@ -29,9 +29,9 @@ let spots = 0;
 const nextSpot = (): Point => ({ lat: 12.2 + (spots % 5) * 0.2, lng: 105.6 + Math.floor(spots++ / 5) * 0.2 });
 
 // Registers a phone for this user and returns its token
-const device = async (a: Actor) => {
+const device = async (a: Actor, locale?: 'en' | 'km') => {
   const token = `fcm-${randomUUID()}`;
-  await http().put('/me/device-token').set(a.auth).send({ token, platform: 'android' }).expect(204);
+  await http().put('/me/device-token').set(a.auth).send({ token, platform: 'android', locale }).expect(204);
   return token;
 };
 const dbNow = async () => (await db().query<{ t: Date }[]>('SELECT now() AS t'))[0].t.getTime();
@@ -116,12 +116,43 @@ it('tells both participants about a cancel', async () => {
   await Promise.all([pushed(riderToken, 'Ride cancelled'), pushed(driverToken, 'Ride cancelled')]);
 });
 
+const kmCancelled = 'ការធ្វើដំណើរត្រូវបានបោះបង់';
+const cancelsFor = (rideId: string) => send.mock.calls.filter(([, message]) => message.tag === `ride:${rideId}`);
+
+it('writes to each phone in the language that phone registered', async () => {
+  const { rider, driver, ride } = await assigned();
+  const [riderToken, driverToken] = [await device(rider, 'km'), await device(driver)];
+  await http().post(`/rides/${ride.id}/cancel`).set(rider.auth).send({ reason: 'changed_mind' }).expect(200);
+  await Promise.all([pushed(riderToken, kmCancelled), pushed(driverToken, 'Ride cancelled')]);
+
+  const cancels = cancelsFor(ride.id);
+  expect(cancels).toHaveLength(2);
+  expect(cancels.find(([, message]) => message.title === kmCancelled)?.[0]).toEqual([riderToken]);
+  expect(cancels.find(([, message]) => message.title === 'Ride cancelled')?.[0]).toEqual([driverToken]);
+});
+
+it('sends once per language when one user has a phone in each', async () => {
+  const { rider, ride } = await assigned();
+  const [khmerPhone, englishPhone] = [await device(rider, 'km'), await device(rider)];
+  await http().post(`/rides/${ride.id}/cancel`).set(rider.auth).send({ reason: 'changed_mind' }).expect(200);
+  await Promise.all([pushed(khmerPhone, kmCancelled), pushed(englishPhone, 'Ride cancelled')]);
+
+  const cancels = cancelsFor(ride.id);
+  expect(cancels).toHaveLength(2);
+  expect(cancels.find(([, message]) => message.title === kmCancelled)?.[0]).toEqual([khmerPhone]);
+  expect(cancels.find(([, message]) => message.title === 'Ride cancelled')?.[0]).toEqual([englishPhone]);
+});
+
 it('still cancels for users without a registered phone, and sends nothing', async () => {
   const { rider, ride } = await assigned();
   await http().post(`/rides/${ride.id}/cancel`).set(rider.auth).send({ reason: 'changed_mind' }).expect(200);
   await app.get(NotificationsService).deliver({
     recipients: [rider.id],
-    message: { title: 'x', body: 'y', tag: 'no-phone', data: { type: 'ride', rideId: ride.id, seq: '1' } },
+    message: {
+      text: { en: { title: 'x', body: 'y' }, km: { title: 'x', body: 'y' } },
+      tag: 'no-phone',
+      data: { type: 'ride', rideId: ride.id, seq: '1' },
+    },
   });
   expect(sentWithTag('no-phone')).toEqual([]);
 });
@@ -156,7 +187,8 @@ it('keeps the outbox row when the push cannot be queued, so it goes out on a lat
 it('sends nothing for an offer that expired while the push waited', async () => {
   const { driver, ride, offerId } = await offered();
   await device(driver);
-  const message = { title: 'New ride offer', body: 'y', data: { type: 'offer', rideId: ride.id, offerId } } as const;
+  const text = { en: { title: 'New ride offer', body: 'y' }, km: { title: 'New ride offer', body: 'y' } };
+  const message = { text, data: { type: 'offer', rideId: ride.id, offerId } } as const;
   await app.get(NotificationsService).deliver({
     recipients: [driver.id],
     message: { ...message, tag: 'expired', expiresAt: new Date((await dbNow()) - 1000).toISOString() },

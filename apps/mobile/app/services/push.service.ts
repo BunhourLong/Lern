@@ -1,7 +1,8 @@
-import type { PushPlatform } from '@lern/contracts';
+import type { PushLocale, PushPlatform } from '@lern/contracts';
 
 export type PushNative = {
   platform: PushPlatform;
+  locale(): PushLocale;
   requestPermission(): Promise<boolean>;
   getToken(): Promise<string>;
   deleteToken(): Promise<void>;
@@ -10,7 +11,11 @@ export type PushNative = {
 };
 export type PushDeps = {
   native: PushNative;
-  register: (token: string, platform: PushPlatform) => Promise<unknown>;
+  register: (
+    token: string,
+    platform: PushPlatform,
+    locale: PushLocale,
+  ) => Promise<unknown>;
   onWake: () => void; // a push arrived while the app is in front: read the snapshot
 };
 
@@ -36,7 +41,7 @@ export function createPush({ native, register, onWake }: PushDeps) {
       try {
         unsubscribe ??= [
           native.onTokenRefresh(token => {
-            register(token, native.platform).catch(err => {
+            register(token, native.platform, native.locale()).catch(err => {
               warn(err);
               if (started === session) registered = false;
             });
@@ -46,7 +51,7 @@ export function createPush({ native, register, onWake }: PushDeps) {
         if (registered || !(await native.requestPermission())) return;
         const token = await native.getToken();
         if (started !== session) return;
-        await register(token, native.platform);
+        await register(token, native.platform, native.locale());
         if (started === session) registered = true;
       } catch (err) {
         warn(err);

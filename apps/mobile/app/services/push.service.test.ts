@@ -6,6 +6,7 @@ function fakeNative(overrides: Partial<PushNative> = {}) {
   const unsubscribed = { refresh: 0, message: 0 };
   const native: PushNative = {
     platform: 'android',
+    locale: () => 'en',
     requestPermission: jest.fn(async () => true),
     getToken: jest.fn(async () => 'token-1'),
     deleteToken: jest.fn(async () => undefined),
@@ -23,7 +24,9 @@ function fakeNative(overrides: Partial<PushNative> = {}) {
 }
 const setup = (overrides: Partial<PushNative> = {}) => {
   const fake = fakeNative(overrides);
-  const register = jest.fn(async (_token: string, _platform: string) => undefined);
+  const register = jest.fn(
+    async (_token: string, _platform: string, _locale: string) => undefined,
+  );
   const onWake = jest.fn();
   const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
   return { ...fake, register, onWake, warn, push: createPush({ native: fake.native, register, onWake }) };
@@ -34,7 +37,18 @@ it('registers the token once, however often the socket reconnects', async () => 
   const { push, register } = setup();
   await push.sync();
   await push.sync();
-  expect(register.mock.calls).toEqual([['token-1', 'android']]);
+  expect(register.mock.calls).toEqual([['token-1', 'android', 'en']]);
+});
+
+it('registers the language this phone reads, on the first registration and on a token refresh', async () => {
+  const { push, refresh, register } = setup({ locale: () => 'km' });
+  await push.sync();
+  refresh[0]('token-2');
+  await new Promise(setImmediate);
+  expect(register.mock.calls).toEqual([
+    ['token-1', 'android', 'km'],
+    ['token-2', 'android', 'km'],
+  ]);
 });
 
 it('does not ask for a token when the user refused notifications', async () => {
@@ -69,7 +83,7 @@ it('registers a refreshed token, and survives that failing', async () => {
   refresh[0]('token-bad');
   refresh[0]('token-2');
   await new Promise(setImmediate);
-  expect(register).toHaveBeenLastCalledWith('token-2', 'android');
+  expect(register).toHaveBeenLastCalledWith('token-2', 'android', 'en');
 });
 
 it('tries a failed refresh again on the next sync, or this phone stays silent until a restart', async () => {
@@ -81,7 +95,7 @@ it('tries a failed refresh again on the next sync, or this phone stays silent un
   refresh[0]('token-2');
   await new Promise(setImmediate);
   await push.sync();
-  expect(register).toHaveBeenLastCalledWith('token-2', 'android');
+  expect(register).toHaveBeenLastCalledWith('token-2', 'android', 'en');
   expect(register).toHaveBeenCalledTimes(3);
 });
 
@@ -158,5 +172,5 @@ it('a sync still running at sign-out neither registers nor counts for the next u
 
   getToken.mockResolvedValue('token-new');
   await push.sync();
-  expect(register.mock.calls).toEqual([['token-new', 'android']]);
+  expect(register.mock.calls).toEqual([['token-new', 'android', 'en']]);
 });

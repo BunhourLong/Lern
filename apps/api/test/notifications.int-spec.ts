@@ -15,6 +15,8 @@ const tokensOf = async (a: Actor) =>
   (await db().query<{ token: string }[]>('SELECT token FROM device_tokens WHERE user_id = $1 ORDER BY updated_at', [a.id])).map(
     (r) => r.token,
   );
+const localeOf = async (token: string) =>
+  (await db().query<{ locale: string }[]>('SELECT locale FROM device_tokens WHERE token = $1', [token]))[0]?.locale;
 
 beforeAll(async () => {
   app = await bootApp();
@@ -33,11 +35,34 @@ it('registers a token for the caller', async () => {
   expect(await tokensOf(me)).toEqual([token]);
 });
 
+it('stores the language the phone sends, so its pushes come in that language', async () => {
+  const me = await signIn(app);
+  const token = newToken();
+  await put(me, { token, platform: 'android', locale: 'km' }).expect(204);
+  expect(await localeOf(token)).toBe('km');
+});
+
+it('treats a phone that sends no language as English', async () => {
+  const me = await signIn(app);
+  const token = newToken();
+  await put(me, { token, platform: 'android' }).expect(204);
+  expect(await localeOf(token)).toBe('en');
+});
+
+it('updates the language when the same phone registers again', async () => {
+  const me = await signIn(app);
+  const token = newToken();
+  await put(me, { token, platform: 'android', locale: 'en' }).expect(204);
+  await put(me, { token, platform: 'android', locale: 'km' }).expect(204);
+  expect(await localeOf(token)).toBe('km');
+});
+
 it.each([
   ['an empty token', { token: '', platform: 'android' }],
   ['a token past the limit', { token: 'x'.repeat(4097), platform: 'android' }],
   ['an unknown platform', { token: 'abc', platform: 'web' }],
   ['no platform', { token: 'abc' }],
+  ['a language we do not speak', { token: 'abc', platform: 'android', locale: 'fr' }],
 ])('rejects %s and stores nothing', async (_, body) => {
   const me = await signIn(app);
   await put(me, body).expect(400);

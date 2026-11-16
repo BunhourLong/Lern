@@ -1,4 +1,5 @@
 import { NotificationsService } from './notifications.service';
+import { pushFor } from './domain/push-message';
 import type { NotificationsRepository } from './notifications.repository';
 import type { PushProvider } from './push.provider';
 import type { PushQueue } from './push-queue';
@@ -42,4 +43,30 @@ it('does not touch Redis when nothing in the batch is pushed', async () => {
   const addBulk = jest.fn();
   await service(addBulk).enqueue([{ id: '2', topic: 'driver:connectivity', recipients: ['rider'], payload: {} }]);
   expect(addBulk).not.toHaveBeenCalled();
+});
+
+it('removes a dead token and still retries when only the first language group reported them', async () => {
+  const targets = jest.fn().mockResolvedValue({
+    groups: [
+      { locale: 'en', tokens: ['en-phone'] },
+      { locale: 'km', tokens: ['km-phone'] },
+    ],
+    nowMs: 1000,
+  });
+  const remove = jest.fn().mockResolvedValue(undefined);
+  const send = jest
+    .fn()
+    .mockResolvedValueOnce({ invalid: ['en-phone'], retry: true })
+    .mockResolvedValueOnce({ invalid: [], retry: false });
+  const notifications = new NotificationsService(
+    { targets, remove } as unknown as NotificationsRepository,
+    { send },
+    {} as PushQueue,
+  );
+  const delivered = notifications.deliver(pushFor(cancelled)!);
+  await expect(delivered).rejects.toThrow('FCM asked for a retry');
+  expect(send).toHaveBeenCalledTimes(2);
+  expect(send).toHaveBeenNthCalledWith(1, ['en-phone'], expect.anything(), expect.anything());
+  expect(send).toHaveBeenNthCalledWith(2, ['km-phone'], expect.anything(), expect.anything());
+  expect(remove).toHaveBeenCalledWith(['en-phone']);
 });

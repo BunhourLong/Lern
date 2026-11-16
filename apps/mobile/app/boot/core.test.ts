@@ -70,6 +70,7 @@ function fakePush(overrides: Partial<PushNative> = {}) {
   const messages: (() => void)[] = [];
   const native: PushNative = {
     platform: 'android',
+    locale: () => 'en',
     requestPermission: async () => false,
     getToken: async () => 'fcm-token',
     deleteToken: jest.fn(async () => undefined),

@@ -115,11 +115,13 @@ it('registers this phone for pushes, with a key, and accepts the empty 204', asy
   const s = server({ status: 200, body: tokens(1) }, { status: 204 });
   const { api: client } = api(s);
   await client.verifyOtp('+85512345678', '000000');
-  await expect(client.registerDevice('fcm-token', 'android')).resolves.toBeUndefined();
+  await expect(
+    client.registerDevice('fcm-token', 'android', 'km'),
+  ).resolves.toBeUndefined();
   expect(s.calls[1]).toMatchObject({
     method: 'PUT',
     path: '/me/device-token',
-    body: { token: 'fcm-token', platform: 'android' },
+    body: { token: 'fcm-token', platform: 'android', locale: 'km' },
   });
   expect(
     idempotencyKeySchema.safeParse(s.calls[1].headers[IDEMPOTENCY_KEY_HEADER]).success,

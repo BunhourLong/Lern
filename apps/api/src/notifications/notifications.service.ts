@@ -1,6 +1,6 @@
 import type { RegisterDevice } from '@lern/contracts';
 import { Injectable, type OnApplicationBootstrap } from '@nestjs/common';
-import { type Push, pushFor } from './domain/push-message';
+import { localize, type Push, pushFor } from './domain/push-message';
 import { NotificationsRepository } from './notifications.repository';
 import { PushProvider } from './push.provider';
 import { PushQueue } from './push-queue';
@@ -49,11 +49,17 @@ export class NotificationsService implements OnApplicationBootstrap {
 
   // Tokens are read at send time, so a phone that changed user since the event gets nothing meant for the last one
   async deliver({ recipients, message }: Push): Promise<void> {
-    const { tokens, nowMs } = await this.tokens.targets(recipients);
-    if (tokens.length === 0) return;
+    const { groups, nowMs } = await this.tokens.targets(recipients);
+    if (groups.length === 0) return;
     const ttlMs = message.expiresAt ? Date.parse(message.expiresAt) - nowMs : RIDE_PUSH_TTL_MS;
     if (ttlMs <= 0) return;
-    const { invalid, retry } = await this.provider.send(tokens, message, { nowMs, ttlMs });
+    const invalid: string[] = [];
+    let retry = false;
+    for (const group of groups) {
+      const result = await this.provider.send(group.tokens, localize(message, group.locale), { nowMs, ttlMs });
+      invalid.push(...result.invalid);
+      retry ||= result.retry;
+    }
     if (invalid.length > 0) await this.tokens.remove(invalid);
     // A repeat replaces the earlier notification (same tag), so devices that already got it see no second one
     if (retry) throw new Error('FCM asked for a retry');

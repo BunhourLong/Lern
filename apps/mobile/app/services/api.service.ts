@@ -16,6 +16,7 @@ import {
   type Me,
   meSchema,
   type Offer,
+  type PushLocale,
   type PushPlatform,
   offerSchema,
   type Quote,
@@ -234,10 +235,11 @@ export function createApi(deps: ApiDeps) {
     registerDevice: (
       token: string,
       platform: PushPlatform,
+      locale: PushLocale,
       key = uuid(),
     ): Promise<void> =>
       send('PUT', '/me/device-token', empty, {
-        body: { token, platform },
+        body: { token, platform, locale },
         key,
       }),
     // No key: the server keeps only points newer than the stored one, so a replayed batch changes nothing

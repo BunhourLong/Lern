@@ -42,6 +42,14 @@ it('runs every migration up, down and up again', async () => {
     await ds.runMigrations();
     expect(await hasPostgis()).toBe(true);
     expect(await ds.showMigrations()).toBe(false); // nothing pending
+
+    // A phone registered before the locale column existed must read English after the migration.
+    await ds.undoLastMigration();
+    const [{ id }] = await ds.query<{ id: string }[]>('INSERT INTO users (phone) VALUES ($1) RETURNING id', ['+85510000001']);
+    await ds.query('INSERT INTO device_tokens (token, user_id, platform) VALUES ($1, $2, $3)', ['pre-locale-token', id, 'android']);
+    await ds.runMigrations();
+    expect(await ds.query('SELECT locale FROM device_tokens WHERE token = $1', ['pre-locale-token'])).toEqual([{ locale: 'en' }]);
+    expect(await ds.showMigrations()).toBe(false); // nothing pending
   } finally {
     await ds.destroy();
   }

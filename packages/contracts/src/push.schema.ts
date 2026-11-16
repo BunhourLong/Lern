@@ -3,8 +3,15 @@ import { z } from 'zod';
 export const pushPlatformSchema = z.enum(['android', 'ios']);
 export type PushPlatform = z.infer<typeof pushPlatformSchema>;
 
+export const pushLocaleSchema = z.enum(['en', 'km']);
+export type PushLocale = z.infer<typeof pushLocaleSchema>;
+
 // FCM's token format is opaque and undocumented; the bound only stops a huge body from reaching the table
-export const registerDeviceSchema = z.object({ token: z.string().min(1).max(4096), platform: pushPlatformSchema });
+export const registerDeviceSchema = z.object({
+  token: z.string().min(1).max(4096),
+  platform: pushPlatformSchema,
+  locale: pushLocaleSchema.default('en'),
+});
 export type RegisterDevice = z.infer<typeof registerDeviceSchema>;
 
 // A push only says what to fetch: FCM data values are strings, and no pickup, dropoff or fare passes through Google.
