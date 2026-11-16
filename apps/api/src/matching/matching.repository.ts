@@ -114,10 +114,12 @@ export class MatchingRepository {
     return row?.driverId;
   }
 
-  // Ownership lives in the WHERE: another driver's offer reads as not found
-  async findForDriver(m: EntityManager, offerId: string, driverId: string): Promise<{ rideId: string } | undefined> {
-    const [row] = await m.query<{ rideId: string }[]>(
-      'SELECT ride_id AS "rideId" FROM ride_offers WHERE id = $1 AND driver_id = $2',
+  // Ownership lives in the WHERE: another driver's offer reads as not found. `live` is advisory (accept's guarded
+  // UPDATE decides): it lets a dead offer's accept stop before writing rides.driver_id locks the driver row.
+  async findForDriver(m: EntityManager, offerId: string, driverId: string): Promise<{ rideId: string; live: boolean } | undefined> {
+    const [row] = await m.query<{ rideId: string; live: boolean }[]>(
+      `SELECT ride_id AS "rideId", status = 'pending' AND expires_at > now() AS live
+       FROM ride_offers WHERE id = $1 AND driver_id = $2`,
       [offerId, driverId],
     );
     return row;

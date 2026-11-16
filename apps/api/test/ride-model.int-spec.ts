@@ -4,6 +4,7 @@ import fc from 'fast-check';
 import request from 'supertest';
 import type { App } from 'supertest/types';
 import { DataSource } from 'typeorm';
+import { MatchingRepository } from '../src/matching/matching.repository';
 import { MatchingService } from '../src/matching/matching.service';
 import { type Actor, bootApp, signIn } from './support/actors';
 import { violations } from './support/invariants';
@@ -185,6 +186,62 @@ const command: fc.Arbitrary<Raw> = fc.oneof(
   { weight: 2, arbitrary: fc.constantFrom<Raw>({ kind: 'sweep' }, { kind: 'reconcile' }) },
   { weight: 3, arbitrary: fc.record({ kind: fc.constant('pair' as const), a: single, b: single }) },
 );
+
+// M5.20, seed 1497383226: accepting a dead offer wrote rides.driver_id (FK → FOR KEY SHARE on the driver row) before
+// the offer check failed, so a concurrent sync's SKIP LOCKED passed over that available driver
+it('a stale accept never hides its driver from a concurrent sync', async () => {
+  await reset();
+  const rideIds = new Map<string, string>();
+  const offer0 = { ride: '0', driver: 0 };
+  for (const c of [
+    { kind: 'book', rider: 0, token: '0' },
+    { kind: 'sync', ride: '0' },
+    { kind: 'decline', offer: offer0, by: 0 },
+    { kind: 'book', rider: 1, token: '1' },
+  ] satisfies Command[]) {
+    expect(await run(c, rideIds)).not.toEqual(expect.stringMatching(/^threw/));
+  }
+  const id = await offerId(offer0, rideIds);
+  const repo = app.get(MatchingRepository);
+  const real = repo.accept.bind(repo);
+  let reached!: () => void;
+  const reachedP = new Promise<'reached'>((r) => (reached = () => r('reached')));
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  const spy = jest.spyOn(repo, 'accept').mockImplementation(async (...args) => {
+    reached();
+    await gate;
+    return real(...args);
+  });
+  const accept = http().post(`/offers/${id}/accept`).set(drivers[0].auth).then((res) => res);
+  try {
+    // Fixed code answers before the guarded UPDATE; the old code pauses there with ride 0 assigned in its transaction
+    if ((await Promise.race([reachedP, accept])) === 'reached') {
+      const visible = await db().query<unknown[]>(`SELECT 1 FROM drivers WHERE user_id = $1 FOR UPDATE SKIP LOCKED`, [drivers[0].id]);
+      expect({ driver0LockedByStaleAccept: visible.length === 0 }).toEqual({ driver0LockedByStaleAccept: true });
+    }
+    await run({ kind: 'sync', ride: '1' }, rideIds);
+  } finally {
+    release();
+    await accept.catch(() => undefined); // settled before the next test resets the tables
+    spy.mockRestore();
+  }
+  const res = await accept;
+  expect(res.status).toBe(409);
+  expect(res.body).toMatchObject({ code: 'INVALID_TRANSITION', offer: { id, status: 'declined' } });
+  expect(await observed(rideIds)).toEqual({
+    rides: [
+      ['0', 'searching', null],
+      ['1', 'searching', null],
+    ],
+    offers: [
+      ['0', 0, 'declined'],
+      ['1', 0, 'pending'],
+    ],
+    drivers: ['reserved', 'available', 'available'],
+  });
+  expect(await violations(db())).toEqual([]);
+});
 
 it('keeps every answer and the database equal to the model, with no invariant broken', async () => {
   await fc.assert(

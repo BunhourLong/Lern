@@ -98,6 +98,8 @@ export class MatchingService {
       ride = await this.db.transaction(async (m) => {
         const offer = await this.offers.findForDriver(m, offerId, driverId);
         if (!offer) throw new NotFoundException('Offer not found');
+        // Before assign: its write of rides.driver_id FK-locks the driver row, hiding them from SKIP LOCKED matching
+        if (!offer.live) throw new NotAccepted();
         const assigned = await this.rides.assign(m, driverId, offer.rideId);
         if (!assigned || !(await this.offers.accept(m, offerId, driverId))) throw new NotAccepted();
         if (!(await this.drivers.move(m, driverId, 'assign'))) throw new NotAccepted();
