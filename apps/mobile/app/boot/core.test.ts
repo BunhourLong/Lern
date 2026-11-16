@@ -4,6 +4,10 @@ import type { PushNative } from '../services/push.service';
 import type { KeyValueStore, SecretStore } from '../services/storage.service';
 import { createCore } from './core';
 
+// Deterministic stand-in for SHA-256: depends on salt and PIN, never contains the PIN's digits as written
+const fakeHash = async (salt: string, pin: string) =>
+  Array.from(`${salt}:${pin}`, c => c.charCodeAt(0).toString(16)).join('');
+
 const me = {
   id: '00000000-0000-4000-8000-0000000000d1',
   phone: '+85512345678',
@@ -107,16 +111,33 @@ function deps(
       secret = undefined;
     },
   };
+  let storedPin: string | undefined;
+  const pin: SecretStore = {
+    get: async () => storedPin,
+    set: async v => {
+      storedPin = v;
+    },
+    clear: async () => {
+      storedPin = undefined;
+    },
+  };
   return {
     baseUrl: 'http://api.test',
     fetch: s.fetch,
     io: f.io,
     kv,
     refreshToken,
+    pin,
+    pinHasher: {
+      salt: () => 'salt',
+      hash: fakeHash,
+    },
+    elapsed: () => 0,
     push,
     sleep,
     appVersion: '1.0',
     secret: () => secret,
+    storedPin: () => storedPin,
   };
 }
 const settle = () =>
@@ -650,5 +671,159 @@ describe('push', () => {
     expect(core.stores.activeRide.getState().driver).toEqual(ride('in_progress', 4));
     expect(count(s.calls, 'PUT /me/device-token')).toBe(0);
     warn.mockRestore();
+  });
+});
+
+describe('app lock', () => {
+  const PIN = '123456';
+  const signedIn = async (d: ReturnType<typeof deps>) => {
+    const core = createCore(d);
+    await core.boot();
+    return core;
+  };
+
+  it('is off and unlocked by default', async () => {
+    const core = await signedIn(
+      deps(server(routes()), fakeIo(), 'r'.repeat(43)),
+    );
+    expect(core.stores.security.getState()).toMatchObject({
+      enabled: false,
+      locked: false,
+    });
+  });
+
+  it('boots locked when a PIN is set, and the right PIN unlocks', async () => {
+    const d = deps(server(routes()), fakeIo(), 'r'.repeat(43));
+    await (await signedIn(d)).enableLock(PIN);
+    const core = await signedIn(d); // next launch
+    expect(core.stores.security.getState()).toMatchObject({
+      enabled: true,
+      locked: true,
+    });
+    expect(await core.unlock('000000')).toEqual({ ok: false, waitMs: 0 });
+    expect(core.stores.security.getState().locked).toBe(true);
+    expect(await core.unlock(PIN)).toEqual({ ok: true });
+    expect(core.stores.security.getState()).toMatchObject({
+      locked: false,
+      waitMs: 0,
+    });
+  });
+
+  it('boots locked when the Keychain refuses to say whether a PIN is set', async () => {
+    const d = deps(server(routes()), fakeIo(), 'r'.repeat(43));
+    d.pin.get = () => Promise.reject(new Error('keychain'));
+    const core = await signedIn(d);
+    expect(core.stores.security.getState().locked).toBe(true);
+  });
+
+  it('lock() locks only when a PIN is set', async () => {
+    const core = await signedIn(
+      deps(server(routes()), fakeIo(), 'r'.repeat(43)),
+    );
+    core.lock();
+    expect(core.stores.security.getState().locked).toBe(false);
+    await core.enableLock(PIN);
+    core.lock();
+    expect(core.stores.security.getState().locked).toBe(true);
+  });
+
+  it('shows the wait after the 5th wrong PIN', async () => {
+    const core = await signedIn(
+      deps(server(routes()), fakeIo(), 'r'.repeat(43)),
+    );
+    await core.enableLock(PIN);
+    core.lock();
+    for (let i = 0; i < 5; i++) await core.unlock('000000');
+    expect(core.stores.security.getState()).toMatchObject({
+      locked: true,
+      waitMs: 30_000,
+    });
+  });
+
+  it('the 10th wrong PIN signs out and clears the lock', async () => {
+    const s = server(routes());
+    let t = 0;
+    const d = { ...deps(s, fakeIo(), 'r'.repeat(43)), elapsed: () => t };
+    const core = await signedIn(d);
+    await core.enableLock(PIN);
+    core.lock();
+    let last;
+    for (let i = 0; i < 10; i++) {
+      t += 10_000_000; // past every wait
+      last = await core.unlock('000000');
+    }
+    expect(last).toEqual({ ok: false, wiped: true });
+    expect(s.calls).toContain('POST /auth/logout');
+    expect(d.secret()).toBeUndefined();
+    expect(d.storedPin()).toBeUndefined();
+    expect(core.stores.session.getState().status).toBe('signed_out');
+    expect(core.stores.security.getState()).toMatchObject({
+      enabled: false,
+      locked: false,
+    });
+  });
+
+  it('disableLock needs the right PIN', async () => {
+    const d = deps(server(routes()), fakeIo(), 'r'.repeat(43));
+    const core = await signedIn(d);
+    await core.enableLock(PIN);
+    expect(await core.disableLock('000000')).toEqual({ ok: false, waitMs: 0 });
+    expect(core.stores.security.getState().enabled).toBe(true);
+    expect(await core.disableLock(PIN)).toEqual({ ok: true });
+    expect(core.stores.security.getState().enabled).toBe(false);
+    expect(d.storedPin()).toBeUndefined();
+  });
+
+  it('changePin needs the old PIN', async () => {
+    const d = deps(server(routes()), fakeIo(), 'r'.repeat(43));
+    const core = await signedIn(d);
+    await core.enableLock(PIN);
+    expect(await core.changePin(PIN, '222222')).toEqual({ ok: true });
+    core.lock();
+    expect(await core.unlock(PIN)).toEqual({ ok: false, waitMs: 0 });
+    expect(await core.unlock('222222')).toEqual({ ok: true });
+  });
+
+  it('any sign-out clears the PIN, so the next user on this phone is not locked out', async () => {
+    const d = deps(server(routes()), fakeIo(), 'r'.repeat(43));
+    const core = await signedIn(d);
+    await core.enableLock(PIN);
+    core.lock();
+    await core.signOut();
+    await settle();
+    expect(d.storedPin()).toBeUndefined();
+    expect(core.stores.security.getState()).toMatchObject({
+      enabled: false,
+      locked: false,
+    });
+  });
+
+  it('enableLock leaves the lock off when the Keychain refuses the PIN', async () => {
+    const d = deps(server(routes()), fakeIo(), 'r'.repeat(43));
+    d.pin.set = () => Promise.reject(new Error('keychain'));
+    const core = await signedIn(d);
+    await expect(core.enableLock(PIN)).rejects.toThrow();
+    expect(core.stores.security.getState().enabled).toBe(false);
+  });
+
+  it('boots with the wait that is still running, for the countdown', async () => {
+    const d = deps(server(routes()), fakeIo(), 'r'.repeat(43));
+    const first = await signedIn(d);
+    await first.enableLock(PIN);
+    for (let i = 0; i < 5; i++) await first.unlock('000000');
+    const core = await signedIn(d); // next launch
+    expect(core.stores.security.getState()).toMatchObject({
+      locked: true,
+      waitMs: 30_000,
+    });
+  });
+
+  it('a reinstall drops a PIN the iOS Keychain kept', async () => {
+    const d = deps(server(routes()), fakeIo(), 'r'.repeat(43));
+    await (await signedIn(d)).enableLock(PIN);
+    d.kv.remove('install');
+    const core = await signedIn(d);
+    expect(d.storedPin()).toBeUndefined();
+    expect(core.stores.security.getState().locked).toBe(false);
   });
 });

@@ -10,6 +10,11 @@ import {
   createOfflineQueue,
   type QueuedStep,
 } from '../services/offline-queue.service';
+import {
+  createPinLock,
+  type PinCheck,
+  type PinHasher,
+} from '../services/pin-lock.service';
 import { createPush, type PushNative } from '../services/push.service';
 import { connectSocket, type RealtimeSocket } from '../services/socket.service';
 import type { KeyValueStore, SecretStore } from '../services/storage.service';
@@ -18,6 +23,7 @@ import { appGate, createAppConfigStore } from '../stores/app-config.store';
 import { createConnectionStore } from '../stores/connection.store';
 import { createDriverModeStore } from '../stores/driver-mode.store';
 import { createRawEventsStore } from '../stores/raw-events.store';
+import { createSecurityStore } from '../stores/security.store';
 import { createSessionStore } from '../stores/session.store';
 
 export type CoreDeps = {
@@ -26,6 +32,9 @@ export type CoreDeps = {
   io: typeof io;
   kv: KeyValueStore; // MMKV in the app
   refreshToken: SecretStore; // Keychain in the app
+  pin: SecretStore; // app-lock PIN hash, its own Keychain entry
+  pinHasher: PinHasher; // expo-crypto in the app
+  elapsed: () => number; // monotonic ms for PIN waits (performance.now in the app): the device clock can be moved
   push: PushNative; // React Native Firebase in the app
   appVersion: string; // this build's version, for the minimum-version gate
   sleep?: (ms: number) => Promise<void>; // backoff between offline retries
@@ -49,6 +58,9 @@ export function createCore({
   io,
   kv,
   refreshToken,
+  pin,
+  pinHasher,
+  elapsed,
   push: pushNative,
   appVersion,
   sleep = wait,
@@ -59,6 +71,13 @@ export function createCore({
   const rawEvents = createRawEventsStore();
   const appConfig = createAppConfigStore();
   const connection = createConnectionStore();
+  const security = createSecurityStore();
+  const pinLock = createPinLock({
+    secret: pin,
+    kv,
+    hasher: pinHasher,
+    elapsed,
+  });
   let socket: RealtimeSocket | undefined;
   // Bumped on sign-out: an answer to a request sent before it must not land in the next user's stores
   let epoch = 0;
@@ -78,6 +97,9 @@ export function createCore({
     driverMode.getState().setAvailability(null);
     rawEvents.getState().reset(); // the next user on this phone must not see the last one's rides
     session.getState().signedOut();
+    // The PIN belongs to who was signed in; a Keychain that refuses to clear keeps it until the next sign-out
+    pinLock.clear().catch(() => undefined);
+    security.getState().update({ enabled: false, locked: false, waitMs: 0 });
   };
   const api = createApi({ baseUrl, fetch, refreshToken, onSignedOut: forget });
   const queue = createOfflineQueue({
@@ -161,6 +183,17 @@ export function createCore({
     });
   }
 
+  // A PIN answer: ok runs onOk, a wrong PIN shows its wait, the last allowed wrong PIN signs out
+  async function pinResult(
+    result: PinCheck,
+    onOk: () => void,
+  ): Promise<PinCheck> {
+    if (result.ok) onOk();
+    else if ('wiped' in result) await api.signOut();
+    else security.getState().update({ waitMs: result.waitMs });
+    return result;
+  }
+
   // Runs fn and applies its result only if nobody signed out meanwhile
   async function command<T>(fn: () => Promise<T>, apply: (result: T) => void) {
     const current = live();
@@ -176,6 +209,7 @@ export function createCore({
       rawEvents,
       appConfig,
       connection,
+      security,
     },
     api,
     queue,
@@ -187,8 +221,14 @@ export function createCore({
       // Clear first, then set the flag, so a crash in between checks again instead of keeping the stale token.
       if (kv.get(INSTALL_FLAG) === undefined) {
         await refreshToken.clear();
+        await pinLock.clear();
         kv.set(INSTALL_FLAG, '1');
       }
+      // A Keychain that won't answer locks: the lock fails closed
+      const locked = await pinLock.isEnabled().catch(() => true);
+      security
+        .getState()
+        .update({ enabled: locked, locked, waitMs: pinLock.waitMs() });
       const current = live();
       for (let delay = 1000; current(); delay = Math.min(delay * 2, 60_000)) {
         // A retry after /me failed keeps the access token it got: no second refresh rotation
@@ -214,6 +254,30 @@ export function createCore({
       await start(await api.me());
     },
     signOut: () => api.signOut(),
+
+    // Optional app lock: covers the screen only, the session stays valid behind it
+    lock(): void {
+      if (security.getState().enabled)
+        security.getState().update({ locked: true });
+    },
+    unlock: async (pinCode: string) =>
+      pinResult(await pinLock.check(pinCode), () =>
+        security.getState().update({ locked: false, waitMs: 0 }),
+      ),
+    async enableLock(pinCode: string): Promise<void> {
+      await pinLock.enable(pinCode);
+      security.getState().update({ enabled: true });
+    },
+    disableLock: async (pinCode: string) =>
+      pinResult(await pinLock.disable(pinCode), () =>
+        security
+          .getState()
+          .update({ enabled: false, locked: false, waitMs: 0 }),
+      ),
+    changePin: async (old: string, next: string) =>
+      pinResult(await pinLock.change(old, next), () =>
+        security.getState().update({ waitMs: 0 }),
+      ),
 
     // Time-bound decisions: straight to the server, the caller shows the result or the error now
     book: (quoteId: string) =>

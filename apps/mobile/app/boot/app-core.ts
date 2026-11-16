@@ -2,6 +2,7 @@ import { io } from 'socket.io-client';
 import { Platform } from 'react-native';
 import { createLocationService } from '../services/location.service';
 import { firebasePush } from '../services/firebase-push.service';
+import { expoPinHasher } from '../services/pin-hasher.service';
 import { keychainSecret, mmkvStore } from '../services/storage.service';
 import { createCore } from './core';
 import { followAvailability } from './driver-location';
@@ -17,6 +18,13 @@ export const core = createCore({
   io,
   kv: mmkvStore('lern'),
   refreshToken: keychainSecret('lern.session'),
+  pin: keychainSecret('lern.pin'),
+  pinHasher: expoPinHasher,
+  // Hermes has a monotonic performance.now(); RN 0.88's types don't declare the global
+  elapsed: () =>
+    (
+      globalThis as unknown as { performance: { now(): number } }
+    ).performance.now(),
   push: firebasePush(),
   // shortcut: must match versionName (android/app/build.gradle) and MARKETING_VERSION (Lern.xcodeproj); read it with expo-application once there is a release pipeline
   appVersion: '1.0',
