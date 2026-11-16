@@ -33,7 +33,7 @@ describe('POST /quotes', () => {
     expect(res.status).toBe(HttpStatus.CREATED);
     const body = res.body as Quote;
     // id and expiresAt formats are checked by the response serializer against the contract
-    // pre-M6 moto price, unchanged until rate cards (M6.2): 2000 riel + 1000 riel/km, up to the next 100
+    // the seeded moto rate card (the pre-M6 price): 2000 riel + 1000 riel/km, up to the next 100
     const amountMinor = Math.ceil((2000 + body.distanceM) / 100) * 100;
     expect(body).toMatchObject({ vehicleType: 'moto', fare: { amountMinor, currency: 'KHR' } });
     expect(body.distanceM).toBeGreaterThan(9_000);

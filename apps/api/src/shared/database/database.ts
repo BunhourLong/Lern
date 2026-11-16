@@ -20,6 +20,7 @@ import { DriverLocationsStaleRide1793520000000 } from './migrations/179352000000
 import { CreateRideFlags1793606400000 } from './migrations/1793606400000-create-ride-flags';
 import { CreateDeviceTokens1793692800000 } from './migrations/1793692800000-create-device-tokens';
 import { DeviceTokensLocale1794816000000 } from './migrations/1794816000000-device-tokens-locale';
+import { CreateRateCards1794902400000 } from './migrations/1794902400000-create-rate-cards';
 
 // Migrations are listed, not globbed, so the same list works from ts (tests) and dist (CLI)
 export const migrations = [
@@ -44,6 +45,7 @@ export const migrations = [
   CreateRideFlags1793606400000,
   CreateDeviceTokens1793692800000,
   DeviceTokensLocale1794816000000,
+  CreateRateCards1794902400000,
 ];
 
 export function dataSourceOptions(url: string): DataSourceOptions {
