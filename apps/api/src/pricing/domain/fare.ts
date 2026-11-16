@@ -1,20 +1,33 @@
-import type { Money, VehicleType } from '@lern/contracts';
+import type { Money } from '@lern/contracts';
 
-// shortcut: hard-coded placeholder rates in riel; versioned rate_cards with minimum fare and booking fee land in M6
-const RATES: Record<VehicleType, { base: number; perKm: number }> = {
-  moto: { base: 2000, perKm: 1000 },
-  bajaj: { base: 3000, perKm: 1300 },
-  remork: { base: 4000, perKm: 1500 },
-};
+// Whole riel (KHR only, PLAN M6.0)
+export type RateCard = { base: number; perKm: number; perMin: number; minimumFare: number; bookingFee: number };
 
-const ROUND_TO_RIEL = 100;
+const STEP_RIEL = 100;
+// Common denominator: metres × riel/km needs 1000, seconds × riel/min needs 60
+const DEN = 60_000;
 
-// Integer maths only: work in milli-riel (metres × riel/km), then round up to the next 100 riel
-export function fare(vehicleType: VehicleType, distanceM: number): Money {
-  if (!Number.isSafeInteger(distanceM) || distanceM < 0) throw new RangeError(`Invalid distance: ${distanceM}`);
-  const { base, perKm } = RATES[vehicleType];
-  const milli = base * 1000 + distanceM * perKm;
-  const step = ROUND_TO_RIEL * 1000;
-  const rounded = milli % step === 0 ? milli : milli + step - (milli % step);
-  return { amountMinor: rounded / 1000, currency: 'KHR' };
+function wholeRiel(name: string, value: number): number {
+  if (!Number.isSafeInteger(value) || value < 0) throw new RangeError(`Invalid ${name}: ${value}`);
+  return value;
+}
+
+// The only rounding in money paths: an exact fraction of riel, up to the next 100 riel
+export function ceilToRiel(numerator: number, denominator: number): number {
+  wholeRiel('numerator', numerator);
+  if (wholeRiel('denominator', denominator) === 0) throw new RangeError('Invalid denominator: 0');
+  const rest = numerator % (STEP_RIEL * denominator);
+  return wholeRiel('amount', (numerator - rest) / denominator + (rest === 0 ? 0 : STEP_RIEL));
+}
+
+export function fare(card: RateCard, trip: { distanceM: number; durationS: number }): Money {
+  const { base, perKm, perMin, minimumFare, bookingFee } = card;
+  const { distanceM, durationS } = trip;
+  // Validate exactly the values priced below (a spread would let an extra trip key mask a card field)
+  const used = { base, perKm, perMin, minimumFare, bookingFee, distanceM, durationS };
+  for (const [name, value] of Object.entries(used)) wholeRiel(name, value);
+  const tripUnits = base * DEN + distanceM * perKm * (DEN / 1000) + durationS * perMin * (DEN / 60);
+  const units = Math.max(tripUnits, minimumFare * DEN) + bookingFee * DEN;
+  // Every term is >= 0, so ceilToRiel's safe-integer check on the sum proves every term was exact
+  return { amountMinor: ceilToRiel(units, DEN), currency: 'KHR' };
 }

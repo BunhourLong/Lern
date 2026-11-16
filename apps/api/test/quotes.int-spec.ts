@@ -3,7 +3,6 @@ import { HttpStatus, type INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import type { App } from 'supertest/types';
 import { DataSource } from 'typeorm';
-import { fare } from '../src/pricing/domain/fare';
 import { type Actor, bootApp, signIn } from './support/actors';
 
 let app: INestApplication<App>;
@@ -34,7 +33,9 @@ describe('POST /quotes', () => {
     expect(res.status).toBe(HttpStatus.CREATED);
     const body = res.body as Quote;
     // id and expiresAt formats are checked by the response serializer against the contract
-    expect(body).toMatchObject({ vehicleType: 'moto', fare: fare('moto', body.distanceM) });
+    // pre-M6 moto price, unchanged until rate cards (M6.2): 2000 riel + 1000 riel/km, up to the next 100
+    const amountMinor = Math.ceil((2000 + body.distanceM) / 100) * 100;
+    expect(body).toMatchObject({ vehicleType: 'moto', fare: { amountMinor, currency: 'KHR' } });
     expect(body.distanceM).toBeGreaterThan(9_000);
     expect(body.distanceM).toBeLessThan(9_300);
 
