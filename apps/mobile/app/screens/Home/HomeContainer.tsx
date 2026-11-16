@@ -4,7 +4,7 @@ interface Props {
     
 }
 
-function HomeContainer (props: Props) {
+function HomeContainer (_props: Props) {
     return(
         <HomeScreen
         />
