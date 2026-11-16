@@ -38,6 +38,8 @@ describe('fare (rate card, KHR)', () => {
     ['fractional duration', C, 0, 0.5],
     ['fractional card field', { ...C, perMin: 0.5 }, 0, 0],
     ['overflow', { ...C, perKm: Number.MAX_SAFE_INTEGER }, 1_000_000, 0],
+    // the exact sum (×60000) passes 2^53 while the price (~2e11 riel) would still look safe
+    ['inexact sum', { ...C, perKm: 100_000_000 }, 2_000_000, 0],
   ])('refuses a %s instead of producing a wrong price', (_name, card, distanceM, durationS) => {
     expect(() => fare(card, { distanceM, durationS })).toThrow(RangeError);
   });
@@ -101,6 +103,7 @@ describe('ceilToRiel', () => {
     [1, 0],
     [1, 1.5],
     [Number.MAX_SAFE_INTEGER, 1], // rounds past the safe range
+    [2 ** 53 + 2, 60_000], // unsafe numerator, safe-looking result
   ])('refuses %p / %p', (numerator, denominator) => {
     expect(() => ceilToRiel(numerator, denominator)).toThrow(RangeError);
   });
