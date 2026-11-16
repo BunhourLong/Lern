@@ -43,7 +43,9 @@ it('runs every migration up, down and up again', async () => {
     expect(await hasPostgis()).toBe(true);
     expect(await ds.showMigrations()).toBe(false); // nothing pending
 
-    // A quote priced before rate cards existed points at the seeded card of its vehicle type afterwards.
+    // A quote priced before rate cards existed points at the seeded card of its vehicle type afterwards, and
+    // reads duration 0, the duration it was priced with. Undo twice: quotes.duration_s, then rate cards.
+    await ds.undoLastMigration();
     await ds.undoLastMigration();
     const [{ id: riderId }] = await ds.query<{ id: string }[]>('INSERT INTO users (phone) VALUES ($1) RETURNING id', ['+85510000002']);
     const [{ id: quoteId }] = await ds.query<{ id: string }[]>(
@@ -53,10 +55,11 @@ it('runs every migration up, down and up again', async () => {
     );
     await ds.runMigrations();
     const [moto] = await ds.query<{ id: string }[]>(`SELECT id FROM rate_cards WHERE vehicle_type = 'moto'`);
-    expect(await ds.query('SELECT rate_card_id FROM quotes WHERE id = $1', [quoteId])).toEqual([{ rate_card_id: moto.id }]);
+    expect(await ds.query('SELECT rate_card_id, duration_s FROM quotes WHERE id = $1', [quoteId])).toEqual([{ rate_card_id: moto.id, duration_s: 0 }]);
 
     // A phone registered before the locale column existed must read English after the migration.
-    // Undo twice: rate cards, then the locale column (each new migration adds one undo here).
+    // Undo three times: quotes.duration_s, rate cards, then the locale column (each new migration adds one undo here).
+    await ds.undoLastMigration();
     await ds.undoLastMigration();
     await ds.undoLastMigration();
     const [{ id }] = await ds.query<{ id: string }[]>('INSERT INTO users (phone) VALUES ($1) RETURNING id', ['+85510000001']);

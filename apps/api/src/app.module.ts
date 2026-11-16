@@ -37,7 +37,7 @@ export class AppModule {
         LocationModule,
         MatchingModule.forRoot(config),
         NotificationsModule.forRoot(config),
-        PricingModule,
+        PricingModule.forRoot(config),
         RidesModule,
         RealtimeModule,
       ],

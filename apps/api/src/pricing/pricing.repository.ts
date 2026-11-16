@@ -2,6 +2,7 @@ import type { CreateQuote, Money, Point, VehicleType } from '@lern/contracts';
 import { Injectable } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import type { RateCard } from './domain/fare';
+import type { Route } from './route.provider';
 
 export type BookableQuote = {
   vehicleType: VehicleType;
@@ -32,14 +33,14 @@ export class PricingRepository {
   async insertQuote(
     riderId: string,
     input: CreateQuote,
-    distanceM: number,
+    route: Route,
     fare: Money,
     rateCardId: string,
     ttlSeconds: number,
   ): Promise<{ id: string; expiresAt: Date }> {
     const [row] = await this.db.query<{ id: string; expiresAt: Date }[]>(
-      `INSERT INTO quotes (rider_id, pickup, dropoff, vehicle_type, distance_m, amount_minor, currency, rate_card_id, expires_at)
-       VALUES ($1, ST_SetSRID(ST_MakePoint($2, $3), 4326), ST_SetSRID(ST_MakePoint($4, $5), 4326), $6, $7, $8, $9, $10, now() + make_interval(secs => $11))
+      `INSERT INTO quotes (rider_id, pickup, dropoff, vehicle_type, distance_m, duration_s, amount_minor, currency, rate_card_id, expires_at)
+       VALUES ($1, ST_SetSRID(ST_MakePoint($2, $3), 4326), ST_SetSRID(ST_MakePoint($4, $5), 4326), $6, $7, $8, $9, $10, $11, now() + make_interval(secs => $12))
        RETURNING id, expires_at AS "expiresAt"`,
       [
         riderId,
@@ -48,7 +49,8 @@ export class PricingRepository {
         input.dropoff.lng,
         input.dropoff.lat,
         input.vehicleType,
-        distanceM,
+        route.distanceM,
+        route.durationS,
         fare.amountMinor,
         fare.currency,
         rateCardId,
