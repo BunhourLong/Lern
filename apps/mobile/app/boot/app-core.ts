@@ -18,6 +18,8 @@ export const core = createCore({
   kv: mmkvStore('lern'),
   refreshToken: keychainSecret('lern.session'),
   push: firebasePush(),
+  // shortcut: must match versionName (android/app/build.gradle) and MARKETING_VERSION (Lern.xcodeproj); read it with expo-application once there is a release pipeline
+  appVersion: '1.0',
 });
 
 // Returns the unsubscribe for useEffect. Failures go in the raw log so the screen shows them.

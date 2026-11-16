@@ -1,6 +1,8 @@
 import {
   type ActiveRides,
   activeRidesSchema,
+  type AppConfig,
+  appConfigSchema,
   type Availability,
   availabilitySchema,
   type CancelReason,
@@ -180,6 +182,8 @@ export function createApi(deps: ApiDeps) {
     // kept); none or refused = sign in again
     restore: refresh,
     signOut,
+    appConfig: (): Promise<AppConfig> =>
+      send('GET', '/app-config', appConfigSchema, { auth: false }),
     requestOtp: (phone: string) =>
       send('POST', '/auth/otp/request', empty, {
         body: { phone },

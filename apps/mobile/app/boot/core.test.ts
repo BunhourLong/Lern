@@ -115,6 +115,7 @@ function deps(
     refreshToken,
     push,
     sleep,
+    appVersion: '1.0',
     secret: () => secret,
   };
 }
@@ -405,6 +406,110 @@ it('retries only /me (not the refresh) when the server fails it at boot, also on
   await core.boot();
   expect(core.stores.session.getState().status).toBe('signed_in');
   expect(s.calls.filter(c => c === 'POST /auth/refresh')).toHaveLength(1);
+});
+
+const androidStoreUrl =
+  'https://play.google.com/store/apps/details?id=com.lern';
+
+describe('app config', () => {
+  const config = (maintenance = false) => ({
+    maintenance,
+    ios: null,
+    android: { minVersion: '9.0', storeUrl: androidStoreUrl },
+  });
+
+  it('asks for an update when the app is below the platform minimum', async () => {
+    const s = server(
+      routes({ 'GET /app-config': () => ({ status: 200, body: config() }) }),
+    );
+    const core = createCore(deps(s, fakeIo(), 'r'.repeat(43)));
+    await core.boot();
+    await settle();
+    expect(core.stores.appConfig.getState().gate).toEqual({
+      status: 'update_required',
+      storeUrl: androidStoreUrl,
+    });
+  });
+
+  it('goes into maintenance when the config says so', async () => {
+    const s = server(
+      routes({
+        'GET /app-config': () => ({ status: 200, body: config(true) }),
+      }),
+    );
+    const core = createCore(deps(s, fakeIo(), 'r'.repeat(43)));
+    await core.boot();
+    await settle();
+    expect(core.stores.appConfig.getState().gate).toEqual({
+      status: 'maintenance',
+    });
+  });
+
+  it('stays ok when /app-config is unreachable, and the session still boots', async () => {
+    const s = server(routes()); // no route: the request fails at the network
+    const core = createCore(deps(s, fakeIo(), 'r'.repeat(43)));
+    await core.boot();
+    await settle();
+    expect(core.stores.appConfig.getState().gate).toEqual({ status: 'ok' });
+    expect(core.stores.session.getState().status).toBe('signed_in');
+  });
+
+  it('stays ok when /app-config answers a body the contract rejects', async () => {
+    const s = server(
+      routes({
+        'GET /app-config': () => ({
+          status: 200,
+          body: { maintenance: 'yes', ios: null, android: null },
+        }),
+      }),
+    );
+    const core = createCore(deps(s, fakeIo(), 'r'.repeat(43)));
+    await core.boot();
+    await settle();
+    expect(core.stores.appConfig.getState().gate).toEqual({ status: 'ok' });
+  });
+
+  it('does not wait for /app-config before restoring the session', async () => {
+    const s = server(routes());
+    const realFetch = s.fetch;
+    let answer!: () => void;
+    const core = createCore({
+      ...deps(s, fakeIo(), 'r'.repeat(43)),
+      fetch: (async (url: string, init: RequestInit) => {
+        if (init.method === 'GET' && url.endsWith('/app-config'))
+          await new Promise<void>(resolve => (answer = resolve)); // no answer until the test allows one
+        return realFetch(url, init);
+      }) as typeof fetch,
+    });
+    await core.boot();
+    expect(core.stores.session.getState().status).toBe('signed_in');
+    expect(core.stores.appConfig.getState().gate).toBeNull();
+    answer(); // only now does /app-config answer; before this boot had already resolved
+    await settle();
+  });
+
+  it('keeps the gate on sign-out: it is not per user', async () => {
+    const s = server(
+      routes({
+        'GET /app-config': () => ({ status: 200, body: config(true) }),
+        'POST /auth/logout': () => ({ status: 204 }),
+      }),
+    );
+    const core = createCore(deps(s, fakeIo(), 'r'.repeat(43)));
+    await core.boot();
+    await settle();
+    expect(core.stores.appConfig.getState().gate).toEqual({
+      status: 'maintenance',
+    });
+
+    await core.signOut();
+    await settle();
+
+    expect(core.stores.appConfig.getState().gate).toEqual({
+      status: 'maintenance',
+    });
+    expect(core.stores.session.getState().status).toBe('signed_out');
+  });
 });
 
 describe('push', () => {

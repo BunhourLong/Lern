@@ -14,6 +14,7 @@ import { createPush, type PushNative } from '../services/push.service';
 import { connectSocket, type RealtimeSocket } from '../services/socket.service';
 import type { KeyValueStore, SecretStore } from '../services/storage.service';
 import { createActiveRideStore } from '../stores/active-ride.store';
+import { appGate, createAppConfigStore } from '../stores/app-config.store';
 import { createDriverModeStore } from '../stores/driver-mode.store';
 import { createRawEventsStore } from '../stores/raw-events.store';
 import { createSessionStore } from '../stores/session.store';
@@ -25,6 +26,7 @@ export type CoreDeps = {
   kv: KeyValueStore; // MMKV in the app
   refreshToken: SecretStore; // Keychain in the app
   push: PushNative; // React Native Firebase in the app
+  appVersion: string; // this build's version, for the minimum-version gate
   sleep?: (ms: number) => Promise<void>; // backoff between offline retries
 };
 
@@ -47,12 +49,14 @@ export function createCore({
   kv,
   refreshToken,
   push: pushNative,
+  appVersion,
   sleep = wait,
 }: CoreDeps) {
   const session = createSessionStore();
   const activeRide = createActiveRideStore();
   const driverMode = createDriverModeStore();
   const rawEvents = createRawEventsStore();
+  const appConfig = createAppConfigStore();
   let socket: RealtimeSocket | undefined;
   // Bumped on sign-out: an answer to a request sent before it must not land in the next user's stores
   let epoch = 0;
@@ -93,6 +97,21 @@ export function createCore({
       resync();
     },
   });
+
+  // Started, never awaited: a slow or missing /app-config must not delay session restore, and any failure (offline,
+  // a 5xx, a rejected body) is ok — never lock users out when the API is down
+  async function checkAppConfig(): Promise<void> {
+    try {
+      const config = await api.appConfig();
+      appConfig
+        .getState()
+        .setGate(appGate(config, pushNative.platform, appVersion));
+    } catch {
+      appConfig
+        .getState()
+        .setGate(appGate(null, pushNative.platform, appVersion));
+    }
+  }
 
   // After every (re)connect: what was missed is not replayed, so read the snapshot, then send what waited
   async function resync(): Promise<void> {
@@ -145,12 +164,13 @@ export function createCore({
   }
 
   return {
-    stores: { session, activeRide, driverMode, rawEvents },
+    stores: { session, activeRide, driverMode, rawEvents, appConfig },
     api,
     queue,
     // App start: a stored refresh token becomes a session. Offline keeps the session 'restoring' (the token stays,
     // the queue keeps filling) and tries again with backoff; only none or refused means sign in again.
     async boot(): Promise<void> {
+      checkAppConfig();
       // A reinstall can still find the old token in the iOS Keychain: drop it before any restore attempt.
       // Clear first, then set the flag, so a crash in between checks again instead of keeping the stale token.
       if (kv.get(INSTALL_FLAG) === undefined) {
