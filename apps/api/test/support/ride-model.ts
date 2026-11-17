@@ -246,7 +246,7 @@ function steps(m: Model, c: Command): (() => Outcome)[] {
       expired = true;
       return 'ok';
     },
-    read, // its list only matters to the lock, which needs the offer expired
+    () => (expired ? read() : 'ok'),
     () => {
       if (expired) sync(m, c.offer.ride, seen);
       return 'ok';
