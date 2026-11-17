@@ -121,7 +121,8 @@ function moveRide(r: Ride, action: RideAction, actor: RideActor): boolean {
   return true;
 }
 
-function sync(m: Model, token: string): void {
+// seen: the drivers available when sync read its candidates, before it locked one (a single-step sync reads them now)
+function sync(m: Model, token: string, seen?: number[]): void {
   const r = rideOf(m, token);
   const pending = pendingOf(m, token);
   if (r.status !== 'searching') {
@@ -136,7 +137,9 @@ function sync(m: Model, token: string): void {
     moveRide(r, 'expire', 'system');
     return;
   }
-  const d = m.drivers.findIndex((a, i) => a === 'available' && !m.offers.some((o) => o.ride === token && o.driver === i));
+  const d = m.drivers.findIndex(
+    (a, i) => a === 'available' && !m.offers.some((o) => o.ride === token && o.driver === i) && (seen?.includes(i) ?? true),
+  );
   if (d < 0) return;
   moveDriver(m, d, 'reserve');
   m.offers.push({ ride: token, driver: d, status: 'pending', lapsed: false });
@@ -213,9 +216,25 @@ export function apply(m: Model, c: Command): Outcome {
   }
 }
 
-// One step per transaction the API commits. The timer's job (MatchingService.expire) expires the offer and releases
-// its driver, then syncs the ride in a second transaction, only if the first one expired the offer.
+// One step per point where another transaction's commit can land. MatchingService.sync reads its candidates
+// unlocked, then locks one from that list, so a driver released in between is missed; the ride lock it holds
+// serialises everything else, so the read only needs driver availability. The timer's job (MatchingService.expire)
+// expires the offer and releases its driver, then syncs the ride in a second transaction, only if it expired the offer.
 function steps(m: Model, c: Command): (() => Outcome)[] {
+  let seen: number[] | undefined;
+  const read = () => {
+    seen = m.drivers.flatMap((a, i) => (a === 'available' ? [i] : []));
+    return 'ok';
+  };
+  if (c.kind === 'sync') {
+    return [
+      read,
+      () => {
+        sync(m, c.ride, seen);
+        return 'ok';
+      },
+    ];
+  }
   if (c.kind !== 'timer') return [() => apply(m, c)];
   let expired = false;
   return [
@@ -227,8 +246,9 @@ function steps(m: Model, c: Command): (() => Outcome)[] {
       expired = true;
       return 'ok';
     },
+    read, // its list only matters to the lock, which needs the offer expired
     () => {
-      if (expired) sync(m, c.offer.ride);
+      if (expired) sync(m, c.offer.ride, seen);
       return 'ok';
     },
   ];

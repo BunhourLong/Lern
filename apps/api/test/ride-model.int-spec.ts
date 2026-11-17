@@ -4,6 +4,7 @@ import fc from 'fast-check';
 import request from 'supertest';
 import type { App } from 'supertest/types';
 import { DataSource } from 'typeorm';
+import { EtaProvider } from '../src/matching/eta.provider';
 import { MatchingRepository } from '../src/matching/matching.repository';
 import { MatchingService } from '../src/matching/matching.service';
 import { type Actor, bootApp, signIn } from './support/actors';
@@ -301,6 +302,75 @@ it('two timers that both release before either sync match the model', async () =
   });
   expect(await violations(db())).toEqual([]);
   expect(expectations(model, pair).map((e) => ({ outcome: e.outcome, state: e.state }))).toContainEqual({ outcome, state });
+});
+
+// M5.24: sync reads its candidates unlocked, ranks them, then locks one from that list, so a driver released in
+// between (here by X's timer) is missed: X→d1 and Y→d2 with d0 free, which only a read-then-lock sync gives
+it("a driver released between sync's candidate read and its lock is missed, as the model says", async () => {
+  await reset();
+  const rideIds = new Map<string, string>();
+  const model = initialModel();
+  for (const c of [
+    { kind: 'book', rider: 0, token: 'X' },
+    { kind: 'sync', ride: 'X' },
+    { kind: 'book', rider: 1, token: 'Y' },
+  ] satisfies Command[]) {
+    expect(await run(c, rideIds)).toEqual(apply(model, c));
+  }
+  expect(await observed(rideIds)).toEqual(snapshot(model)); // X offered to d0, Y searching with no offer
+  const eta = app.get(EtaProvider);
+  const real = eta.rank.bind(eta);
+  let reached!: () => void;
+  const reachedP = new Promise<void>((r) => (reached = r));
+  let open!: () => void;
+  const gate = new Promise<void>((r) => (open = r));
+  const spy = jest.spyOn(eta, 'rank').mockImplementationOnce(async (...args) => {
+    reached();
+    await gate; // Y's sync holds its candidate list (d1, d2) while X's timer frees d0
+    return real(...args);
+  });
+  const syncY = matching().sync(rideIds.get('Y')!);
+  try {
+    // A sync that returned without ranking would leave the one-shot gate to X's timer, which would then hang
+    expect(await Promise.race([reachedP.then(() => 'reached'), syncY.then(() => 'returned')])).toBe('reached');
+    expect(await run({ kind: 'timer', offer: { ride: 'X', driver: 0 } }, rideIds)).toBe('ok');
+  } finally {
+    open();
+    await syncY.catch(() => undefined);
+    spy.mockRestore();
+  }
+  await syncY;
+  expect(await observed(rideIds)).toEqual({
+    rides: [
+      ['X', 'searching', null],
+      ['Y', 'searching', null],
+    ],
+    offers: [
+      ['X', 0, 'expired'],
+      ['X', 1, 'pending'],
+      ['Y', 2, 'pending'],
+    ],
+    drivers: ['available', 'reserved', 'reserved'],
+  });
+  expect(await violations(db())).toEqual([]);
+  // X's new offer to x, Y's to y, the third driver free
+  const offered = (x: number, y: number) =>
+    JSON.stringify({
+      rides: [
+        ['X', 'searching', null],
+        ['Y', 'searching', null],
+      ],
+      offers: [
+        ['X', 0, 'expired'],
+        ['X', x, 'pending'],
+        ['Y', y, 'pending'],
+      ].sort(),
+      drivers: [0, 1, 2].map((d) => (d === x || d === y ? 'reserved' : 'available')),
+    });
+  const pair: Command = { kind: 'pair', a: { kind: 'timer', offer: { ride: 'X', driver: 0 } }, b: { kind: 'sync', ride: 'Y' } };
+  expect(new Set(expectations(model, pair).map((e) => JSON.stringify(e.state)))).toEqual(
+    new Set([offered(2, 1), offered(1, 2), offered(1, 0)]),
+  );
 });
 
 it('interleaves two step lists in every order that keeps each list in its own order', () => {
