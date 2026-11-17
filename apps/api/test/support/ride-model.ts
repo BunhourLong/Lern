@@ -142,7 +142,7 @@ function sync(m: Model, token: string): void {
   m.offers.push({ ride: token, driver: d, status: 'pending', lapsed: false });
 }
 
-// Applies one (non-pair) command to the model and returns what the API must answer
+// Applies one single-transaction command (not a pair or timer) to the model and returns what the API must answer
 export function apply(m: Model, c: Command): Outcome {
   switch (c.kind) {
     case 'book':
@@ -189,14 +189,6 @@ export function apply(m: Model, c: Command): Outcome {
       if (o.status === 'pending') o.lapsed = true;
       return 'ok';
     }
-    case 'timer': {
-      const o = offerOf(m, c.offer);
-      if (o.status !== 'pending') return 'ok';
-      o.status = 'expired';
-      moveDriver(m, o.driver, 'release');
-      sync(m, o.ride);
-      return 'ok';
-    }
     case 'cancel': {
       const r = rideOf(m, c.ride);
       if ('driver' in c.by && r.driver !== c.by.driver) return 404;
@@ -215,9 +207,51 @@ export function apply(m: Model, c: Command): Outcome {
       if (m.drivers[c.driver] === (c.online ? 'available' : 'offline')) return 200;
       return moveDriver(m, c.driver, c.online ? 'go_online' : 'go_offline') ? 200 : 409;
     }
+    case 'timer':
     case 'pair':
-      throw new Error('a pair has two possible orders; apply each command');
+      throw new Error(`a ${c.kind} takes effect in steps; use expectations`);
   }
+}
+
+// One step per transaction the API commits. The timer's job (MatchingService.expire) expires the offer and releases
+// its driver, then syncs the ride in a second transaction, only if the first one expired the offer.
+function steps(m: Model, c: Command): (() => Outcome)[] {
+  if (c.kind !== 'timer') return [() => apply(m, c)];
+  let expired = false;
+  return [
+    () => {
+      const o = offerOf(m, c.offer);
+      if (o.status !== 'pending') return 'ok';
+      o.status = 'expired';
+      moveDriver(m, o.driver, 'release');
+      expired = true;
+      return 'ok';
+    },
+    () => {
+      if (expired) sync(m, c.offer.ride);
+      return 'ok';
+    },
+  ];
+}
+
+// Every merge of two sequences that keeps each one's own order
+export const interleavings = <T>(a: T[], b: T[]): T[][] =>
+  !a.length || !b.length
+    ? [[...a, ...b]]
+    : [...interleavings(a.slice(1), b).map((r) => [a[0], ...r]), ...interleavings(a, b.slice(1)).map((r) => [b[0], ...r])];
+
+// Every way the command could take effect, each with the model after it, the API's answer and the database state.
+// A pair's two commands run at once, so their steps can interleave; a command's answer is its last step's.
+export function expectations(model: Model, c: Command) {
+  const cs = c.kind === 'pair' ? [c.a, c.b] : [c];
+  const [a, b = []] = cs.map((x, i) => steps(model, x).map(() => i)); // step lengths only; nothing runs on model
+  return interleavings(a, b).map((merge) => {
+    const m = structuredClone(model);
+    const pending = cs.map((x) => steps(m, x));
+    const answers: Outcome[] = [];
+    for (const i of merge) answers[i] = pending[i].shift()!();
+    return { m, outcome: c.kind === 'pair' ? answers : answers[0], state: snapshot(m) };
+  });
 }
 
 // What the database must hold: rides in created_at order, offers sorted, each driver's availability

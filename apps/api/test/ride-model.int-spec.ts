@@ -13,7 +13,9 @@ import {
   apply,
   type Command,
   DRIVERS,
+  expectations,
   initialModel,
+  interleavings,
   type OfferRef,
   type Outcome,
   type Raw,
@@ -24,7 +26,7 @@ import {
 
 // PLAN.md M4: random sequences of rider, driver and timer commands against the real API and a pure model of the
 // three state machines. After every command the answer and the database match the model, and no invariant query
-// finds a violation. A `pair` runs two commands at once; the result must match one of their two orders.
+// finds a violation. A `pair` runs two commands at once; the result must match some interleaving of their transactions.
 // Nothing runs on its own (no worker, sweep or reconcile timer) and wall time decides nothing (TTL and deadline
 // 600 s): syncs, sweeps, offers going due, timers firing and the deadline passing are commands. A lapsed offer is
 // due only 1 ms before the next command, far inside the reconciler's 5 s grace for lost timers.
@@ -243,6 +245,72 @@ it('a stale accept never hides its driver from a concurrent sync', async () => {
   expect(await violations(db())).toEqual([]);
 });
 
+// M5.22, seed -378302069: expire is two transactions (expire + release, then sync), so two timers can both release
+// their drivers before either ride syncs, an outcome neither serial order gives
+it('two timers that both release before either sync match the model', async () => {
+  await reset();
+  const rideIds = new Map<string, string>();
+  const model = initialModel();
+  for (const c of [
+    { kind: 'book', rider: 0, token: 'X' },
+    { kind: 'sync', ride: 'X' },
+    { kind: 'book', rider: 1, token: 'Y' },
+    { kind: 'sync', ride: 'Y' },
+  ] satisfies Command[]) {
+    expect(await run(c, rideIds)).toEqual(apply(model, c));
+  }
+  expect(await observed(rideIds)).toEqual(snapshot(model)); // X offered to d0, Y to d1, d2 free
+  const pair: Command = {
+    kind: 'pair',
+    a: { kind: 'timer', offer: { ride: 'X', driver: 0 } },
+    b: { kind: 'timer', offer: { ride: 'Y', driver: 1 } },
+  };
+  const svc = matching();
+  const real = svc.sync.bind(svc);
+  let arrived = 0;
+  let open!: () => void;
+  const barrier = new Promise<void>((r) => (open = r));
+  const spy = jest.spyOn(svc, 'sync').mockImplementation(async (rideId) => {
+    if (++arrived === 2) open();
+    await barrier; // each expire's sync waits until both timers have committed their release
+    return real(rideId);
+  });
+  let outcome: Outcome;
+  try {
+    outcome = await run(pair, rideIds);
+  } finally {
+    spy.mockRestore();
+  }
+  const state = await observed(rideIds);
+  // The gate held: each ride got the nearest driver free once both were released
+  expect({ outcome, state }).toEqual({
+    outcome: ['ok', 'ok'],
+    state: {
+      rides: [
+        ['X', 'searching', null],
+        ['Y', 'searching', null],
+      ],
+      offers: [
+        ['X', 0, 'expired'],
+        ['X', 1, 'pending'],
+        ['Y', 0, 'pending'],
+        ['Y', 1, 'expired'],
+      ],
+      drivers: ['reserved', 'reserved', 'available'],
+    },
+  });
+  expect(await violations(db())).toEqual([]);
+  expect(expectations(model, pair).map((e) => ({ outcome: e.outcome, state: e.state }))).toContainEqual({ outcome, state });
+});
+
+it('interleaves two step lists in every order that keeps each list in its own order', () => {
+  expect(interleavings([1, 2], [3])).toEqual([
+    [1, 2, 3],
+    [1, 3, 2],
+    [3, 1, 2],
+  ]);
+});
+
 it('keeps every answer and the database equal to the model, with no invariant broken', async () => {
   await fc.assert(
     fc.asyncProperty(fc.array(command, { maxLength: 40, size: 'max' }), async (raws) => {
@@ -254,14 +322,7 @@ it('keeps every answer and the database equal to the model, with no invariant br
         if (!c) continue;
         const outcome = await attempt(c, rideIds);
         const state = await observed(rideIds);
-        // Every order the command could have taken effect in, with what the model says for each
-        const orders = c.kind === 'pair' ? [[c.a, c.b], [c.b, c.a]] : [[c]];
-        const expected = orders.map((order) => {
-          const m = structuredClone(model);
-          const outcomes = order.map((o) => apply(m, o));
-          const answer = c.kind !== 'pair' ? outcomes[0] : order[0] === c.a ? outcomes : outcomes.reverse();
-          return { m, seen: { step, command: c, outcome: answer, state: snapshot(m) } };
-        });
+        const expected = expectations(model, c).map(({ m, outcome, state }) => ({ m, seen: { step, command: c, outcome, state } }));
         const seen = { step, command: c, outcome, state };
         expect(expected.map((e) => e.seen)).toContainEqual(seen);
         model = expected.find((e) => JSON.stringify(e.seen) === JSON.stringify(seen))!.m; // same key order both sides
