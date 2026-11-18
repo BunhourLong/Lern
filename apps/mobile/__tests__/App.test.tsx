@@ -7,32 +7,40 @@ import App from '../App';
 import { startApp } from '../app/boot/app-core';
 
 jest.mock('../app/boot/app-core', () => {
+  const { createAppConfigStore } = jest.requireActual<
+    typeof import('../app/stores/app-config.store')
+  >('../app/stores/app-config.store');
   const { createLanguageStore } = jest.requireActual<
     typeof import('../app/stores/language.store')
   >('../app/stores/language.store');
+  const { createSessionStore } = jest.requireActual<
+    typeof import('../app/stores/session.store')
+  >('../app/stores/session.store');
   const language = createLanguageStore(
     { get: () => undefined, set: jest.fn(), remove: jest.fn() },
     () => 'km-KH',
   );
-  return { core: { stores: { language } }, startApp: jest.fn() };
+  return {
+    core: {
+      stores: {
+        language,
+        session: createSessionStore(),
+        appConfig: createAppConfigStore(),
+      },
+    },
+    startApp: jest.fn(),
+  };
 });
 jest.mock(
   'react-native-safe-area-context',
   () => jest.requireActual('react-native-safe-area-context/jest/mock').default,
 );
-jest.mock('../app/screens/Debug/DebugContainer', () => {
-  const { Text } =
-    jest.requireActual<typeof import('react-native')>('react-native');
-  const { useT } =
-    jest.requireActual<typeof import('../app/i18n')>('../app/i18n');
-  return function DebugContainer() {
-    const t = useT();
-    return <Text>{t('common.retry')}</Text>;
-  };
-});
+jest.mock('../app/screens/Debug/DebugContainer', () => () => null);
 
-test('renders in the device language and starts the app once', async () => {
+test('shows the loading gate in the device language and starts the app once', async () => {
   await render(<App />);
-  expect(screen.getByText('ព្យាយាមម្តងទៀត')).toBeOnTheScreen();
+  expect(
+    screen.getByRole('progressbar', { name: 'កំពុងដំណើរការ' }),
+  ).toBeOnTheScreen();
   expect(startApp).toHaveBeenCalledTimes(1);
 });

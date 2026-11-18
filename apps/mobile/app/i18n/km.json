@@ -2,5 +2,18 @@
   "common.retry": "ព្យាយាមម្តងទៀត",
   "debug.language.phone": "ភាសាទូរសព្ទ",
   "debug.language.en": "English",
-  "debug.language.km": "ខ្មែរ"
+  "debug.language.km": "ខ្មែរ",
+  "route.loading": "កំពុងដំណើរការ",
+  "route.maintenance.title": "កំពុងថែទាំប្រព័ន្ធ",
+  "route.maintenance.body": "អ្នកមិនអាចប្រើ Lern បានជាបណ្តោះអាសន្នទេ។ សូមព្យាយាមម្តងទៀតនៅពេលក្រោយ។",
+  "route.update.title": "ត្រូវធ្វើបច្ចុប្បន្នភាព",
+  "route.update.body": "សូមធ្វើបច្ចុប្បន្នភាពកម្មវិធី Lern ដើម្បីបន្តប្រើប្រាស់។",
+  "route.update.openStore": "បើកហាងកម្មវិធី",
+  "route.update.error": "មិនអាចបើកហាងកម្មវិធីបានទេ។ សូមព្យាយាមម្តងទៀត។",
+  "route.login.title": "ចូលគណនី",
+  "route.login.body": "ផ្ទាំងចូលគណនីនឹងមាននៅពេលក្រោយ។",
+  "route.driver.title": "ទំព័រដើមសម្រាប់អ្នកបើកបរ",
+  "route.rider.title": "ទំព័រដើមសម្រាប់អ្នកដំណើរ",
+  "route.debug": "ពិនិត្យកំហុស",
+  "route.back": "ត្រឡប់ក្រោយ"
 }

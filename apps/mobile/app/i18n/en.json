@@ -2,5 +2,18 @@
   "common.retry": "Try again",
   "debug.language.phone": "Phone",
   "debug.language.en": "English",
-  "debug.language.km": "ខ្មែរ"
+  "debug.language.km": "ខ្មែរ",
+  "route.loading": "Loading",
+  "route.maintenance.title": "Under maintenance",
+  "route.maintenance.body": "Lern is temporarily unavailable. Please try again later.",
+  "route.update.title": "Update required",
+  "route.update.body": "Update Lern to continue using the app.",
+  "route.update.openStore": "Open app store",
+  "route.update.error": "Could not open the app store. Try again.",
+  "route.login.title": "Sign in",
+  "route.login.body": "sign-in screen comes next",
+  "route.driver.title": "Driver home",
+  "route.rider.title": "Rider home",
+  "route.debug": "Debug",
+  "route.back": "Back"
 }
