@@ -134,6 +134,11 @@ describe('stuck trips', () => {
     db().query<{ reason: string; resolved_at: Date | null }[]>('SELECT reason, resolved_at FROM ride_flags WHERE ride_id = $1 ORDER BY id', [rideId]);
   const rideRow = async (id: string) =>
     (await db().query<{ status: string; version: number }[]>('SELECT status, version FROM rides WHERE id = $1', [id]))[0];
+  // Trips left by a test sit seconds from a threshold (599 s silent, 7199 s long); make them healthy so later tests can't count them
+  afterEach(async () => {
+    await db().query('UPDATE driver_locations SET received_at = now()');
+    await db().query(`UPDATE ride_events SET created_at = now() WHERE status = 'in_progress'`);
+  });
 
   it('flags a trip whose driver sent nothing for 10 min, once, and leaves the ride as it was', async () => {
     const stuck = await trip(601, 900);
@@ -171,6 +176,9 @@ describe('stuck trips', () => {
   });
 
   it('never flags a ride that is not in_progress', async () => {
+    // A slow run: the earlier tests' trips aged 2 s since they were set up
+    await db().query(`UPDATE driver_locations SET received_at = received_at - interval '2 seconds'`);
+    await db().query(`UPDATE ride_events SET created_at = created_at - interval '2 seconds' WHERE status = 'in_progress'`);
     const d = await verifiedDriver();
     await http().post('/drivers/me/locations').set(d.auth).send({ points: [{ lat: 11.5564, lng: 104.9282, recordedAt: new Date().toISOString() }] }).expect(200);
     await db().query(`UPDATE driver_locations SET received_at = now() - interval '1 hour' WHERE driver_id = $1`, [d.id]);
