@@ -79,7 +79,8 @@ export class RidesRepository {
     return row;
   }
 
-  // Invariant 1: one guarded statement moves the ride, logs the event and queues it in the outbox, or matches nothing (undefined:
+  // Invariant 1: one guarded statement moves the ride, logs the event and queues it in the outbox (on completion it also
+  // appends the driver's commission debit, M6.8), or matches nothing (undefined:
   // wrong status, or the caller may not move this ride). Accept also assigns the caller as the driver. Returns the
   // ride's driver alongside the snapshot, for the availability move in the same transaction.
   // Throws a unique violation if that driver already has an active ride. A cancel needs its reason (a CHECK
@@ -101,6 +102,9 @@ export class RidesRepository {
          RETURNING *
        ), event AS (
          INSERT INTO ride_events (ride_id, seq, status, actor, actor_id) SELECT id, version, status, $5, $1 FROM ride
+       ), ledger AS (
+         INSERT INTO driver_ledger_entries (driver_id, ride_id, kind, amount_minor, currency)
+         SELECT driver_id, id, 'commission', -commission_minor, currency FROM ride WHERE status = 'completed'
        ), ${OUTBOX}
        SELECT ${RIDE}, driver_id AS "driverId" FROM ride`,
       [userId, rideId, t.from, t.to, actor, cancelReason ?? null],
