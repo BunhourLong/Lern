@@ -4,6 +4,7 @@ import fc from 'fast-check';
 import request from 'supertest';
 import type { App } from 'supertest/types';
 import { DataSource } from 'typeorm';
+import { EtaProvider } from '../src/matching/eta.provider';
 import { MatchingRepository } from '../src/matching/matching.repository';
 import { MatchingService } from '../src/matching/matching.service';
 import { type Actor, bootApp, signIn } from './support/actors';
@@ -13,7 +14,9 @@ import {
   apply,
   type Command,
   DRIVERS,
+  expectations,
   initialModel,
+  interleavings,
   type OfferRef,
   type Outcome,
   type Raw,
@@ -24,7 +27,7 @@ import {
 
 // PLAN.md M4: random sequences of rider, driver and timer commands against the real API and a pure model of the
 // three state machines. After every command the answer and the database match the model, and no invariant query
-// finds a violation. A `pair` runs two commands at once; the result must match one of their two orders.
+// finds a violation. A `pair` runs two commands at once; the result must match some interleaving of their transactions.
 // Nothing runs on its own (no worker, sweep or reconcile timer) and wall time decides nothing (TTL and deadline
 // 600 s): syncs, sweeps, offers going due, timers firing and the deadline passing are commands. A lapsed offer is
 // due only 1 ms before the next command, far inside the reconciler's 5 s grace for lost timers.
@@ -243,6 +246,141 @@ it('a stale accept never hides its driver from a concurrent sync', async () => {
   expect(await violations(db())).toEqual([]);
 });
 
+// M5.22, seed -378302069: expire is two transactions (expire + release, then sync), so two timers can both release
+// their drivers before either ride syncs, an outcome neither serial order gives
+it('two timers that both release before either sync match the model', async () => {
+  await reset();
+  const rideIds = new Map<string, string>();
+  const model = initialModel();
+  for (const c of [
+    { kind: 'book', rider: 0, token: 'X' },
+    { kind: 'sync', ride: 'X' },
+    { kind: 'book', rider: 1, token: 'Y' },
+    { kind: 'sync', ride: 'Y' },
+  ] satisfies Command[]) {
+    expect(await run(c, rideIds)).toEqual(apply(model, c));
+  }
+  expect(await observed(rideIds)).toEqual(snapshot(model)); // X offered to d0, Y to d1, d2 free
+  const pair: Command = {
+    kind: 'pair',
+    a: { kind: 'timer', offer: { ride: 'X', driver: 0 } },
+    b: { kind: 'timer', offer: { ride: 'Y', driver: 1 } },
+  };
+  const svc = matching();
+  const real = svc.sync.bind(svc);
+  let arrived = 0;
+  let open!: () => void;
+  const barrier = new Promise<void>((r) => (open = r));
+  const spy = jest.spyOn(svc, 'sync').mockImplementation(async (rideId) => {
+    if (++arrived === 2) open();
+    await barrier; // each expire's sync waits until both timers have committed their release
+    return real(rideId);
+  });
+  let outcome: Outcome;
+  try {
+    outcome = await run(pair, rideIds);
+  } finally {
+    spy.mockRestore();
+  }
+  const state = await observed(rideIds);
+  // The gate held: each ride got the nearest driver free once both were released
+  expect({ outcome, state }).toEqual({
+    outcome: ['ok', 'ok'],
+    state: {
+      rides: [
+        ['X', 'searching', null],
+        ['Y', 'searching', null],
+      ],
+      offers: [
+        ['X', 0, 'expired'],
+        ['X', 1, 'pending'],
+        ['Y', 0, 'pending'],
+        ['Y', 1, 'expired'],
+      ],
+      drivers: ['reserved', 'reserved', 'available'],
+    },
+  });
+  expect(await violations(db())).toEqual([]);
+  expect(expectations(model, pair).map((e) => ({ outcome: e.outcome, state: e.state }))).toContainEqual({ outcome, state });
+});
+
+// M5.24: sync reads its candidates unlocked, ranks them, then locks one from that list, so a driver released in
+// between (here by X's timer) is missed: X→d1 and Y→d2 with d0 free, which only a read-then-lock sync gives
+it("a driver released between sync's candidate read and its lock is missed, as the model says", async () => {
+  await reset();
+  const rideIds = new Map<string, string>();
+  const model = initialModel();
+  for (const c of [
+    { kind: 'book', rider: 0, token: 'X' },
+    { kind: 'sync', ride: 'X' },
+    { kind: 'book', rider: 1, token: 'Y' },
+  ] satisfies Command[]) {
+    expect(await run(c, rideIds)).toEqual(apply(model, c));
+  }
+  expect(await observed(rideIds)).toEqual(snapshot(model)); // X offered to d0, Y searching with no offer
+  const eta = app.get(EtaProvider);
+  const real = eta.rank.bind(eta);
+  let reached!: () => void;
+  const reachedP = new Promise<void>((r) => (reached = r));
+  let open!: () => void;
+  const gate = new Promise<void>((r) => (open = r));
+  const spy = jest.spyOn(eta, 'rank').mockImplementationOnce(async (...args) => {
+    reached();
+    await gate; // Y's sync holds its candidate list (d1, d2) while X's timer frees d0
+    return real(...args);
+  });
+  const syncY = matching().sync(rideIds.get('Y')!);
+  try {
+    // A sync that returned without ranking would leave the one-shot gate to X's timer, which would then hang
+    expect(await Promise.race([reachedP.then(() => 'reached'), syncY.then(() => 'returned')])).toBe('reached');
+    expect(await run({ kind: 'timer', offer: { ride: 'X', driver: 0 } }, rideIds)).toBe('ok');
+  } finally {
+    open();
+    await syncY.catch(() => undefined);
+    spy.mockRestore();
+  }
+  await syncY;
+  expect(await observed(rideIds)).toEqual({
+    rides: [
+      ['X', 'searching', null],
+      ['Y', 'searching', null],
+    ],
+    offers: [
+      ['X', 0, 'expired'],
+      ['X', 1, 'pending'],
+      ['Y', 2, 'pending'],
+    ],
+    drivers: ['available', 'reserved', 'reserved'],
+  });
+  expect(await violations(db())).toEqual([]);
+  // X's new offer to x, Y's to y, the third driver free
+  const offered = (x: number, y: number) =>
+    JSON.stringify({
+      rides: [
+        ['X', 'searching', null],
+        ['Y', 'searching', null],
+      ],
+      offers: [
+        ['X', 0, 'expired'],
+        ['X', x, 'pending'],
+        ['Y', y, 'pending'],
+      ].sort(),
+      drivers: [0, 1, 2].map((d) => (d === x || d === y ? 'reserved' : 'available')),
+    });
+  const pair: Command = { kind: 'pair', a: { kind: 'timer', offer: { ride: 'X', driver: 0 } }, b: { kind: 'sync', ride: 'Y' } };
+  expect(new Set(expectations(model, pair).map((e) => JSON.stringify(e.state)))).toEqual(
+    new Set([offered(2, 1), offered(1, 2), offered(1, 0)]),
+  );
+});
+
+it('interleaves two step lists in every order that keeps each list in its own order', () => {
+  expect(interleavings([1, 2], [3])).toEqual([
+    [1, 2, 3],
+    [1, 3, 2],
+    [3, 1, 2],
+  ]);
+});
+
 it('keeps every answer and the database equal to the model, with no invariant broken', async () => {
   await fc.assert(
     fc.asyncProperty(fc.array(command, { maxLength: 40, size: 'max' }), async (raws) => {
@@ -254,14 +392,7 @@ it('keeps every answer and the database equal to the model, with no invariant br
         if (!c) continue;
         const outcome = await attempt(c, rideIds);
         const state = await observed(rideIds);
-        // Every order the command could have taken effect in, with what the model says for each
-        const orders = c.kind === 'pair' ? [[c.a, c.b], [c.b, c.a]] : [[c]];
-        const expected = orders.map((order) => {
-          const m = structuredClone(model);
-          const outcomes = order.map((o) => apply(m, o));
-          const answer = c.kind !== 'pair' ? outcomes[0] : order[0] === c.a ? outcomes : outcomes.reverse();
-          return { m, seen: { step, command: c, outcome: answer, state: snapshot(m) } };
-        });
+        const expected = expectations(model, c).map(({ m, outcome, state }) => ({ m, seen: { step, command: c, outcome, state } }));
         const seen = { step, command: c, outcome, state };
         expect(expected.map((e) => e.seen)).toContainEqual(seen);
         model = expected.find((e) => JSON.stringify(e.seen) === JSON.stringify(seen))!.m; // same key order both sides
