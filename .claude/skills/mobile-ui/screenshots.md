@@ -38,6 +38,7 @@ Display & Text Size.
 ADB=~/Library/Android/sdk/platform-tools/adb
 ~/Library/Android/sdk/emulator/emulator -avd Medium_Phone &   # wait: $ADB shell getprop sys.boot_completed → 1
 pnpm --filter @lern/mobile android                   # unverified: build + install via the RN CLI
+$ADB shell pm grant com.lern android.permission.ACCESS_LOCAL_NETWORK   # API 37: else the app can't reach Metro
 $ADB shell cmd uimode night yes                      # or no
 $ADB shell settings put system font_scale 2.0        # largest; reset with 1.0
 $ADB exec-out screencap -p > .superpowers/screens/<task-id>/android-dark-km.png

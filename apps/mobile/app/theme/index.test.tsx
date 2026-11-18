@@ -1,6 +1,6 @@
 import ReactTestRenderer, { act } from 'react-test-renderer';
 import { StyleSheet, useColorScheme } from 'react-native';
-import { makeStyles, themes, type, useTheme } from '@theme';
+import { fonts, makeStyles, themes, type, useTheme } from '@theme';
 import type { Theme } from '@theme';
 
 jest.mock('react-native/Libraries/Utilities/useColorScheme', () => ({
@@ -106,12 +106,19 @@ test('keeps separate style caches for hooks using the same scheme', () => {
   expect(surface).not.toBe(background);
 });
 
-test.each(['title', 'body', 'bodyStrong', 'button', 'caption'] as const)(
-  '%s leaves room for Khmer marks and uses the default font',
-  role => {
+test.each([
+  ['title', 'KantumruyPro-Bold'],
+  ['body', 'KantumruyPro-Regular'],
+  ['bodyStrong', 'KantumruyPro-SemiBold'],
+  ['button', 'KantumruyPro-SemiBold'],
+  ['caption', 'KantumruyPro-Regular'],
+] as const)(
+  '%s leaves room for Khmer marks and uses %s',
+  (role, fontFamily) => {
     const style = type[role];
     expect(style.lineHeight).toBeGreaterThanOrEqual(style.fontSize * 1.5);
-    expect(style).not.toHaveProperty('fontFamily');
+    expect(style).toHaveProperty('fontFamily', fontFamily);
+    expect(Object.values(fonts)).toContain(style.fontFamily);
     expect(style).not.toHaveProperty('fontWeight');
   },
 );

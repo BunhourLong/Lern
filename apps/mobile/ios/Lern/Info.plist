@@ -45,6 +45,12 @@
 	</array>
 	<key>RCTNewArchEnabled</key>
 	<true/>
+	<key>UIAppFonts</key>
+	<array>
+		<string>KantumruyPro-Regular.ttf</string>
+		<string>KantumruyPro-SemiBold.ttf</string>
+		<string>KantumruyPro-Bold.ttf</string>
+	</array>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

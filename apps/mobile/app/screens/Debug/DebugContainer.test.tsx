@@ -56,6 +56,13 @@ const type = (
     r.root.findByProps({ accessibilityLabel: label }).props.onChangeText(v);
   });
 
+it('shows Khmer in the type samples', () => {
+  const { core } = stub();
+  const r = render(core);
+  expect(text(r)).toContain('Book a tuk-tuk · កក់តុកតុក');
+  expect(text(r)).toContain('Fare 12,000 ៛ · តម្លៃ ១២,០០០ ៛');
+});
+
 it('shows store changes and raw events live', () => {
   const { core, stores } = stub();
   const r = render(core);

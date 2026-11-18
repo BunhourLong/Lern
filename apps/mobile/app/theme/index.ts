@@ -1,4 +1,7 @@
 import { StyleSheet, useColorScheme } from 'react-native';
+import { fonts } from './fonts';
+
+export { fonts } from './fonts';
 
 export type Colors = {
   background: string;
@@ -48,11 +51,11 @@ export const radius = { sm: 8, md: 12, lg: 20, pill: 999 } as const;
 export const touch = { min: 44 } as const;
 
 export const type = {
-  title: { fontSize: 24, lineHeight: 36 },
-  body: { fontSize: 16, lineHeight: 24 },
-  bodyStrong: { fontSize: 16, lineHeight: 24 },
-  button: { fontSize: 16, lineHeight: 24 },
-  caption: { fontSize: 12, lineHeight: 18 },
+  title: { fontSize: 24, lineHeight: 36, fontFamily: fonts.bold },
+  body: { fontSize: 16, lineHeight: 24, fontFamily: fonts.regular },
+  bodyStrong: { fontSize: 16, lineHeight: 24, fontFamily: fonts.semiBold },
+  button: { fontSize: 16, lineHeight: 24, fontFamily: fonts.semiBold },
+  caption: { fontSize: 12, lineHeight: 18, fontFamily: fonts.regular },
 };
 
 export type Theme = { colors: Colors; dark: boolean };
