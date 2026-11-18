@@ -1,4 +1,4 @@
-import { themes } from './index';
+import { opacity, themes } from './index';
 
 function luminance(color: string, background = '#ffffff'): number {
   const rgba = color.match(/^rgba\(([^)]+)\)$/)?.[1];
@@ -16,9 +16,16 @@ function luminance(color: string, background = '#ffffff'): number {
 }
 
 function contrast(foreground: string, background: string, backdrop?: string) {
-  const a = luminance(foreground);
+  const a = luminance(foreground, backdrop);
   const b = luminance(background, backdrop);
   return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+}
+
+function pressed(color: string) {
+  const channels = [1, 3, 5].map(start =>
+    parseInt(color.slice(start, start + 2), 16),
+  );
+  return `rgba(${channels.join(', ')}, ${opacity.pressed})`;
 }
 
 const pairs = [
@@ -40,6 +47,14 @@ const pairs = [
   ),
 ] as const;
 
+const pressedPairs = [
+  { foreground: 'onPrimary', background: 'primary', minimum: 4.5 },
+  ...(['primary', 'text', 'textMuted', 'border'] as const).map(foreground => ({
+    foreground,
+    minimum: foreground === 'border' ? 3 : 4.5,
+  })),
+] as const;
+
 test.each(
   Object.entries(themes).flatMap(([scheme, colors]) =>
     pairs.map(pair => ({ scheme, colors, ...pair })),
@@ -49,6 +64,31 @@ test.each(
   ({ colors, foreground, background, minimum }) => {
     expect(
       contrast(colors[foreground], colors[background], colors.background),
+    ).toBeGreaterThanOrEqual(minimum);
+  },
+);
+
+test.each(
+  Object.entries(themes).flatMap(([scheme, colors]) =>
+    (['background', 'surface'] as const).flatMap(backdrop =>
+      pressedPairs.map(pair => ({
+        scheme,
+        colors,
+        backdrop,
+        background: backdrop,
+        ...pair,
+      })),
+    ),
+  ),
+)(
+  '$scheme pressed $foreground on $background over $backdrop',
+  ({ colors, foreground, background, backdrop, minimum }) => {
+    expect(
+      contrast(
+        pressed(colors[foreground]),
+        pressed(colors[background]),
+        colors[backdrop],
+      ),
     ).toBeGreaterThanOrEqual(minimum);
   },
 );

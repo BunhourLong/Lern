@@ -86,7 +86,11 @@ it('shows store changes and raw events live', () => {
 it('sends the typed phone and code to the core', async () => {
   const { core } = stub();
   const r = render(core);
-  expect(r.root.findAllByType(TextInput)).toHaveLength(2);
+  expect(
+    r.root
+      .findAllByType(TextInput)
+      .map(input => input.props.accessibilityLabel),
+  ).toEqual(expect.arrayContaining(['Phone', 'Code']));
   expect(r.root.findAllByType(Button).length).toBeGreaterThan(0);
   await type(r, 'Phone', '+85598765432');
   await type(r, 'Code', '123456');
