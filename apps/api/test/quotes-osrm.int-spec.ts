@@ -71,7 +71,7 @@ const row = async (q: Quote) =>
 it('prices a quote from the OSRM road distance and duration, rounded to whole metres and seconds, and stores both', async () => {
   const q = await quote(app);
   expect(q.distanceM).toBe(3820);
-  expect(q.fare).toEqual(fare(card, { distanceM: 3820, durationS: 1381 }));
+  expect(q.fare).toEqual(fare(card, { distanceM: 3820, durationS: 1381 }, 10_000).fare);
   expect(await row(q)).toEqual({ distance_m: 3820, duration_s: 1381 });
 });
 
@@ -97,7 +97,7 @@ describe('OSRM failing', () => {
     if (failure !== 'refused') mode = failure;
     const q = await quote(failure === 'refused' ? down : app);
     expect(q.distanceM).toBe(distanceM);
-    expect(q.fare).toEqual(fare(card, { distanceM, durationS }));
+    expect(q.fare).toEqual(fare(card, { distanceM, durationS }, 10_000).fare);
     expect(await row(q)).toEqual({ distance_m: distanceM, duration_s: durationS });
   });
 });

@@ -43,9 +43,28 @@ it('runs every migration up, down and up again', async () => {
     expect(await hasPostgis()).toBe(true);
     expect(await ds.showMigrations()).toBe(false); // nothing pending
 
+    // A quote priced before surge reads 1.0x and receipt lines from its own card's fee (500 here, so a backfill
+    // that ignored the card would show). Undo once: quotes_surge (each new migration adds one undo here).
+    await ds.undoLastMigration();
+    const [{ id: feeRiderId }] = await ds.query<{ id: string }[]>('INSERT INTO users (phone) VALUES ($1) RETURNING id', ['+85510000003']);
+    const [{ id: feeCardId }] = await ds.query<{ id: string }[]>(
+      `INSERT INTO rate_cards (vehicle_type, base, per_km, per_min, minimum_fare, booking_fee, active_from)
+       VALUES ('remork', 4000, 1500, 0, 0, 500, now()) RETURNING id`,
+    );
+    const [{ id: feeQuoteId }] = await ds.query<{ id: string }[]>(
+      `INSERT INTO quotes (rider_id, pickup, dropoff, vehicle_type, distance_m, duration_s, amount_minor, currency, rate_card_id, expires_at)
+       VALUES ($1, 'SRID=4326;POINT(104.9 11.5)', 'SRID=4326;POINT(104.8 11.5)', 'remork', 2000, 400, 7500, 'KHR', $2, now()) RETURNING id`,
+      [feeRiderId, feeCardId],
+    );
+    await ds.runMigrations();
+    expect(await ds.query('SELECT surge_bp, breakdown FROM quotes WHERE id = $1', [feeQuoteId])).toEqual([
+      { surge_bp: 10_000, breakdown: { tripMinor: 7000, surgeMinor: 0, bookingFeeMinor: 500 } },
+    ]);
+
     // A quote priced before rate cards existed points at the seeded card of its vehicle type afterwards, and
-    // reads duration 0, the duration it was priced with. Undo three times: the created_at index, quotes.duration_s,
-    // then rate cards (each new migration adds one undo here).
+    // reads duration 0, the duration it was priced with. Undo four times: quotes_surge, the created_at index,
+    // quotes.duration_s, then rate cards (each new migration adds one undo here).
+    await ds.undoLastMigration();
     await ds.undoLastMigration();
     await ds.undoLastMigration();
     await ds.undoLastMigration();
@@ -57,11 +76,14 @@ it('runs every migration up, down and up again', async () => {
     );
     await ds.runMigrations();
     const [moto] = await ds.query<{ id: string }[]>(`SELECT id FROM rate_cards WHERE vehicle_type = 'moto'`);
-    expect(await ds.query('SELECT rate_card_id, duration_s FROM quotes WHERE id = $1', [quoteId])).toEqual([{ rate_card_id: moto.id, duration_s: 0 }]);
+    expect(await ds.query('SELECT rate_card_id, duration_s, surge_bp, breakdown FROM quotes WHERE id = $1', [quoteId])).toEqual([
+      { rate_card_id: moto.id, duration_s: 0, surge_bp: 10_000, breakdown: { tripMinor: 11_000, surgeMinor: 0, bookingFeeMinor: 0 } },
+    ]);
 
     // A phone registered before the locale column existed must read English after the migration.
-    // Undo four times: the created_at index, quotes.duration_s, rate cards, then the locale column (each new
-    // migration adds one undo here).
+    // Undo five times: quotes_surge, the created_at index, quotes.duration_s, rate cards, then the locale column
+    // (each new migration adds one undo here).
+    await ds.undoLastMigration();
     await ds.undoLastMigration();
     await ds.undoLastMigration();
     await ds.undoLastMigration();
