@@ -35,7 +35,14 @@ const MAY_MOVE = {
   accept: 'driver_id IS NULL',
 };
 
-export type NewRide = { quoteId: string; vehicleType: VehicleType; pickup: Point; dropoff: Point; fare: Money };
+export type NewRide = {
+  quoteId: string;
+  vehicleType: VehicleType;
+  pickup: Point;
+  dropoff: Point;
+  fare: Money;
+  commission: { bp: number; minor: number };
+};
 // driverId never reaches a client: @ZodSerializerDto(RideDto) strips unknown keys, and the outbox payload is the RIDE projection
 export type MovedRide = Ride & { driverId: string | null };
 export type MatchableRide = { status: RideStatus; riderId: string; vehicleType: VehicleType; pickup: Point; elapsedS: number };
@@ -48,8 +55,8 @@ export class RidesRepository {
   async insert(riderId: string, ride: NewRide): Promise<Ride> {
     const [row] = await this.db.query<Ride[]>(
       `WITH ride AS (
-         INSERT INTO rides (rider_id, quote_id, vehicle_type, pickup, dropoff, fare_minor, currency)
-         VALUES ($1, $2, $3, ST_SetSRID(ST_MakePoint($4, $5), 4326), ST_SetSRID(ST_MakePoint($6, $7), 4326), $8, $9)
+         INSERT INTO rides (rider_id, quote_id, vehicle_type, pickup, dropoff, fare_minor, currency, commission_bp, commission_minor)
+         VALUES ($1, $2, $3, ST_SetSRID(ST_MakePoint($4, $5), 4326), ST_SetSRID(ST_MakePoint($6, $7), 4326), $8, $9, $10, $11)
          RETURNING *
        ), event AS (
          INSERT INTO ride_events (ride_id, seq, status, actor, actor_id) SELECT id, version, status, 'rider', $1 FROM ride
@@ -65,6 +72,8 @@ export class RidesRepository {
         ride.dropoff.lat,
         ride.fare.amountMinor,
         ride.fare.currency,
+        ride.commission.bp,
+        ride.commission.minor,
       ],
     );
     return row;

@@ -53,3 +53,12 @@ export function fare(
     breakdown: { tripMinor, surgeMinor: surged - tripMinor, bookingFeeMinor: bookingFee },
   };
 }
+
+// The platform's cut in whole riel: a share (basis points, 10000 = 100%) of trip + surge, rounded up once,
+// plus the whole booking fee. Trip + surge is a multiple of 100, so the rounded share never passes it.
+export function commission(breakdown: FareBreakdown, commissionBp: number): number {
+  const { tripMinor, surgeMinor, bookingFeeMinor } = breakdown;
+  for (const [name, value] of Object.entries({ tripMinor, surgeMinor, bookingFeeMinor })) wholeRiel(name, value);
+  if (wholeRiel('commissionBp', commissionBp) > ONE_X) throw new RangeError(`Invalid commissionBp: ${commissionBp}`);
+  return wholeRiel('commission', ceilToRiel((tripMinor + surgeMinor) * commissionBp, ONE_X) + bookingFeeMinor);
+}

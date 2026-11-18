@@ -24,6 +24,7 @@ import { CreateRateCards1794902400000 } from './migrations/1794902400000-create-
 import { QuotesDuration1794988800000 } from './migrations/1794988800000-quotes-duration';
 import { RidesCreatedAtIndex1795075200000 } from './migrations/1795075200000-rides-created-at-index';
 import { QuotesSurge1795161600000 } from './migrations/1795161600000-quotes-surge';
+import { RidesCommission1795248000000 } from './migrations/1795248000000-rides-commission';
 
 // Migrations are listed, not globbed, so the same list works from ts (tests) and dist (CLI)
 export const migrations = [
@@ -52,6 +53,7 @@ export const migrations = [
   QuotesDuration1794988800000,
   RidesCreatedAtIndex1795075200000,
   QuotesSurge1795161600000,
+  RidesCommission1795248000000,
 ];
 
 export function dataSourceOptions(url: string): DataSourceOptions {

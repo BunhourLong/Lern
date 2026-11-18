@@ -1,6 +1,6 @@
 import type { CreateQuote, Quote } from '@lern/contracts';
 import { Injectable } from '@nestjs/common';
-import { fare } from './domain/fare';
+import { commission, fare } from './domain/fare';
 import { type BookableQuote, PricingRepository } from './pricing.repository';
 import { RouteProvider } from './route.provider';
 import { SurgeService } from './surge.service';
@@ -28,7 +28,14 @@ export class PricingService {
     return { id, vehicleType: input.vehicleType, distanceM: route.distanceM, fare: price.fare, expiresAt: expiresAt.toISOString() };
   }
 
-  findQuote(riderId: string, quoteId: string): Promise<BookableQuote | undefined> {
-    return this.pricing.findForRider(riderId, quoteId);
+  // With the commission a ride on it owes: the quote's lines at its own card's rate, never the active card's
+  async findQuote(
+    riderId: string,
+    quoteId: string,
+  ): Promise<(Omit<BookableQuote, 'breakdown' | 'commissionBp'> & { commission: { bp: number; minor: number } }) | undefined> {
+    const row = await this.pricing.findForRider(riderId, quoteId);
+    if (!row) return undefined;
+    const { breakdown, commissionBp, ...quote } = row;
+    return { ...quote, commission: { bp: commissionBp, minor: commission(breakdown, commissionBp) } };
   }
 }

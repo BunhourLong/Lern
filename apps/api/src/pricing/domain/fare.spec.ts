@@ -1,5 +1,5 @@
 import fc from 'fast-check';
-import { ceilToRiel, fare, type RateCard } from './fare';
+import { ceilToRiel, commission, fare, type FareBreakdown, type RateCard } from './fare';
 
 const C: RateCard = { base: 2000, perKm: 1000, perMin: 200, minimumFare: 5000, bookingFee: 500 };
 const riel = (card: RateCard, distanceM: number, durationS: number) => fare(card, { distanceM, durationS }, 10_000).fare.amountMinor;
@@ -181,5 +181,47 @@ describe('ceilToRiel', () => {
     [2 ** 53 + 2, 60_000], // unsafe numerator, safe-looking result
   ])('refuses %p / %p', (numerator, denominator) => {
     expect(() => ceilToRiel(numerator, denominator)).toThrow(RangeError);
+  });
+});
+
+describe('commission', () => {
+  const lines = (tripMinor: number, surgeMinor = 0, bookingFeeMinor = 0): FareBreakdown => ({ tripMinor, surgeMinor, bookingFeeMinor });
+
+  it.each([
+    [lines(10_000), 1500, 1500],
+    [lines(10_100), 1500, 1600], // 1515 rounds up
+    [lines(10_000, 5000, 500), 1500, 2800], // 2250 rounds up to 2300, plus the whole fee
+    [lines(10_000, 5000, 500), 0, 500],
+    [lines(10_000, 5000, 500), 10_000, 15_500],
+    [lines(100, 100), 1500, 100], // one rounding of 30, not 15 → 100 twice
+  ])('takes %p at %p bp as %p riel', (b, bp, expected) => {
+    expect(commission(b, bp)).toBe(expected);
+  });
+
+  it.each([-1, 10_001, 1.5])('refuses %p bp', (bp) => {
+    expect(() => commission(lines(10_000), bp)).toThrow(RangeError);
+  });
+
+  const step = (max: number) => fc.integer({ min: 0, max }).map((n) => n * 100);
+  const breakdown = fc.record({ tripMinor: step(100_000), surgeMinor: step(100_000), bookingFeeMinor: step(100) });
+  const bp = fc.integer({ min: 0, max: 10_000 });
+
+  it('is whole 100 riel, at least the fee and at most the fare', () => {
+    fc.assert(
+      fc.property(breakdown, bp, (b, p) => {
+        const c = commission(b, p);
+        expect(c % 100).toBe(0);
+        expect(c).toBeGreaterThanOrEqual(b.bookingFeeMinor);
+        expect(c).toBeLessThanOrEqual(b.tripMinor + b.surgeMinor + b.bookingFeeMinor);
+      }),
+    );
+  });
+
+  it('never decreases as the rate grows', () => {
+    fc.assert(
+      fc.property(breakdown, bp, bp, (b, p1, p2) => {
+        expect(commission(b, Math.min(p1, p2))).toBeLessThanOrEqual(commission(b, Math.max(p1, p2)));
+      }),
+    );
   });
 });

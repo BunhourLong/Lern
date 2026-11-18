@@ -10,6 +10,9 @@ export type BookableQuote = {
   dropoff: Point;
   fare: Money;
   expired: boolean;
+  // The quote's receipt lines and its own card's rate, for the commission booking snapshots (invariant 6)
+  breakdown: FareBreakdown;
+  commissionBp: number;
 };
 
 export type SurgeSample = { kind: 'demand' | 'supply'; vehicleType: VehicleType; lat: number; lng: number };
@@ -87,12 +90,13 @@ export class PricingRepository {
   // Owner in the WHERE, so another rider's quote is indistinguishable from a missing one
   async findForRider(riderId: string, quoteId: string): Promise<BookableQuote | undefined> {
     const [row] = await this.db.query<BookableQuote[]>(
-      `SELECT vehicle_type AS "vehicleType",
+      `SELECT q.vehicle_type AS "vehicleType",
               json_build_object('lat', ST_Y(pickup::geometry), 'lng', ST_X(pickup::geometry)) AS pickup,
               json_build_object('lat', ST_Y(dropoff::geometry), 'lng', ST_X(dropoff::geometry)) AS dropoff,
               json_build_object('amountMinor', amount_minor, 'currency', currency) AS fare,
-              expires_at <= now() AS expired
-       FROM quotes WHERE id = $1 AND rider_id = $2`,
+              expires_at <= now() AS expired, breakdown, c.commission_bp AS "commissionBp"
+       FROM quotes q JOIN rate_cards c ON c.id = q.rate_card_id
+       WHERE q.id = $1 AND q.rider_id = $2`,
       [quoteId, riderId],
     );
     return row;

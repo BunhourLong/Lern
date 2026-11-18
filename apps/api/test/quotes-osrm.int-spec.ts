@@ -46,8 +46,8 @@ beforeAll(async () => {
   app = await (await bootApp({}, { DATABASE_URL, OSRM_URL: `http://127.0.0.1:${(osrm.address() as AddressInfo).port}` })).init();
   down = await (await bootApp({}, { DATABASE_URL })).init();
   await db().query(
-    `INSERT INTO rate_cards (vehicle_type, base, per_km, per_min, minimum_fare, booking_fee, active_from)
-     VALUES ('moto', $1, $2, $3, $4, $5, now() - interval '1 minute')`,
+    `INSERT INTO rate_cards (vehicle_type, base, per_km, per_min, minimum_fare, booking_fee, commission_bp, active_from)
+     VALUES ('moto', $1, $2, $3, $4, $5, 1500, now() - interval '1 minute')`,
     [card.base, card.perKm, card.perMin, card.minimumFare, card.bookingFee],
   );
 });
