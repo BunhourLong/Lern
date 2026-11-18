@@ -15,11 +15,20 @@ import { GlassSurface } from '../../components/GlassSurface';
 import { ListRow } from '../../components/ListRow';
 import { Text as SampleText } from '../../components/Text';
 import { TextField } from '../../components/TextField';
+import type { Language } from '../../i18n';
 import type { RawEvent } from '../../stores/raw-events.store';
 
 export type DebugScreenProps = {
   state: unknown;
   events: RawEvent[];
+  language: {
+    phone: string;
+    en: string;
+    km: string;
+    sample: string;
+    override: Language | null;
+    setOverride(value: Language | null): void;
+  };
   phone: string;
   code: string;
   onPhone(v: string): void;
@@ -58,6 +67,24 @@ export default function DebugScreen(p: DebugScreenProps) {
         <Button title="Go online" onPress={p.onOnline} />
         <Button title="Go offline" onPress={p.onOffline} />
       </View>
+      <View style={typeStyles.languageChoices}>
+        <Button
+          title={p.language.phone}
+          accessibilityState={{ selected: p.language.override === null }}
+          onPress={() => p.language.setOverride(null)}
+        />
+        <Button
+          title={p.language.en}
+          accessibilityState={{ selected: p.language.override === 'en' }}
+          onPress={() => p.language.setOverride('en')}
+        />
+        <Button
+          title={p.language.km}
+          accessibilityState={{ selected: p.language.override === 'km' }}
+          onPress={() => p.language.setOverride('km')}
+        />
+      </View>
+      <SampleText role="caption">{p.language.sample}</SampleText>
       <View style={typeStyles.sample}>
         <Text style={typeStyles.title}>Book a tuk-tuk · កក់តុកតុក</Text>
         <Text style={typeStyles.body}>
@@ -156,6 +183,12 @@ export default function DebugScreen(p: DebugScreenProps) {
 }
 
 const useTypeStyles = makeStyles(t => ({
+  languageChoices: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.xs,
+    marginTop: spacing.sm,
+  },
   sample: {
     backgroundColor: t.colors.surface,
     gap: spacing.xs,

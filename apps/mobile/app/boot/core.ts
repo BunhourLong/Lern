@@ -22,6 +22,7 @@ import { createActiveRideStore } from '../stores/active-ride.store';
 import { appGate, createAppConfigStore } from '../stores/app-config.store';
 import { createConnectionStore } from '../stores/connection.store';
 import { createDriverModeStore } from '../stores/driver-mode.store';
+import { createLanguageStore } from '../stores/language.store';
 import { createRawEventsStore } from '../stores/raw-events.store';
 import { createSecurityStore } from '../stores/security.store';
 import { createSessionStore } from '../stores/session.store';
@@ -31,6 +32,7 @@ export type CoreDeps = {
   fetch: typeof fetch;
   io: typeof io;
   kv: KeyValueStore; // MMKV in the app
+  deviceLocale: () => string;
   refreshToken: SecretStore; // Keychain in the app
   pin: SecretStore; // app-lock PIN hash, its own Keychain entry
   pinHasher: PinHasher; // expo-crypto in the app
@@ -57,6 +59,7 @@ export function createCore({
   fetch,
   io,
   kv,
+  deviceLocale,
   refreshToken,
   pin,
   pinHasher,
@@ -72,6 +75,7 @@ export function createCore({
   const appConfig = createAppConfigStore();
   const connection = createConnectionStore();
   const security = createSecurityStore();
+  const language = createLanguageStore(kv, deviceLocale);
   const pinLock = createPinLock({
     secret: pin,
     kv,
@@ -211,6 +215,7 @@ export function createCore({
       appConfig,
       connection,
       security,
+      language,
     },
     api,
     queue,

@@ -127,6 +127,7 @@ function deps(
     fetch: s.fetch,
     io: f.io,
     kv,
+    deviceLocale: () => 'en-US',
     refreshToken,
     pin,
     pinHasher: {
@@ -354,6 +355,23 @@ it('logs raw socket events, and sign-out empties the log', async () => {
   });
   await core.signOut();
   expect(core.stores.rawEvents.getState().events).toEqual([]);
+});
+
+it('keeps the language override on sign-out', async () => {
+  const s = server(routes({ 'POST /auth/logout': () => ({ status: 204 }) }));
+  const d = deps(s, fakeIo(), pair.refreshToken);
+  const core = createCore(d);
+  await core.boot();
+  core.stores.language.getState().setOverride('km');
+
+  await core.signOut();
+
+  expect(s.calls).toContain('POST /auth/logout');
+  expect(core.stores.language.getState()).toMatchObject({
+    language: 'km',
+    override: 'km',
+  });
+  expect(d.kv.get('language')).toBe('km');
 });
 
 it('closes the previous socket when a session starts again, so none outlives sign-out', async () => {

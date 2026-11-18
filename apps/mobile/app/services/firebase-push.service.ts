@@ -7,17 +7,12 @@ import {
   onTokenRefresh,
   requestPermission,
 } from '@react-native-firebase/messaging';
-import type { PushLocale } from '@lern/contracts';
 import { PermissionsAndroid, Platform } from 'react-native';
+import { languageOf } from '../i18n';
 import type { PushNative } from './push.service';
 
 // First Android version that asks the user before showing notifications
 const ANDROID_PROMPT_API = 33;
-
-// The phone's own language decides the push text; English is the fallback for everything not Khmer
-export function pushLocale(tag: string): PushLocale {
-  return tag.split(/[-_]/)[0].toLowerCase() === 'km' ? 'km' : 'en';
-}
 
 async function askUser(): Promise<boolean> {
   if (Platform.OS === 'android') {
@@ -40,7 +35,7 @@ async function askUser(): Promise<boolean> {
 export function firebasePush(): PushNative {
   return {
     platform: Platform.OS === 'ios' ? 'ios' : 'android',
-    locale: () => pushLocale(Intl.DateTimeFormat().resolvedOptions().locale),
+    locale: () => languageOf(Intl.DateTimeFormat().resolvedOptions().locale),
     requestPermission: askUser,
     getToken: async () => getToken(getMessaging()),
     deleteToken: async () => deleteToken(getMessaging()),

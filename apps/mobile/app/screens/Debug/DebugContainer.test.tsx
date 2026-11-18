@@ -1,8 +1,14 @@
 import type { Me } from '@lern/contracts';
+import {
+  fireEvent,
+  render as renderScreen,
+  screen,
+} from '@testing-library/react-native';
 import ReactTestRenderer, { act } from 'react-test-renderer';
 import { Button, Text, TextInput } from 'react-native';
 import { createActiveRideStore } from '../../stores/active-ride.store';
 import { createDriverModeStore } from '../../stores/driver-mode.store';
+import { createLanguageStore } from '../../stores/language.store';
 import { createRawEventsStore } from '../../stores/raw-events.store';
 import { createSessionStore } from '../../stores/session.store';
 import DebugContainer from './DebugContainer';
@@ -23,6 +29,10 @@ function stub() {
     session: createSessionStore(),
     activeRide: createActiveRideStore(),
     driverMode: createDriverModeStore(),
+    language: createLanguageStore(
+      { get: () => undefined, set: jest.fn(), remove: jest.fn() },
+      () => 'en-US',
+    ),
     rawEvents: createRawEventsStore(),
   };
   const core = {
@@ -67,6 +77,26 @@ it('shows Khmer in the type samples', () => {
   const r = render(core);
   expect(text(r)).toContain('Book a tuk-tuk · កក់តុកតុក');
   expect(text(r)).toContain('Fare 12,000 ៛ · តម្លៃ ១២,០០០ ៛');
+});
+
+it('sets the language override when the Khmer button is pressed', async () => {
+  const { core, stores } = stub();
+  await renderScreen(
+    <DebugContainer core={core as unknown as Props['core']} />,
+  );
+  await fireEvent.press(screen.getByRole('button', { name: 'ខ្មែរ' }));
+  expect(stores.language.getState().override).toBe('km');
+});
+
+it('marks the current language choice as selected', async () => {
+  const { core } = stub();
+  await renderScreen(
+    <DebugContainer core={core as unknown as Props['core']} />,
+  );
+  expect(screen.getByRole('button', { name: 'Phone' })).toBeSelected();
+  await fireEvent.press(screen.getByRole('button', { name: 'ខ្មែរ' }));
+  expect(screen.getByRole('button', { name: 'ខ្មែរ' })).toBeSelected();
+  expect(screen.getByRole('button', { name: 'Phone' })).not.toBeSelected();
 });
 
 it('shows store changes and raw events live', () => {
