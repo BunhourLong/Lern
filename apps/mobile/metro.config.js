@@ -11,6 +11,16 @@ const { mergeConfig } = require('@react-native/metro-config');
 const config = {
   // pnpm hoists deps (and links workspace packages) at the repo root
   watchFolders: [path.resolve(__dirname, '../..')],
+  resolver: {
+    resolveRequest: (context, moduleName, platform) =>
+      context.resolveRequest(
+        context,
+        moduleName === '@theme'
+          ? path.join(__dirname, 'app/theme/index')
+          : moduleName,
+        platform,
+      ),
+  },
 };
 
 module.exports = mergeConfig(getDefaultConfig(__dirname), config);
