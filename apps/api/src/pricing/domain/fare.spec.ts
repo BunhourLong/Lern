@@ -1,12 +1,12 @@
 import fc from 'fast-check';
-import { ceilToRiel, fare, type RateCard } from './fare';
+import { ceilToRiel, commission, fare, type FareBreakdown, type RateCard } from './fare';
 
 const C: RateCard = { base: 2000, perKm: 1000, perMin: 200, minimumFare: 5000, bookingFee: 500 };
-const riel = (card: RateCard, distanceM: number, durationS: number) => fare(card, { distanceM, durationS }).amountMinor;
+const riel = (card: RateCard, distanceM: number, durationS: number) => fare(card, { distanceM, durationS }, 10_000).fare.amountMinor;
 
 describe('fare (rate card, KHR)', () => {
   it('adds base, distance, time and booking fee in KHR', () => {
-    expect(fare(C, { distanceM: 3000, durationS: 300 })).toEqual({ amountMinor: 6500, currency: 'KHR' });
+    expect(fare(C, { distanceM: 3000, durationS: 300 }, 10_000).fare).toEqual({ amountMinor: 6500, currency: 'KHR' });
   });
 
   it('rounds the exact total once, up to the next 100 riel', () => {
@@ -23,12 +23,12 @@ describe('fare (rate card, KHR)', () => {
   });
 
   it.each(['base', 'perKm', 'perMin', 'minimumFare', 'bookingFee'])('refuses a negative %s', (name) => {
-    expect(() => fare({ ...C, [name]: -1 }, { distanceM: 0, durationS: 0 })).toThrow(RangeError);
+    expect(() => fare({ ...C, [name]: -1 }, { distanceM: 0, durationS: 0 }, 10_000)).toThrow(RangeError);
   });
 
   it('validates the card it prices with, even when the trip object carries a same-named key', () => {
     const trip = { distanceM: 0, durationS: 0, base: 0 };
-    expect(() => fare({ ...C, base: -1 }, trip)).toThrow(RangeError);
+    expect(() => fare({ ...C, base: -1 }, trip, 10_000)).toThrow(RangeError);
   });
 
   it.each([
@@ -41,22 +41,97 @@ describe('fare (rate card, KHR)', () => {
     // the exact sum (×60000) passes 2^53 while the price (~2e11 riel) would still look safe
     ['inexact sum', { ...C, perKm: 100_000_000 }, 2_000_000, 0],
   ])('refuses a %s instead of producing a wrong price', (_name, card, distanceM, durationS) => {
-    expect(() => fare(card, { distanceM, durationS })).toThrow(RangeError);
+    expect(() => fare(card, { distanceM, durationS }, 10_000)).toThrow(RangeError);
   });
 
-  const field = fc.integer({ min: 0, max: 1_000_000 });
-  const card = fc.record({ base: field, perKm: field, perMin: field, minimumFare: field, bookingFee: field });
-  const distance = fc.integer({ min: 0, max: 2_000_000 });
-  const duration = fc.integer({ min: 0, max: 100_000 });
+  describe('surge', () => {
+    const at = (card: RateCard, distanceM: number, durationS: number, surgeBp: number) => fare(card, { distanceM, durationS }, surgeBp);
+
+    it('multiplies the trip, rounds the surged trip once, and lists whole-riel lines that sum to the fare', () => {
+      // trip 2000 + 3001 + 1003.33 = 6004.33 → 6100; ×1.5 = 9006.5 → 9100; fee 500 on top
+      expect(at(C, 3001, 301, 15_000)).toEqual({
+        fare: { amountMinor: 9600, currency: 'KHR' },
+        breakdown: { tripMinor: 6100, surgeMinor: 3000, bookingFeeMinor: 500 },
+      });
+    });
+
+    it('surges a trip charged at the minimum fare', () => {
+      // trip 3301 < minimum 5000; ×1.25 = 6250 → 6300
+      expect(at(C, 1001, 90, 12_500)).toEqual({
+        fare: { amountMinor: 6800, currency: 'KHR' },
+        breakdown: { tripMinor: 5000, surgeMinor: 1300, bookingFeeMinor: 500 },
+      });
+    });
+
+    it('never surges the booking fee', () => {
+      // trip 6000 ×2 = 12000, fee 1000 unsurged (a surged fee would make 14000)
+      expect(at({ ...C, bookingFee: 1000 }, 3000, 300, 20_000).fare.amountMinor).toBe(13_000);
+    });
+
+    it('charges the pre-surge price at 1.0x, with no surge line', () => {
+      expect(at(C, 3001, 301, 10_000)).toEqual({
+        fare: { amountMinor: 6600, currency: 'KHR' },
+        breakdown: { tripMinor: 6100, surgeMinor: 0, bookingFeeMinor: 500 },
+      });
+    });
+
+    it.each([9_999, 0, -10_000, 15_000.5, Number.NaN, Number.POSITIVE_INFINITY])('refuses a multiplier of %p bp', (surgeBp) => {
+      expect(() => at(C, 3000, 300, surgeBp)).toThrow(RangeError);
+    });
+
+    it.each([50, 150, 1])('refuses a booking fee of %p riel (not a multiple of 100, so the lines could not sum)', (bookingFee) => {
+      expect(() => at({ ...C, bookingFee }, 3000, 300, 10_000)).toThrow(RangeError);
+    });
+
+    it('prices at 1.0x every trip it priced before surge existed', () => {
+      // trip 1.2e12 units is safe; × 10000 would not be
+      expect(at({ ...C, base: 20_000_000 }, 0, 0, 10_000).fare.amountMinor).toBe(20_000_500);
+    });
+
+    it('refuses a surged trip past the safe integer range instead of producing a wrong price', () => {
+      // 15001 shares no factor with 10000, so the numerator stays trip × 15001 ≈ 1.8e16
+      expect(() => at({ ...C, base: 20_000_000 }, 0, 0, 15_001)).toThrow(RangeError);
+    });
+  });
+
+  // Bounded so the surged trip (trip × 60000 × bp) stays a safe integer: past it fare() refuses (tested above)
+  const field = fc.integer({ min: 0, max: 10_000 });
+  const fee = fc.integer({ min: 0, max: 100 }).map((n) => n * 100);
+  const card = fc.record({ base: field, perKm: field, perMin: field, minimumFare: field, bookingFee: fee });
+  const distance = fc.integer({ min: 0, max: 200_000 });
+  const duration = fc.integer({ min: 0, max: 10_000 });
+  const surgeBp = fc.integer({ min: 10_000, max: 30_000 });
+  const tripTimes60k = (c: RateCard, d: number, t: number) =>
+    BigInt(Math.max(c.base * 60_000 + d * c.perKm * 60 + t * c.perMin * 1000, c.minimumFare * 60_000));
+
+  it('lists whole-riel lines that sum to the fare, with the surged trip within 100 riel above the exact surged trip', () => {
+    fc.assert(
+      fc.property(card, distance, duration, surgeBp, (c, d, t, bp) => {
+        const { fare: f, breakdown: b } = fare(c, { distanceM: d, durationS: t }, bp);
+        expect(b.tripMinor + b.surgeMinor + b.bookingFeeMinor).toBe(f.amountMinor);
+        expect(b.bookingFeeMinor).toBe(c.bookingFee);
+        expect(b.surgeMinor >= 0 && b.surgeMinor % 100 === 0 && b.tripMinor % 100 === 0).toBe(true);
+        const over = BigInt(b.tripMinor + b.surgeMinor) * 60_000n * 10_000n - tripTimes60k(c, d, t) * BigInt(bp);
+        expect(over >= 0n && over < 100n * 60_000n * 10_000n).toBe(true);
+      }),
+    );
+  });
+
+  it('never decreases as the multiplier grows', () => {
+    fc.assert(
+      fc.property(card, distance, duration, surgeBp, surgeBp, (c, d, t, bp1, bp2) => {
+        const price = (bp: number) => fare(c, { distanceM: d, durationS: t }, bp).fare.amountMinor;
+        expect(price(Math.min(bp1, bp2))).toBeLessThanOrEqual(price(Math.max(bp1, bp2)));
+      }),
+    );
+  });
 
   it('is a whole, non-negative multiple of 100 within 100 riel above the exact price', () => {
     fc.assert(
       fc.property(card, distance, duration, (c, d, t) => {
         const amount = riel(c, d, t);
         // exact price × 60000, independent of fare()'s internals
-        const exact =
-          BigInt(Math.max(c.base * 60_000 + d * c.perKm * 60 + t * c.perMin * 1000, c.minimumFare * 60_000)) +
-          BigInt(c.bookingFee * 60_000);
+        const exact = tripTimes60k(c, d, t) + BigInt(c.bookingFee * 60_000);
         const over = BigInt(amount) * 60_000n - exact;
         expect(Number.isSafeInteger(amount) && amount >= 0 && amount % 100 === 0).toBe(true);
         expect(over >= 0n && over < 100n * 60_000n).toBe(true);
@@ -106,5 +181,47 @@ describe('ceilToRiel', () => {
     [2 ** 53 + 2, 60_000], // unsafe numerator, safe-looking result
   ])('refuses %p / %p', (numerator, denominator) => {
     expect(() => ceilToRiel(numerator, denominator)).toThrow(RangeError);
+  });
+});
+
+describe('commission', () => {
+  const lines = (tripMinor: number, surgeMinor = 0, bookingFeeMinor = 0): FareBreakdown => ({ tripMinor, surgeMinor, bookingFeeMinor });
+
+  it.each([
+    [lines(10_000), 1500, 1500],
+    [lines(10_100), 1500, 1600], // 1515 rounds up
+    [lines(10_000, 5000, 500), 1500, 2800], // 2250 rounds up to 2300, plus the whole fee
+    [lines(10_000, 5000, 500), 0, 500],
+    [lines(10_000, 5000, 500), 10_000, 15_500],
+    [lines(100, 100), 1500, 100], // one rounding of 30, not 15 → 100 twice
+  ])('takes %p at %p bp as %p riel', (b, bp, expected) => {
+    expect(commission(b, bp)).toBe(expected);
+  });
+
+  it.each([-1, 10_001, 1.5])('refuses %p bp', (bp) => {
+    expect(() => commission(lines(10_000), bp)).toThrow(RangeError);
+  });
+
+  const step = (max: number) => fc.integer({ min: 0, max }).map((n) => n * 100);
+  const breakdown = fc.record({ tripMinor: step(100_000), surgeMinor: step(100_000), bookingFeeMinor: step(100) });
+  const bp = fc.integer({ min: 0, max: 10_000 });
+
+  it('is whole 100 riel, at least the fee and at most the fare', () => {
+    fc.assert(
+      fc.property(breakdown, bp, (b, p) => {
+        const c = commission(b, p);
+        expect(c % 100).toBe(0);
+        expect(c).toBeGreaterThanOrEqual(b.bookingFeeMinor);
+        expect(c).toBeLessThanOrEqual(b.tripMinor + b.surgeMinor + b.bookingFeeMinor);
+      }),
+    );
+  });
+
+  it('never decreases as the rate grows', () => {
+    fc.assert(
+      fc.property(breakdown, bp, bp, (b, p1, p2) => {
+        expect(commission(b, Math.min(p1, p2))).toBeLessThanOrEqual(commission(b, Math.max(p1, p2)));
+      }),
+    );
   });
 });

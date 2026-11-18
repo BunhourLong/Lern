@@ -24,8 +24,8 @@ const cardOf = async (q: Quote) =>
 const addCard = async (startsIn: string, minimumFare: number, base = 5000) =>
   (
     await db().query<{ id: string }[]>(
-      `INSERT INTO rate_cards (vehicle_type, base, per_km, per_min, minimum_fare, booking_fee, active_from)
-       VALUES ('moto', $1, 1700, 300, $2, 500, now() + $3::interval) RETURNING id`,
+      `INSERT INTO rate_cards (vehicle_type, base, per_km, per_min, minimum_fare, booking_fee, commission_bp, active_from)
+       VALUES ('moto', $1, 1700, 300, $2, 500, 1500, now() + $3::interval) RETURNING id`,
       [base, minimumFare, startsIn],
     )
   )[0];
@@ -54,8 +54,8 @@ it('keeps cards append-only: no update, no delete, no second card for the same t
   await expect(db().query('UPDATE rate_cards SET base = base + 1 WHERE id = $1', [future.id])).rejects.toThrow(/append-only/);
   await expect(db().query('DELETE FROM rate_cards WHERE id = $1', [future.id])).rejects.toThrow(/append-only/);
   // active_from copied in SQL: a JS Date would drop the microseconds and miss the tie
-  const tie = `INSERT INTO rate_cards (vehicle_type, base, per_km, per_min, minimum_fare, booking_fee, active_from)
-               SELECT vehicle_type, 0, 0, 0, 0, 0, active_from FROM rate_cards WHERE id = $1`;
+  const tie = `INSERT INTO rate_cards (vehicle_type, base, per_km, per_min, minimum_fare, booking_fee, commission_bp, active_from)
+               SELECT vehicle_type, 0, 0, 0, 0, 0, 1500, active_from FROM rate_cards WHERE id = $1`;
   await expect(db().query(tie, [current.id])).rejects.toMatchObject({ code: '23505' });
   await expect(addCard('2 hours', 0, -1)).rejects.toMatchObject({ code: '23514' });
 });

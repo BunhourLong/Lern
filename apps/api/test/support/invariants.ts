@@ -24,6 +24,11 @@ const CHECKS: Record<string, string> = {
   'one event per ride version': `SELECT r.id FROM rides r
     WHERE r.version <> (SELECT count(*) FROM ride_events e WHERE e.ride_id = r.id)
        OR r.version <> (SELECT max(seq) FROM ride_events e WHERE e.ride_id = r.id)`,
+  'a completed ride owes its commission once, any other ride nothing': `SELECT r.id FROM rides r
+    WHERE (SELECT count(*) FROM driver_ledger_entries l WHERE l.ride_id = r.id) <> (r.status = 'completed')::int
+       OR EXISTS (SELECT 1 FROM driver_ledger_entries l WHERE l.ride_id = r.id
+                    AND (l.kind, l.amount_minor, l.driver_id, l.currency)
+                        IS DISTINCT FROM ('commission', -r.commission_minor, r.driver_id, r.currency))`,
 };
 
 export async function violations(db: DataSource): Promise<{ invariant: string; id: string }[]> {

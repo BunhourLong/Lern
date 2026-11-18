@@ -46,8 +46,8 @@ beforeAll(async () => {
   app = await (await bootApp({}, { DATABASE_URL, OSRM_URL: `http://127.0.0.1:${(osrm.address() as AddressInfo).port}` })).init();
   down = await (await bootApp({}, { DATABASE_URL })).init();
   await db().query(
-    `INSERT INTO rate_cards (vehicle_type, base, per_km, per_min, minimum_fare, booking_fee, active_from)
-     VALUES ('moto', $1, $2, $3, $4, $5, now() - interval '1 minute')`,
+    `INSERT INTO rate_cards (vehicle_type, base, per_km, per_min, minimum_fare, booking_fee, commission_bp, active_from)
+     VALUES ('moto', $1, $2, $3, $4, $5, 1500, now() - interval '1 minute')`,
     [card.base, card.perKm, card.perMin, card.minimumFare, card.bookingFee],
   );
 });
@@ -71,7 +71,7 @@ const row = async (q: Quote) =>
 it('prices a quote from the OSRM road distance and duration, rounded to whole metres and seconds, and stores both', async () => {
   const q = await quote(app);
   expect(q.distanceM).toBe(3820);
-  expect(q.fare).toEqual(fare(card, { distanceM: 3820, durationS: 1381 }));
+  expect(q.fare).toEqual(fare(card, { distanceM: 3820, durationS: 1381 }, 10_000).fare);
   expect(await row(q)).toEqual({ distance_m: 3820, duration_s: 1381 });
 });
 
@@ -97,7 +97,7 @@ describe('OSRM failing', () => {
     if (failure !== 'refused') mode = failure;
     const q = await quote(failure === 'refused' ? down : app);
     expect(q.distanceM).toBe(distanceM);
-    expect(q.fare).toEqual(fare(card, { distanceM, durationS }));
+    expect(q.fare).toEqual(fare(card, { distanceM, durationS }, 10_000).fare);
     expect(await row(q)).toEqual({ distance_m: distanceM, duration_s: durationS });
   });
 });

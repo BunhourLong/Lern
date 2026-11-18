@@ -4,6 +4,7 @@ import { PricingController } from './pricing.controller';
 import { PricingRepository } from './pricing.repository';
 import { PricingService } from './pricing.service';
 import { RouteProvider } from './route.provider';
+import { SurgeService } from './surge.service';
 
 @Module({})
 export class PricingModule {
@@ -13,8 +14,8 @@ export class PricingModule {
       // Global, like NotificationsModule: rides reads quotes through PricingService without passing config on
       global: true,
       controllers: [PricingController],
-      providers: [{ provide: PRICING_CONFIG, useValue: config }, PricingRepository, PricingService, RouteProvider],
-      exports: [PricingService],
+      providers: [{ provide: PRICING_CONFIG, useValue: config }, PricingRepository, PricingService, RouteProvider, SurgeService],
+      exports: [PricingService, SurgeService],
     };
   }
 }
