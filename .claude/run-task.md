@@ -20,6 +20,22 @@
 - Git: stage by explicit path, then commit the task with a conventional message and no AI attribution; never push.
 - Close: tick the `PLAN.md` box (at most 2 lines; longer goes in `PLAN-notes.md`, gotchas in `.claude/rules/gotchas-*.md`), rewrite `STATE.md` (under 40 lines, names the next task and its risk), run `graphify update .`; commit; stop after one task with "`/clear`, then `delikit run-task`".
 
+## Temporary routing: Codex-only window (2026-11-18 until the Plus weekly reset, ~2026-11-20)
+
+User decision 2026-11-18: spend the Plus weekly Codex limit (60% left) on quality and save OpenCode Go (25% of the month left). Nothing goes to OpenCode in this window. The table under Worker routing applies again after the reset, when the user says so, or on a Plus limit error (then pause per Limit until the reset).
+
+| Job | Provider and model | Options |
+| --- | --- | --- |
+| High risk: plan critic, after the think half and before the `/goal` goes to the user | `codex` / `gpt-6-astra` | `reasoningEffort: high` |
+| High risk: write | main session | |
+| High risk: diff review | `codex` / `gpt-6.2-sol` | `reasoningEffort: high` |
+| Medium and low: write | `codex` / `gpt-6.2-sol` | `reasoningEffort: high` |
+| Medium and low: diff review | `codex` / `gpt-6.1-sol` | `reasoningEffort: high` |
+| Read-only search | `codex` / `gpt-6-luna` | `reasoningEffort: low` |
+
+- The plan critic reads the one-page plan and the `path:line`s it cites (a small input, so Astra's cost per message stays low) and returns objections with `path:line`: a missed race, a wrong transaction boundary, a red test that can't fail, a simpler design. It never writes code and never reviews a diff (still one diff reviewer per task). The main session settles each objection in the plan before ending the turn.
+- Writer and diff reviewer are always different models. GPT-6.2 Astra stays banned.
+
 ## Worker routing
 
 | Job | Provider and model | Options |
