@@ -26,15 +26,15 @@ User decision 2026-11-18: spend the Plus weekly Codex limit (60% left) on qualit
 
 | Job | Provider and model | Options |
 | --- | --- | --- |
-| High risk: plan critic, after the think half and before the `/goal` goes to the user | `codex` / `gpt-6-astra` | `reasoningEffort: high` |
+| High risk: plan critic, after the think half and before the `/goal` goes to the user | `codex` / `gpt-6.2-astra` | `reasoningEffort: high` |
 | High risk: write | main session | |
 | High risk: diff review | `codex` / `gpt-6.2-sol` | `reasoningEffort: high` |
 | Medium and low: write | `codex` / `gpt-6.2-sol` | `reasoningEffort: high` |
 | Medium and low: diff review | `codex` / `gpt-6.1-sol` | `reasoningEffort: high` |
 | Read-only search | `codex` / `gpt-6-luna` | `reasoningEffort: low` |
 
-- The plan critic reads the one-page plan and the `path:line`s it cites (a small input, so Astra's cost per message stays low) and returns objections with `path:line`: a missed race, a wrong transaction boundary, a red test that can't fail, a simpler design. It never writes code and never reviews a diff (still one diff reviewer per task). The main session settles each objection in the plan before ending the turn.
-- Writer and diff reviewer are always different models. GPT-6.2 Astra stays banned.
+- The plan critic reads the one-page plan and the `path:line`s it cites (a small input, so Astra's cost per message stays low; it leads the third-party SecureSWE and PatchBench numbers) and returns objections with `path:line`: a missed race, a wrong transaction boundary, a red test that can't fail, a simpler design. It never writes code and never reviews a diff (still one diff reviewer per task). The main session settles each objection in the plan before ending the turn.
+- Writer and diff reviewer are always different models. GPT-6 Astra stays banned (user, 2026-11-18: 6.2 Astra replaces it as plan critic).
 
 ## Worker routing
 
