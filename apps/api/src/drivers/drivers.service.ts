@@ -1,7 +1,8 @@
 import type { ApplyDriver, Availability, DriverAvailabilityAction, DriverProfile, DriverVerification } from '@lern/contracts';
-import { ConflictException, ForbiddenException, HttpStatus, Injectable, NotFoundException } from '@nestjs/common';
+import { ConflictException, ForbiddenException, HttpStatus, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { DataSource, type EntityManager } from 'typeorm';
 import { UsersService } from '../users/users.service';
+import { DRIVERS_CONFIG, type DriversConfig } from './drivers.config';
 import { DriversRepository } from './drivers.repository';
 
 @Injectable()
@@ -10,6 +11,7 @@ export class DriversService {
     private readonly db: DataSource,
     private readonly drivers: DriversRepository,
     private readonly users: UsersService,
+    @Inject(DRIVERS_CONFIG) private readonly config: DriversConfig,
   ) {}
 
   // Profile and role in one transaction: never a driver row without the role, or the reverse
@@ -47,6 +49,17 @@ export class DriversService {
     }
     const target = online ? 'available' : 'offline';
     if (state.availability === target) return { availability: target };
+    // Going offline never checks: a driver in debt must be able to stop
+    const limitMinor = this.config.DRIVER_DEBT_LIMIT_MINOR;
+    if (online && !(await this.drivers.withinDebtLimit(userId, limitMinor))) {
+      throw new ForbiddenException({
+        statusCode: HttpStatus.FORBIDDEN,
+        code: 'DEBT_LIMIT',
+        message: 'Driver owes more commission than the limit',
+        limitMinor,
+        currency: 'KHR',
+      });
+    }
     if (await this.drivers.move(this.db.manager, userId, online ? 'go_online' : 'go_offline')) return { availability: target };
     // The move missed: a simultaneous identical request (a double tap) may have made it first
     const availability = (await this.drivers.state(userId))?.availability;

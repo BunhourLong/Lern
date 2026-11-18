@@ -19,7 +19,8 @@ const db = () => app.get(DataSource);
 
 // Own database: its card would re-price other suites' quotes, and the race gate counts lock waiters database-wide
 beforeAll(async () => {
-  app = await (await bootApp({}, { DATABASE_URL: await isolatedDatabase() })).init();
+  // The debt limit is exactly one completed ride's commission (M6.9)
+  app = await (await bootApp({}, { DATABASE_URL: await isolatedDatabase(), DRIVER_DEBT_LIMIT_MINOR: 1700 })).init();
   await db().query(
     `INSERT INTO rate_cards (vehicle_type, base, per_km, per_min, minimum_fare, booking_fee, commission_bp, active_from)
      VALUES ('moto', 5000, 1700, 300, 0, 500, 1200, now() - interval '1 minute')`,
@@ -28,20 +29,23 @@ beforeAll(async () => {
 afterAll(() => app.close());
 
 const step = (a: Actor, rideId: string, action: string) => http().post(`/rides/${rideId}/${action}`).set(a.auth);
-// A fresh rider's ride accepted by a fresh verified driver, walked on with the driver's steps
-const assignedRide = async (...steps: string[]) => {
+const newDriver = async () => {
+  const me = await signIn(app);
+  await http().post('/drivers/me').set(me.auth).send({ vehicleType: 'moto', plate: 'PP 2A-1234' }).expect(201);
+  await db().query(`UPDATE drivers SET verification = 'verified' WHERE user_id = $1`, [me.id]);
+  return signIn(app, me.phone); // a fresh token carries the driver role
+};
+// A fresh rider's ride accepted by the driver, walked on with the driver's steps
+const rideFor = async (driver: Actor, ...steps: string[]) => {
   const rider = await signIn(app);
   const quote = (await http().post('/quotes').set(rider.auth).send(trip).expect(201)).body as Quote;
   expect(quote.fare).toEqual({ amountMinor: 10_000, currency: 'KHR' });
   const ride = (await http().post('/rides').set(rider.auth).send({ quoteId: quote.id }).expect(201)).body as Ride;
-  const me = await signIn(app);
-  await http().post('/drivers/me').set(me.auth).send({ vehicleType: 'moto', plate: 'PP 2A-1234' }).expect(201);
-  await db().query(`UPDATE drivers SET verification = 'verified' WHERE user_id = $1`, [me.id]);
-  const driver = await signIn(app, me.phone); // a fresh token carries the driver role
   await assign(app, driver, ride.id);
   for (const s of steps) await step(driver, ride.id, s).expect(200);
   return { rider, driver, ride };
 };
+const assignedRide = async (...steps: string[]) => rideFor(await newDriver(), ...steps);
 const entries = (rideId: string) =>
   db().query<{ driver_id: string; kind: string; amount_minor: string; currency: string }[]>(
     'SELECT driver_id, kind, amount_minor, currency FROM driver_ledger_entries WHERE ride_id = $1',
@@ -94,4 +98,57 @@ it('lets exactly one of 8 parallel completes win and append exactly one entry', 
     expect(state).toEqual({ status: 'completed', version: 5 });
     expect(await entries(ride.id)).toEqual(owes(driver));
   }
+});
+
+// PLAN.md M6.9: a driver goes online only while the KHR commission owed stays within the limit (1700 here)
+describe('the debt limit on going online', () => {
+  const setOnline = (driver: Actor, online: boolean) => http().put('/drivers/me/availability').set(driver.auth).send({ online });
+
+  it('lets a driver who owes exactly the limit go offline and online again', async () => {
+    const { driver } = await assignedRide('arrive', 'start', 'complete');
+    await setOnline(driver, false).expect(200, { availability: 'offline' });
+    await setOnline(driver, true).expect(200, { availability: 'available' });
+  });
+
+  it('lets a driver past the limit go offline but not back online, and records no move', async () => {
+    const { driver } = await assignedRide('arrive', 'start', 'complete');
+    await rideFor(driver, 'arrive', 'start', 'complete');
+    await setOnline(driver, true).expect(200, { availability: 'available' }); // already available: a retry never checks
+    await setOnline(driver, false).expect(200, { availability: 'offline' });
+    const events = async () =>
+      db().query<{ action: string }[]>('SELECT action FROM driver_availability_events WHERE driver_id = $1 ORDER BY id', [
+        driver.id,
+      ]);
+    const before = await events();
+    expect(before.at(-1)).toEqual({ action: 'go_offline' });
+    await setOnline(driver, true).expect(403, {
+      statusCode: 403,
+      code: 'DEBT_LIMIT',
+      message: 'Driver owes more commission than the limit',
+      limitMinor: 1700,
+      currency: 'KHR',
+    });
+    expect((await http().get('/drivers/me').set(driver.auth).expect(200)).body).toMatchObject({ availability: 'offline' });
+    expect(await events()).toEqual(before);
+  });
+
+  it('counts only KHR entries: riel and cents never add up', async () => {
+    const { driver } = await assignedRide('arrive', 'start', 'complete');
+    const { ride } = await rideFor(driver, 'arrive', 'start');
+    await db().query(`UPDATE rides SET commission_minor = 5000, currency = 'USD' WHERE id = $1`, [ride.id]);
+    await step(driver, ride.id, 'complete').expect(200);
+    await setOnline(driver, false).expect(200);
+    await setOnline(driver, true).expect(200, { availability: 'available' });
+  });
+
+  it('lets a driver with no entries go online, whatever other drivers owe', async () => {
+    const { driver: indebted } = await assignedRide('arrive', 'start', 'complete');
+    await rideFor(indebted, 'arrive', 'start', 'complete');
+    const [{ total }] = await db().query<{ total: string }[]>(
+      `SELECT sum(amount_minor) AS total FROM driver_ledger_entries WHERE currency = 'KHR'`,
+    );
+    expect(Number(total)).toBeLessThan(-1700);
+    const driver = await newDriver();
+    await setOnline(driver, true).expect(200, { availability: 'available' });
+  });
 });

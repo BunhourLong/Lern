@@ -33,7 +33,7 @@ export class AppModule {
         HealthModule,
         AppConfigModule.forRoot(config),
         AuthModule.forRoot(config),
-        DriversModule,
+        DriversModule.forRoot(config),
         LocationModule,
         MatchingModule.forRoot(config),
         NotificationsModule.forRoot(config),

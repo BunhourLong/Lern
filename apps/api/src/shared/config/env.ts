@@ -45,6 +45,9 @@ const Env = z.object({
   SURGE_CAP_BP: z.coerce.number().int().min(10000).default(20000),
   // The most one run may move a cell, so surge ramps instead of jumping
   SURGE_MAX_STEP_BP: z.coerce.number().int().min(1).default(1000),
+  // Commission a driver may owe, in KHR riel, and still go online (PLAN.md M6.9); placeholder ~$10, one value for
+  // every vehicle type
+  DRIVER_DEBT_LIMIT_MINOR: z.coerce.number().int().min(0).default(40000),
   // App config (GET /app-config): a minimum version is shown to users with its store link, so the pair travels together
   APP_MIN_VERSION_IOS: appVersionSchema.optional(),
   APP_STORE_URL_IOS: storeUrlSchema.optional(),
