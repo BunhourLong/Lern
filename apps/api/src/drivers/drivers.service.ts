@@ -71,6 +71,12 @@ export class DriversService {
     });
   }
 
+  // A ride ended, inside its transaction: back to available, or offline once the commission owed is past the limit
+  async endTrip(m: EntityManager, driverId: string): Promise<boolean> {
+    const within = await this.drivers.withinDebtLimit(driverId, this.config.DRIVER_DEBT_LIMIT_MINOR, m);
+    return this.drivers.move(m, driverId, within ? 'finish' : 'debt_stop');
+  }
+
   // For the offer and ride changes that move a driver, inside their transaction
   move(m: EntityManager, driverId: string, action: DriverAvailabilityAction): Promise<boolean> {
     return this.drivers.move(m, driverId, action);

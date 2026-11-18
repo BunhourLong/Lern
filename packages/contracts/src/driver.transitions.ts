@@ -9,6 +9,7 @@ const DRIVER_TRANSITIONS: Record<DriverAvailabilityAction, { from: DriverAvailab
   release: { from: 'reserved', to: 'available' },
   assign: { from: 'reserved', to: 'on_trip' },
   finish: { from: 'on_trip', to: 'available' },
+  debt_stop: { from: 'on_trip', to: 'offline' },
   time_out: { from: 'available', to: 'offline' },
 };
 

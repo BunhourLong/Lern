@@ -113,6 +113,8 @@ describe('the debt limit on going online', () => {
   it('lets a driver past the limit go offline but not back online, and records no move', async () => {
     const { driver } = await assignedRide('arrive', 'start', 'complete');
     await rideFor(driver, 'arrive', 'start', 'complete');
+    // That completion ended the shift (M6.9a); a driver who drifted past the limit while available stands in for one
+    await db().query(`UPDATE drivers SET availability = 'available' WHERE user_id = $1`, [driver.id]);
     await setOnline(driver, true).expect(200, { availability: 'available' }); // already available: a retry never checks
     await setOnline(driver, false).expect(200, { availability: 'offline' });
     const events = async () =>
@@ -137,6 +139,7 @@ describe('the debt limit on going online', () => {
     const { ride } = await rideFor(driver, 'arrive', 'start');
     await db().query(`UPDATE rides SET commission_minor = 5000, currency = 'USD' WHERE id = $1`, [ride.id]);
     await step(driver, ride.id, 'complete').expect(200);
+    expect((await http().get('/drivers/me').set(driver.auth).expect(200)).body).toMatchObject({ availability: 'available' });
     await setOnline(driver, false).expect(200);
     await setOnline(driver, true).expect(200, { availability: 'available' });
   });
@@ -150,5 +153,47 @@ describe('the debt limit on going online', () => {
     expect(Number(total)).toBeLessThan(-1700);
     const driver = await newDriver();
     await setOnline(driver, true).expect(200, { availability: 'available' });
+  });
+
+});
+
+// PLAN.md M6.9a: the ride end that leaves the driver past the limit ends their shift, in the ride's own transaction
+describe('the debt limit at the end of a trip', () => {
+  const availability = async (driver: Actor) =>
+    ((await http().get('/drivers/me').set(driver.auth).expect(200)).body as { availability: string }).availability;
+  const lastEvent = async (driver: Actor) =>
+    (
+      await db().query<{ action: string; from_state: string; to_state: string }[]>(
+        'SELECT action, from_state, to_state FROM driver_availability_events WHERE driver_id = $1 ORDER BY id DESC LIMIT 1',
+        [driver.id],
+      )
+    )[0];
+  const debtStop = { action: 'debt_stop', from_state: 'on_trip', to_state: 'offline' };
+  const refused = (driver: Actor) =>
+    http().put('/drivers/me/availability').set(driver.auth).send({ online: true }).expect(403).expect((r) => {
+      expect(r.body).toMatchObject({ code: 'DEBT_LIMIT' });
+    });
+
+  it('sends a driver whose completion crosses the limit offline instead of available', async () => {
+    const { driver } = await assignedRide('arrive', 'start', 'complete');
+    expect(await availability(driver)).toBe('available'); // owes exactly the limit
+    await rideFor(driver, 'arrive', 'start', 'complete');
+    expect(await availability(driver)).toBe('offline');
+    expect(await lastEvent(driver)).toEqual(debtStop);
+    await refused(driver);
+  });
+
+  it('sends a driver offline when a ride is cancelled past the limit', async () => {
+    const { driver } = await assignedRide('arrive', 'start', 'complete');
+    const { rider, ride } = await rideFor(driver);
+    // Stands in for a limit lowered mid-trip: the driver is now 1 riel past it before the ride ends
+    await db().query(
+      `INSERT INTO driver_ledger_entries (driver_id, ride_id, kind, amount_minor, currency) VALUES ($1, $2, 'commission', -1, 'KHR')`,
+      [driver.id, ride.id],
+    );
+    await step(rider, ride.id, 'cancel').send({ reason: 'changed_mind' }).expect(200);
+    expect(await availability(driver)).toBe('offline');
+    expect(await lastEvent(driver)).toEqual(debtStop);
+    await refused(driver);
   });
 });

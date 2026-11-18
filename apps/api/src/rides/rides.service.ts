@@ -102,10 +102,10 @@ export class RidesService {
       try {
         row = await this.db.transaction(async (m) => {
           const moved = await this.rides.transition(userId, rideId, actor, action, t, cancelReason, m);
-          // A ride that ends frees its driver. A driver who isn't on_trip has drifted: the move misses, the ride
-          // change still stands, and the reconciler repairs the driver.
+          // A ride that ends frees its driver (or ends their shift past the debt limit). A driver who isn't on_trip
+          // has drifted: the move misses, the ride change still stands, and the reconciler repairs the driver.
           if (moved?.driverId && (moved.status === 'completed' || moved.status === 'cancelled')) {
-            await this.drivers.move(m, moved.driverId, 'finish');
+            await this.drivers.endTrip(m, moved.driverId);
           }
           return moved;
         });
