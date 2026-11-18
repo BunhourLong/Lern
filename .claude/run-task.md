@@ -35,6 +35,7 @@ User decision 2026-11-18: spend the Plus weekly Codex limit (60% left) on qualit
 
 - The plan critic reads the one-page plan and the `path:line`s it cites (a small input, so Astra's cost per message stays low; it leads the third-party SecureSWE and PatchBench numbers) and returns objections with `path:line`: a missed race, a wrong transaction boundary, a red test that can't fail, a simpler design. It never writes code and never reviews a diff (still one diff reviewer per task). The main session settles each objection in the plan before ending the turn.
 - Writer and diff reviewer are always different models. GPT-6 Astra stays banned (user, 2026-11-18: 6.2 Astra replaces it as plan critic).
+- **Revert** (at session start on or after 2026-11-20, or when the user says so; ask first if the window seems still wanted): delete this whole section; in `CLAUDE.md` §1 drop the "(except GPT-6.2 Astra and GPT-6.1 Sol in the Codex-only window …)" clause; in memory `subagents-opencode-go-only.md` drop the "Temporary, 2026-11-18" paragraph and in `MEMORY.md` the "Until ~2026-11-20" sentence; in `STATE.md` drop the "Codex-only window" sentence; commit `chore(workflow): end the Codex-only window`. The Worker routing table below is the old workflow and needs no edit.
 
 ## Worker routing
 
