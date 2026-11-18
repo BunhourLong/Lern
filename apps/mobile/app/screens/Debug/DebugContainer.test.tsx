@@ -7,6 +7,12 @@ import { createRawEventsStore } from '../../stores/raw-events.store';
 import { createSessionStore } from '../../stores/session.store';
 import DebugContainer from './DebugContainer';
 
+jest.mock('expo-glass-effect', () => ({
+  GlassView: 'GlassView',
+  isGlassEffectAPIAvailable: () => false,
+  isLiquidGlassAvailable: () => false,
+}));
+
 jest.mock('react-native-safe-area-context', () => ({
   useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }),
 }));

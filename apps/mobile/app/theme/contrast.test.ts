@@ -57,3 +57,10 @@ test('contrast is 21 for black and white and 1 for equal colors', () => {
   expect(contrast('#000000', '#ffffff')).toBe(21);
   expect(contrast('#123456', '#123456')).toBe(1);
 });
+
+test.each(Object.entries(themes))(
+  '%s text on surfaceGlass over primary',
+  (_scheme, { text, surfaceGlass, primary }) => {
+    expect(contrast(text, surfaceGlass, primary)).toBeGreaterThanOrEqual(4.5);
+  },
+);

@@ -8,6 +8,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { makeStyles, spacing, type } from '@theme';
+import { GlassSurface } from '../../components/GlassSurface';
 import type { RawEvent } from '../../stores/raw-events.store';
 
 export type DebugScreenProps = {
@@ -63,6 +64,14 @@ export default function DebugScreen(p: DebugScreenProps) {
         </Text>
         <Text style={typeStyles.caption}>Estimated fare · តម្លៃប៉ាន់ស្មាន</Text>
       </View>
+      <View style={typeStyles.glassBackdrop}>
+        <GlassSurface>
+          <Text style={typeStyles.bodyStrong}>Glass surface · ផ្ទៃកញ្ចក់</Text>
+          <Text style={typeStyles.body}>
+            Pickup at the market · ឡើងជិះនៅផ្សារ
+          </Text>
+        </GlassSurface>
+      </View>
       <Text style={styles.mono}>{JSON.stringify(p.state, null, 2)}</Text>
       {p.events.map((e, i) => (
         <Text key={i} style={styles.mono}>
@@ -80,6 +89,7 @@ const useTypeStyles = makeStyles(t => ({
     marginVertical: spacing.md,
     padding: spacing.sm,
   },
+  glassBackdrop: { backgroundColor: t.colors.primary, padding: spacing.md },
   title: { ...type.title, color: t.colors.text },
   body: { ...type.body, color: t.colors.text },
   bodyStrong: { ...type.bodyStrong, color: t.colors.text },

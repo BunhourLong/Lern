@@ -24,20 +24,22 @@ Find the simulator ids: `xcrun simctl list devices available`.
 ```sh
 # iOS: boot, set theme and text size, capture
 xcrun simctl boot <udid> && xcrun simctl bootstatus <udid>
-pnpm --filter @lern/mobile ios --udid <udid>        # unverified: build + install via the RN CLI
+pnpm --filter @lern/mobile ios --udid <udid> --no-packager   # Metro first: pnpm --filter @lern/mobile start
 xcrun simctl ui <udid> appearance dark              # or light
 xcrun simctl ui <udid> content_size accessibility-extra-extra-extra-large   # largest; reset with: large
 xcrun simctl io <udid> screenshot .superpowers/screens/<task-id>/ios26-dark-km.png
 ```
 
-Reduce Transparency has no `simctl` switch: turn it on in the simulator's Settings → Accessibility →
-Display & Text Size.
+Reduce Transparency has no `simctl ui` switch; set the default, then relaunch the app (executed on iOS 26.5):
+`xcrun simctl spawn <udid> defaults write com.apple.Accessibility EnhancedBackgroundContrastEnabled -bool true`
+(`false` to reset). To scroll a long screen: `axe swipe --start-x 200 --start-y 750 --end-x 200 --end-y 150 --udid <udid>`
+(iOS), `$ADB shell input swipe 500 1800 500 400 300` (Android).
 
 ```sh
 # Android
 ADB=~/Library/Android/sdk/platform-tools/adb
 ~/Library/Android/sdk/emulator/emulator -avd Medium_Phone &   # wait: $ADB shell getprop sys.boot_completed → 1
-pnpm --filter @lern/mobile android                   # unverified: build + install via the RN CLI
+ANDROID_HOME=~/Library/Android/sdk pnpm --filter @lern/mobile android --no-packager   # agent shells lack ANDROID_HOME
 $ADB shell pm grant com.lern android.permission.ACCESS_LOCAL_NETWORK   # API 37: else the app can't reach Metro
 $ADB shell cmd uimode night yes                      # or no
 $ADB shell settings put system font_scale 2.0        # largest; reset with 1.0
