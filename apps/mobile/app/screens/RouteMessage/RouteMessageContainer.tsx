@@ -1,14 +1,18 @@
 import { useRef, useState } from 'react';
 import { Linking } from 'react-native';
+import type { Edge } from 'react-native-safe-area-context';
 import { useT } from '../../i18n';
 import type { StringKey } from '../../i18n';
 import type { RootRoute } from '../../routes/root-route';
 import RouteMessageScreen from './RouteMessageScreen';
 
+type MessageRoute = RootRoute | 'activity' | 'earnings' | 'account';
+
 type Props = {
-  route: RootRoute;
+  route: MessageRoute;
   storeUrl?: string;
   onDebug?: () => void;
+  edges?: Edge[];
 };
 
 const messages = {
@@ -20,8 +24,11 @@ const messages = {
   login: { title: 'route.login.title', body: 'route.login.body' },
   driver: { title: 'route.driver.title' },
   rider: { title: 'route.rider.title' },
+  activity: { title: 'tab.activity', body: 'tab.comingSoon' },
+  earnings: { title: 'tab.earnings', body: 'tab.comingSoon' },
+  account: { title: 'tab.account', body: 'tab.comingSoon' },
 } satisfies Record<
-  Exclude<RootRoute, 'loading'>,
+  Exclude<MessageRoute, 'loading'>,
   { title: StringKey; body?: StringKey }
 >;
 
@@ -29,6 +36,7 @@ export default function RouteMessageContainer({
   route,
   storeUrl,
   onDebug,
+  edges,
 }: Props) {
   const t = useT();
   const opening = useRef(false);
@@ -37,7 +45,9 @@ export default function RouteMessageContainer({
   );
 
   if (route === 'loading')
-    return <RouteMessageScreen loadingLabel={t('route.loading')} />;
+    return (
+      <RouteMessageScreen loadingLabel={t('route.loading')} edges={edges} />
+    );
 
   const message = messages[route];
   const openStore = async () => {
@@ -67,6 +77,7 @@ export default function RouteMessageContainer({
 
   return (
     <RouteMessageScreen
+      edges={edges}
       title={t(message.title)}
       body={'body' in message ? t(message.body) : undefined}
       updateAction={updateAction}

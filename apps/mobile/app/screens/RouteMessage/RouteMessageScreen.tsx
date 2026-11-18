@@ -1,4 +1,5 @@
 import { ActivityIndicator, View } from 'react-native';
+import type { Edge } from 'react-native-safe-area-context';
 import { makeStyles, spacing, useTheme } from '@theme';
 import { Button } from '../../components/Button';
 import { Screen } from '../../components/Screen';
@@ -6,14 +7,15 @@ import { Text } from '../../components/Text';
 
 type Action = { label: string; onPress: () => void };
 
-type Props =
+type Props = { edges?: Edge[] } & (
   | { loadingLabel: string }
   | {
       title: string;
       body?: string;
       updateAction?: Action & { loading: boolean; error?: string };
       debugAction?: Action;
-    };
+    }
+);
 
 export default function RouteMessageScreen(props: Props) {
   const { colors } = useTheme();
@@ -21,7 +23,7 @@ export default function RouteMessageScreen(props: Props) {
 
   if ('loadingLabel' in props) {
     return (
-      <Screen>
+      <Screen edges={props.edges}>
         <View style={styles.loading}>
           <ActivityIndicator
             accessible
@@ -37,7 +39,7 @@ export default function RouteMessageScreen(props: Props) {
 
   const { title, body, updateAction, debugAction } = props;
   return (
-    <Screen scroll>
+    <Screen scroll edges={props.edges}>
       <View style={styles.message}>
         <Text role="title">{title}</Text>
         {body && <Text>{body}</Text>}

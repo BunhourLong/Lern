@@ -15,5 +15,10 @@
   "route.driver.title": "ទំព័រដើមសម្រាប់អ្នកបើកបរ",
   "route.rider.title": "ទំព័រដើមសម្រាប់អ្នកដំណើរ",
   "route.debug": "ពិនិត្យកំហុស",
-  "route.back": "ត្រឡប់ក្រោយ"
+  "route.back": "ត្រឡប់ក្រោយ",
+  "tab.home": "ទំព័រដើម",
+  "tab.activity": "សកម្មភាព",
+  "tab.earnings": "ចំណូល",
+  "tab.account": "គណនី",
+  "tab.comingSoon": "មុខងារនេះនឹងមានក្នុងពេលឆាប់ៗនេះ។"
 }

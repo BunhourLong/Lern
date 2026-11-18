@@ -15,5 +15,10 @@
   "route.driver.title": "Driver home",
   "route.rider.title": "Rider home",
   "route.debug": "Debug",
-  "route.back": "Back"
+  "route.back": "Back",
+  "tab.home": "Home",
+  "tab.activity": "Activity",
+  "tab.earnings": "Earnings",
+  "tab.account": "Account",
+  "tab.comingSoon": "Coming soon."
 }

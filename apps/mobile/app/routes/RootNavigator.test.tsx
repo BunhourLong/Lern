@@ -11,6 +11,10 @@ jest.mock('react-native/Libraries/Utilities/useColorScheme', () => ({
   default: jest.fn(),
 }));
 
+jest.mock('expo-glass-effect', () => ({
+  isLiquidGlassAvailable: () => false,
+}));
+
 jest.mock(
   'react-native-safe-area-context',
   () => jest.requireActual('react-native-safe-area-context/jest/mock').default,
@@ -79,6 +83,128 @@ test('switches between login, rider and driver as the session changes', async ()
   await act(() => session.getState().signedOut());
   expect(screen.queryByRole('header', { name: 'Driver home' })).toBeNull();
   expect(screen.getByRole('header', { name: 'Sign in' })).toBeOnTheScreen();
+});
+
+test('selects Driver Home when a rider on Activity becomes a driver', async () => {
+  const { session, appConfig, navigator } = setup();
+  session.getState().signedIn(me('rider'));
+  appConfig.getState().setGate({ status: 'ok' });
+  await render(navigator);
+
+  await fireEvent.press(screen.getByRole('tab', { name: 'Activity' }));
+  expect(screen.getByRole('header', { name: 'Activity' })).toBeOnTheScreen();
+
+  await act(() => session.getState().signedIn(me('driver')));
+
+  expect(screen.getByRole('header', { name: 'Driver home' })).toBeOnTheScreen();
+  expect(
+    screen.getByRole('tab', { name: 'Home', selected: true }),
+  ).toBeOnTheScreen();
+  expect(screen.getByRole('tab', { name: 'Earnings' })).toBeOnTheScreen();
+  expect(screen.getByRole('tab', { name: 'Account' })).toBeOnTheScreen();
+  expect(
+    screen.queryByRole('tab', {
+      name: 'Activity',
+      includeHiddenElements: true,
+    }),
+  ).toBeNull();
+  expect(
+    screen.queryByRole('header', {
+      name: 'Activity',
+      includeHiddenElements: true,
+    }),
+  ).toBeNull();
+});
+
+test('removes the tabs when a user signs out from Account', async () => {
+  const { session, appConfig, navigator } = setup();
+  session.getState().signedIn(me('rider'));
+  appConfig.getState().setGate({ status: 'ok' });
+  await render(navigator);
+
+  await fireEvent.press(screen.getByRole('tab', { name: 'Account' }));
+  expect(screen.getByRole('header', { name: 'Account' })).toBeOnTheScreen();
+
+  await act(() => session.getState().signedOut());
+
+  expect(screen.getByRole('header', { name: 'Sign in' })).toBeOnTheScreen();
+  expect(
+    screen.queryByRole('tablist', { includeHiddenElements: true }),
+  ).toBeNull();
+});
+
+test.each([
+  { roles: ['rider'], middle: 'Activity' },
+  { roles: ['driver'], middle: 'Earnings' },
+  { roles: ['rider', 'driver'], middle: 'Earnings' },
+] satisfies { roles: Me['roles']; middle: string }[])(
+  'shows Home, $middle and Account tabs for $roles',
+  async ({ roles, middle }) => {
+    const { session, appConfig, navigator } = setup();
+    session.getState().signedIn(me(...roles));
+    appConfig.getState().setGate({ status: 'ok' });
+    await render(navigator);
+
+    expect(screen.getAllByRole('tab')).toHaveLength(3);
+    for (const name of ['Home', middle, 'Account']) {
+      expect(screen.getByRole('tab', { name })).toBeOnTheScreen();
+    }
+  },
+);
+
+test.each([
+  { role: 'rider', middle: 'Activity' },
+  { role: 'driver', middle: 'Earnings' },
+] as const)('opens each $role tab placeholder', async ({ role, middle }) => {
+  const { session, appConfig, navigator } = setup();
+  session.getState().signedIn(me(role));
+  appConfig.getState().setGate({ status: 'ok' });
+  await render(navigator);
+
+  for (const name of [middle, 'Account']) {
+    await fireEvent.press(screen.getByRole('tab', { name }));
+    expect(screen.getByRole('header', { name })).toBeOnTheScreen();
+    expect(screen.getByText('Coming soon.')).toBeOnTheScreen();
+  }
+});
+
+test('opens the root Debug screen from the Home tab', async () => {
+  const { session, appConfig, navigator } = setup();
+  session.getState().signedIn(me('driver'));
+  appConfig.getState().setGate({ status: 'ok' });
+  await render(navigator);
+
+  expect(
+    screen.getByRole('tab', { name: 'Home', selected: true }),
+  ).toBeOnTheScreen();
+  await fireEvent.press(screen.getByRole('button', { name: 'Debug' }));
+  expect(screen.getByRole('header', { name: 'Debug tools' })).toBeOnTheScreen();
+});
+
+test('omits the Debug button from the Activity tab in development', async () => {
+  jest.replaceProperty(runtime, '__DEV__', true);
+  const { session, appConfig, navigator } = setup();
+  session.getState().signedIn(me('rider'));
+  appConfig.getState().setGate({ status: 'ok' });
+  await render(navigator);
+
+  await fireEvent.press(screen.getByRole('tab', { name: 'Activity' }));
+  expect(screen.getByRole('header', { name: 'Activity' })).toBeOnTheScreen();
+  expect(screen.queryByRole('button', { name: 'Debug' })).toBeNull();
+});
+
+test('leaves the bottom safe-area inset to the tab bar', async () => {
+  const { session, appConfig, navigator } = setup();
+  session.getState().signedIn(me('rider'));
+  appConfig.getState().setGate({ status: 'ok' });
+  await render(navigator);
+
+  const [contentArea] = screen.container.queryAll(
+    node =>
+      node.type === 'RNCSafeAreaView' &&
+      node.props.accessibilityRole !== 'tablist',
+  );
+  expect(contentArea?.props.edges).toHaveProperty('bottom', 'off');
 });
 
 test('opens the store URL and disables the update button while opening', async () => {

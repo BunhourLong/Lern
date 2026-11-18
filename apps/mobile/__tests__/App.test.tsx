@@ -35,6 +35,9 @@ jest.mock(
   'react-native-safe-area-context',
   () => jest.requireActual('react-native-safe-area-context/jest/mock').default,
 );
+jest.mock('expo-glass-effect', () => ({
+  isLiquidGlassAvailable: () => false,
+}));
 jest.mock('../app/screens/Debug/DebugContainer', () => () => null);
 
 test('shows the loading gate in the device language and starts the app once', async () => {

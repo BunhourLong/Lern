@@ -25,11 +25,17 @@ test.each([
   ['default', 'text'],
   ['muted', 'textMuted'],
   ['danger', 'danger'],
+  ['primary', 'primary'],
 ] as const)('uses the light color for the %s tone', async (tone, color) => {
   await render(<Text tone={tone}>Ride details</Text>);
   expect(
     StyleSheet.flatten(screen.getByText('Ride details').props.style),
   ).toHaveProperty('color', themes.light[color]);
+});
+
+test('centers text when requested', async () => {
+  await render(<Text centered>Ride details</Text>);
+  expect(screen.getByText('Ride details')).toHaveStyle({ textAlign: 'center' });
 });
 
 test('makes the title a header and passes through native text props', async () => {

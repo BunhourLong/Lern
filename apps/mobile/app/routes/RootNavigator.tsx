@@ -11,6 +11,7 @@ import { useT } from '../i18n';
 import RouteMessageContainer from '../screens/RouteMessage/RouteMessageContainer';
 import { Stack } from './index';
 import { rootRoute } from './root-route';
+import { RoleTabs } from './RoleTabs';
 
 type Props = {
   core: { stores: Pick<Core['stores'], 'session' | 'appConfig'> };
@@ -44,15 +45,20 @@ export function RootNavigator({ core, debug }: Props) {
     <NavigationContainer theme={theme}>
       <Stack.Navigator screenOptions={screenOptions}>
         <Stack.Screen name={route}>
-          {({ navigation }) => (
-            <RouteMessageContainer
-              route={route}
-              storeUrl={storeUrl}
-              onDebug={
-                showDebug ? () => navigation.navigate('Debug') : undefined
-              }
-            />
-          )}
+          {({ navigation }) => {
+            const onDebug = showDebug
+              ? () => navigation.navigate('Debug')
+              : undefined;
+            return route === 'rider' || route === 'driver' ? (
+              <RoleTabs role={route} onDebug={onDebug} />
+            ) : (
+              <RouteMessageContainer
+                route={route}
+                storeUrl={storeUrl}
+                onDebug={onDebug}
+              />
+            );
+          }}
         </Stack.Screen>
         {showDebug && (
           <Stack.Screen
