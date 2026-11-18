@@ -1,5 +1,6 @@
 import { Inject, Injectable, Logger, type OnApplicationBootstrap } from '@nestjs/common';
 import { LocationService } from '../location/location.service';
+import { SurgeService } from '../pricing/surge.service';
 import { MatchingQueue } from '../shared/queue/matching-queue';
 import { MATCHING_CONFIG, type MatchingConfig } from './matching.config';
 import { MatchingService } from './matching.service';
@@ -12,6 +13,7 @@ export class MatchingWorker implements OnApplicationBootstrap {
     private readonly location: LocationService,
     private readonly matching: MatchingService,
     private readonly queue: MatchingQueue,
+    private readonly surge: SurgeService,
   ) {}
 
   onApplicationBootstrap(): void {
@@ -22,6 +24,7 @@ export class MatchingWorker implements OnApplicationBootstrap {
       sweep: () => this.matching.sweep(),
       reconcile: async () => void (await this.matching.reconcile()),
       presence: () => this.location.presence(this.config.DRIVER_STALE_SECONDS, this.config.DRIVER_TIMEOUT_SECONDS),
+      surge: () => this.surge.run(),
     });
     // Not awaited: BullMQ waits for Redis without limit, and Redis down at boot must not block startup (/health
     // reports it). A scheduler that failed to register comes back with the next instance's boot.
@@ -32,5 +35,6 @@ export class MatchingWorker implements OnApplicationBootstrap {
     if (this.config.SWEEP_INTERVAL_MS > 0) await this.queue.every('sweep', this.config.SWEEP_INTERVAL_MS);
     if (this.config.RECONCILE_INTERVAL_MS > 0) await this.queue.every('reconcile', this.config.RECONCILE_INTERVAL_MS);
     if (this.config.PRESENCE_INTERVAL_MS > 0) await this.queue.every('presence', this.config.PRESENCE_INTERVAL_MS);
+    if (this.config.SURGE_INTERVAL_MS > 0) await this.queue.every('surge', this.config.SURGE_INTERVAL_MS);
   }
 }

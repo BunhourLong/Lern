@@ -37,6 +37,14 @@ const Env = z.object({
   STUCK_CAP_SECONDS: z.coerce.number().int().min(1).default(7200),
   // Road ETAs for matching; when it can't answer, candidates keep straight-line order
   OSRM_URL: z.url({ protocol: /^https?$/ }).default('http://127.0.0.1:5050'),
+  // Surge per H3 cell (PLAN.md M6): how often it is recomputed; 0 = off
+  SURGE_INTERVAL_MS: z.coerce.number().int().min(0).default(60000),
+  // Basis points added per excess rider over one available driver
+  SURGE_SLOPE_BP: z.coerce.number().int().min(0).default(5000),
+  // Ceiling for a cell, in basis points (10000 = 1.0x)
+  SURGE_CAP_BP: z.coerce.number().int().min(10000).default(20000),
+  // The most one run may move a cell, so surge ramps instead of jumping
+  SURGE_MAX_STEP_BP: z.coerce.number().int().min(1).default(1000),
   // App config (GET /app-config): a minimum version is shown to users with its store link, so the pair travels together
   APP_MIN_VERSION_IOS: appVersionSchema.optional(),
   APP_STORE_URL_IOS: storeUrlSchema.optional(),

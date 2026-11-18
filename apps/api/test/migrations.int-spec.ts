@@ -44,7 +44,9 @@ it('runs every migration up, down and up again', async () => {
     expect(await ds.showMigrations()).toBe(false); // nothing pending
 
     // A quote priced before rate cards existed points at the seeded card of its vehicle type afterwards, and
-    // reads duration 0, the duration it was priced with. Undo twice: quotes.duration_s, then rate cards.
+    // reads duration 0, the duration it was priced with. Undo three times: the created_at index, quotes.duration_s,
+    // then rate cards (each new migration adds one undo here).
+    await ds.undoLastMigration();
     await ds.undoLastMigration();
     await ds.undoLastMigration();
     const [{ id: riderId }] = await ds.query<{ id: string }[]>('INSERT INTO users (phone) VALUES ($1) RETURNING id', ['+85510000002']);
@@ -58,7 +60,9 @@ it('runs every migration up, down and up again', async () => {
     expect(await ds.query('SELECT rate_card_id, duration_s FROM quotes WHERE id = $1', [quoteId])).toEqual([{ rate_card_id: moto.id, duration_s: 0 }]);
 
     // A phone registered before the locale column existed must read English after the migration.
-    // Undo three times: quotes.duration_s, rate cards, then the locale column (each new migration adds one undo here).
+    // Undo four times: the created_at index, quotes.duration_s, rate cards, then the locale column (each new
+    // migration adds one undo here).
+    await ds.undoLastMigration();
     await ds.undoLastMigration();
     await ds.undoLastMigration();
     await ds.undoLastMigration();

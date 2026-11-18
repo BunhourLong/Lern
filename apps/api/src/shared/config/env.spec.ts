@@ -30,6 +30,10 @@ it('returns typed config with defaults for a valid env', () => {
     DRIVER_TIMEOUT_SECONDS: 300,
     STUCK_GAP_SECONDS: 600,
     STUCK_CAP_SECONDS: 7200,
+    SURGE_INTERVAL_MS: 60000,
+    SURGE_SLOPE_BP: 5000,
+    SURGE_CAP_BP: 20000,
+    SURGE_MAX_STEP_BP: 1000,
     MAINTENANCE: false,
   });
 });

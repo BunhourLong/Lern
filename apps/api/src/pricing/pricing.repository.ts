@@ -12,6 +12,8 @@ export type BookableQuote = {
   expired: boolean;
 };
 
+export type SurgeSample = { kind: 'demand' | 'supply'; vehicleType: VehicleType; lat: number; lng: number };
+
 @Injectable()
 export class PricingRepository {
   constructor(private readonly db: DataSource) {}
@@ -58,6 +60,23 @@ export class PricingRepository {
       ],
     );
     return row;
+  }
+
+  // Demand is distinct riders (newest pickup per rider and vehicle type, so a cancel-and-request counts once);
+  // supply uses matching's own freshness and availability rule. Both 60 s windows are the database clock.
+  async surgeSamples(): Promise<SurgeSample[]> {
+    return this.db.query<SurgeSample[]>(
+      `SELECT 'demand' AS kind, vehicle_type AS "vehicleType", ST_Y(pickup::geometry) AS lat, ST_X(pickup::geometry) AS lng
+       FROM (SELECT DISTINCT ON (rider_id, vehicle_type) rider_id, vehicle_type, pickup
+             FROM rides WHERE created_at > now() - interval '60 seconds'
+             ORDER BY rider_id, vehicle_type, created_at DESC) newest
+       UNION ALL
+       SELECT 'supply', d.vehicle_type, ST_Y(l.position::geometry), ST_X(l.position::geometry)
+       FROM driver_locations l JOIN drivers d ON d.user_id = l.driver_id
+       WHERE l.received_at > now() - interval '60 seconds'
+         AND d.verification = 'verified'
+         AND d.availability = 'available'`,
+    );
   }
 
   // Owner in the WHERE, so another rider's quote is indistinguishable from a missing one
