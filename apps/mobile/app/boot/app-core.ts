@@ -5,6 +5,7 @@ import { firebasePush } from '../services/firebase-push.service';
 import { expoPinHasher } from '../services/pin-hasher.service';
 import { keychainSecret, mmkvStore } from '../services/storage.service';
 import { createCore } from './core';
+import { followDeviceLanguage } from './device-language';
 import { followAvailability } from './driver-location';
 
 // The native composition: only App.tsx imports this (MMKV, Keychain and Firebase need a device or simulator)
@@ -17,6 +18,7 @@ export const core = createCore({
   fetch: globalThis.fetch,
   io,
   kv: mmkvStore('lern'),
+  deviceLocale: () => Intl.DateTimeFormat().resolvedOptions().locale,
   refreshToken: keychainSecret('lern.session'),
   pin: keychainSecret('lern.pin'),
   pinHasher: expoPinHasher,
@@ -33,11 +35,15 @@ export const core = createCore({
 // Returns the unsubscribe for useEffect. Failures go in the raw log so the screen shows them.
 export function startApp(): () => void {
   const log = core.stores.rawEvents.getState().add;
-  const stop = followAvailability(
+  const unfollowAvailability = followAvailability(
     core.stores.driverMode,
     createLocationService(core.reportPosition),
     r => log('location.start', r),
   );
+  const unfollowDeviceLanguage = followDeviceLanguage(core.stores.language);
   core.boot().catch(err => log('boot.error', String(err)));
-  return stop;
+  return () => {
+    unfollowDeviceLanguage();
+    unfollowAvailability();
+  };
 }

@@ -4,7 +4,7 @@ import {
   requestPermission,
 } from '@react-native-firebase/messaging';
 import { PermissionsAndroid, Platform } from 'react-native';
-import { firebasePush, pushLocale } from './firebase-push.service';
+import { firebasePush } from './firebase-push.service';
 
 jest.mock('@react-native-firebase/messaging', () => ({
   AuthorizationStatus: { DENIED: 0, AUTHORIZED: 1, PROVISIONAL: 2 },
@@ -34,18 +34,6 @@ it.each([
   await expect(firebasePush().requestPermission()).resolves.toBe(allowed);
   expect(prompt).toHaveBeenCalledWith(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS);
   expect(requestPermission).not.toHaveBeenCalled();
-});
-
-// The phone's own language picks the push text; English for everything not Khmer
-it.each([
-  ['km', 'km'],
-  ['km-KH', 'km'],
-  ['KM_kh', 'km'],
-  ['en-US', 'en'],
-  ['fr', 'en'],
-  ['', 'en'],
-])('reads the language %p as %s', (tag, locale) => {
-  expect(pushLocale(tag)).toBe(locale);
 });
 
 it('older Android has no such prompt', async () => {

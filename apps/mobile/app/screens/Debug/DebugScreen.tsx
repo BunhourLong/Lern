@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import {
   Button,
   ScrollView,
@@ -7,11 +8,27 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { makeStyles, spacing, type } from '@theme';
+import { Banner } from '../../components/Banner';
+import { Button as SampleButton } from '../../components/Button';
+import { GlassSurface } from '../../components/GlassSurface';
+import { ListRow } from '../../components/ListRow';
+import { Text as SampleText } from '../../components/Text';
+import { TextField } from '../../components/TextField';
+import type { Language } from '../../i18n';
 import type { RawEvent } from '../../stores/raw-events.store';
 
 export type DebugScreenProps = {
   state: unknown;
   events: RawEvent[];
+  language: {
+    phone: string;
+    en: string;
+    km: string;
+    sample: string;
+    override: Language | null;
+    setOverride(value: Language | null): void;
+  };
   phone: string;
   code: string;
   onPhone(v: string): void;
@@ -25,6 +42,8 @@ export type DebugScreenProps = {
 
 export default function DebugScreen(p: DebugScreenProps) {
   const insets = useSafeAreaInsets();
+  const typeStyles = useTypeStyles();
+  const [pickup, setPickup] = useState('ផ្សារ');
   return (
     <ScrollView
       contentContainerStyle={{ paddingTop: insets.top + 8, padding: 8 }}
@@ -48,6 +67,111 @@ export default function DebugScreen(p: DebugScreenProps) {
         <Button title="Go online" onPress={p.onOnline} />
         <Button title="Go offline" onPress={p.onOffline} />
       </View>
+      <View style={typeStyles.languageChoices}>
+        <Button
+          title={p.language.phone}
+          accessibilityState={{ selected: p.language.override === null }}
+          onPress={() => p.language.setOverride(null)}
+        />
+        <Button
+          title={p.language.en}
+          accessibilityState={{ selected: p.language.override === 'en' }}
+          onPress={() => p.language.setOverride('en')}
+        />
+        <Button
+          title={p.language.km}
+          accessibilityState={{ selected: p.language.override === 'km' }}
+          onPress={() => p.language.setOverride('km')}
+        />
+      </View>
+      <SampleText role="caption">{p.language.sample}</SampleText>
+      <View style={typeStyles.sample}>
+        <Text style={typeStyles.title}>Book a tuk-tuk · កក់តុកតុក</Text>
+        <Text style={typeStyles.body}>
+          Pickup at the market · ឡើងជិះនៅផ្សារ
+        </Text>
+        <Text style={typeStyles.bodyStrong}>
+          Fare 12,000 ៛ · តម្លៃ ១២,០០០ ៛
+        </Text>
+        <Text style={typeStyles.button}>
+          Confirm ride · បញ្ជាក់ការធ្វើដំណើរ
+        </Text>
+        <Text style={typeStyles.caption}>Estimated fare · តម្លៃប៉ាន់ស្មាន</Text>
+      </View>
+      <View style={typeStyles.glassBackdrop}>
+        <GlassSurface>
+          <Text style={typeStyles.bodyStrong}>Glass surface · ផ្ទៃកញ្ចក់</Text>
+          <Text style={typeStyles.body}>
+            Pickup at the market · ឡើងជិះនៅផ្សារ
+          </Text>
+        </GlassSurface>
+      </View>
+      <View style={typeStyles.components}>
+        <SampleText role="title">Ride details · ព័ត៌មានការធ្វើដំណើរ</SampleText>
+        <SampleText role="body">
+          Pickup at the market · ឡើងជិះនៅផ្សារ
+        </SampleText>
+        <SampleText role="bodyStrong">
+          Fare 12,000 ៛ · តម្លៃ ១២,០០០ ៛
+        </SampleText>
+        <SampleText role="button">
+          Confirm ride · បញ្ជាក់ការធ្វើដំណើរ
+        </SampleText>
+        <SampleText role="caption" tone="muted">
+          Estimated fare · តម្លៃប៉ាន់ស្មាន
+        </SampleText>
+        <SampleText tone="danger">
+          Ride cancelled · ការធ្វើដំណើរត្រូវបានលុបចោល
+        </SampleText>
+        <SampleButton
+          label="Confirm ride · បញ្ជាក់ការធ្វើដំណើរ"
+          onPress={() => {}}
+        />
+        <SampleButton
+          label="Edit pickup · កែកន្លែងឡើងជិះ"
+          onPress={() => {}}
+          variant="secondary"
+        />
+        <SampleButton
+          label="View fare · មើលតម្លៃ"
+          onPress={() => {}}
+          variant="ghost"
+        />
+        <SampleButton
+          label="Finding a driver · កំពុងស្វែងរកអ្នកបើកបរ"
+          onPress={() => {}}
+          loading
+        />
+        <SampleButton
+          label="Start ride · ចាប់ផ្តើមការធ្វើដំណើរ"
+          onPress={() => {}}
+          disabled
+        />
+        <TextField
+          label="Pickup · កន្លែងឡើងជិះ"
+          value={pickup}
+          onChangeText={setPickup}
+        />
+        <TextField
+          label="Destination · គោលដៅ"
+          placeholder="Enter an address · បញ្ចូលអាសយដ្ឋាន"
+        />
+        <TextField
+          label="Phone number · លេខទូរសព្ទ"
+          keyboardType="phone-pad"
+          error="Enter a valid phone number · បញ្ចូលលេខទូរសព្ទត្រឹមត្រូវ"
+        />
+        <ListRow
+          title="Tuk-tuk · តុកតុក"
+          subtitle="Pickup at the market · ឡើងជិះនៅផ្សារ"
+          value="12,000 ៛"
+          onPress={() => {}}
+        />
+        <ListRow title="Cash · សាច់ប្រាក់" />
+        <Banner message="Driver online · អ្នកបើកបរនៅលើបណ្តាញ" />
+        <Banner message="Weak connection · ការតភ្ជាប់ខ្សោយ" tone="warning" />
+        <Banner message="Connection lost · ដាច់ការតភ្ជាប់" tone="danger" />
+      </View>
       <Text style={styles.mono}>{JSON.stringify(p.state, null, 2)}</Text>
       {p.events.map((e, i) => (
         <Text key={i} style={styles.mono}>
@@ -58,7 +182,35 @@ export default function DebugScreen(p: DebugScreenProps) {
   );
 }
 
+const useTypeStyles = makeStyles(t => ({
+  languageChoices: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.xs,
+    marginTop: spacing.sm,
+  },
+  sample: {
+    backgroundColor: t.colors.surface,
+    gap: spacing.xs,
+    marginVertical: spacing.md,
+    padding: spacing.sm,
+  },
+  glassBackdrop: { backgroundColor: t.colors.primary, padding: spacing.md },
+  components: {
+    backgroundColor: t.colors.background,
+    gap: spacing.md,
+    marginVertical: spacing.md,
+    padding: spacing.md,
+  },
+  title: { ...type.title, color: t.colors.text },
+  body: { ...type.body, color: t.colors.text },
+  bodyStrong: { ...type.bodyStrong, color: t.colors.text },
+  button: { ...type.button, color: t.colors.text },
+  caption: { ...type.caption, color: t.colors.text },
+}));
+
+const debugFontFamily = 'Courier';
 const styles = StyleSheet.create({
-  mono: { fontFamily: 'Courier', fontSize: 11 },
-  input: { fontFamily: 'Courier', borderWidth: 1, padding: 4, margin: 2 },
+  mono: { fontFamily: debugFontFamily, fontSize: 11 },
+  input: { fontFamily: debugFontFamily, borderWidth: 1, padding: 4, margin: 2 },
 });

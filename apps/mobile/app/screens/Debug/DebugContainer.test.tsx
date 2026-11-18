@@ -1,11 +1,23 @@
 import type { Me } from '@lern/contracts';
+import {
+  fireEvent,
+  render as renderScreen,
+  screen,
+} from '@testing-library/react-native';
 import ReactTestRenderer, { act } from 'react-test-renderer';
 import { Button, Text, TextInput } from 'react-native';
 import { createActiveRideStore } from '../../stores/active-ride.store';
 import { createDriverModeStore } from '../../stores/driver-mode.store';
+import { createLanguageStore } from '../../stores/language.store';
 import { createRawEventsStore } from '../../stores/raw-events.store';
 import { createSessionStore } from '../../stores/session.store';
 import DebugContainer from './DebugContainer';
+
+jest.mock('expo-glass-effect', () => ({
+  GlassView: 'GlassView',
+  isGlassEffectAPIAvailable: () => false,
+  isLiquidGlassAvailable: () => false,
+}));
 
 jest.mock('react-native-safe-area-context', () => ({
   useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }),
@@ -17,6 +29,10 @@ function stub() {
     session: createSessionStore(),
     activeRide: createActiveRideStore(),
     driverMode: createDriverModeStore(),
+    language: createLanguageStore(
+      { get: () => undefined, set: jest.fn(), remove: jest.fn() },
+      () => 'en-US',
+    ),
     rawEvents: createRawEventsStore(),
   };
   const core = {
@@ -56,6 +72,33 @@ const type = (
     r.root.findByProps({ accessibilityLabel: label }).props.onChangeText(v);
   });
 
+it('shows Khmer in the type samples', () => {
+  const { core } = stub();
+  const r = render(core);
+  expect(text(r)).toContain('Book a tuk-tuk · កក់តុកតុក');
+  expect(text(r)).toContain('Fare 12,000 ៛ · តម្លៃ ១២,០០០ ៛');
+});
+
+it('sets the language override when the Khmer button is pressed', async () => {
+  const { core, stores } = stub();
+  await renderScreen(
+    <DebugContainer core={core as unknown as Props['core']} />,
+  );
+  await fireEvent.press(screen.getByRole('button', { name: 'ខ្មែរ' }));
+  expect(stores.language.getState().override).toBe('km');
+});
+
+it('marks the current language choice as selected', async () => {
+  const { core } = stub();
+  await renderScreen(
+    <DebugContainer core={core as unknown as Props['core']} />,
+  );
+  expect(screen.getByRole('button', { name: 'Phone' })).toBeSelected();
+  await fireEvent.press(screen.getByRole('button', { name: 'ខ្មែរ' }));
+  expect(screen.getByRole('button', { name: 'ខ្មែរ' })).toBeSelected();
+  expect(screen.getByRole('button', { name: 'Phone' })).not.toBeSelected();
+});
+
 it('shows store changes and raw events live', () => {
   const { core, stores } = stub();
   const r = render(core);
@@ -73,7 +116,11 @@ it('shows store changes and raw events live', () => {
 it('sends the typed phone and code to the core', async () => {
   const { core } = stub();
   const r = render(core);
-  expect(r.root.findAllByType(TextInput)).toHaveLength(2);
+  expect(
+    r.root
+      .findAllByType(TextInput)
+      .map(input => input.props.accessibilityLabel),
+  ).toEqual(expect.arrayContaining(['Phone', 'Code']));
   expect(r.root.findAllByType(Button).length).toBeGreaterThan(0);
   await type(r, 'Phone', '+85598765432');
   await type(r, 'Code', '123456');
