@@ -9,6 +9,8 @@ import {
   type,
 } from '@theme';
 
+import { useInteraction } from '../hooks/use-interaction';
+
 export function Button({
   label,
   onPress,
@@ -22,6 +24,7 @@ export function Button({
   loading?: boolean;
   disabled?: boolean;
 }) {
+  const interact = useInteraction();
   const styles = useStyles();
   const blocked = disabled || loading;
   const labelStyle =
@@ -33,7 +36,9 @@ export function Button({
       accessibilityLabel={label}
       accessibilityState={{ disabled: blocked, busy: loading }}
       disabled={blocked}
-      onPress={onPress}
+      onPress={() => {
+        if (interact()) onPress();
+      }}
       style={({ pressed }) => [
         styles.button,
         variant === 'primary' && styles.primary,

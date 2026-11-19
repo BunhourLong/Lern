@@ -2,6 +2,7 @@ import { render, screen, userEvent } from '@testing-library/react-native';
 import { StyleSheet } from 'react-native';
 import type { PressableProps } from 'react-native';
 import { opacity, themes, touch, type } from '@theme';
+import { InteractionContext } from '../hooks/use-interaction';
 import { ListRow } from './ListRow';
 
 const mockPressed = jest.fn(() => false);
@@ -102,4 +103,17 @@ test('reads a plain row as one item and only renders the title if it is the only
   const title = screen.getByText('Ride');
   expect(screen.getAllByRole('text')).toEqual([title]);
   expect(StyleSheet.flatten(title.props.style)).toMatchObject(type.bodyStrong);
+});
+
+test('does not run the row action when the session locks on activation', async () => {
+  const onPress = jest.fn();
+  await render(
+    <InteractionContext.Provider value={() => false}>
+      <ListRow title="Details" onPress={onPress} />
+    </InteractionContext.Provider>,
+  );
+  await userEvent
+    .setup()
+    .press(screen.getByRole('button', { name: 'Details' }));
+  expect(onPress).not.toHaveBeenCalled();
 });

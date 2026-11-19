@@ -45,5 +45,18 @@
   "tab.activity": "Activity",
   "tab.earnings": "Earnings",
   "tab.account": "Account",
-  "tab.comingSoon": "Coming soon."
+  "tab.comingSoon": "Coming soon.",
+  "pin.label": "6-digit PIN",
+  "pin.confirmation": "Confirm PIN",
+  "pin.title.unlock": "App locked",
+  "pin.title.enroll": "Set up app lock",
+  "pin.title.confirm": "Confirm your PIN",
+  "pin.submit.unlock": "Unlock",
+  "pin.submit.enroll": "Save PIN",
+  "pin.submit.confirm": "Continue",
+  "pin.mismatch": "The PINs must match.",
+  "pin.incorrect": "Could not unlock. Check your PIN and try again.",
+  "pin.signOut": "Sign out",
+  "pin.cancel": "Cancel",
+  "pin.enabled": "App lock is on."
 }

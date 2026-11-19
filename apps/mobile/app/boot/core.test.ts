@@ -1062,6 +1062,103 @@ describe('app lock', () => {
     return core;
   };
 
+  it('discards a successful PIN check if the screen was locked again during the check', async () => {
+    const d = deps(server(routes()), fakeIo(), 'r'.repeat(43));
+    const core = await signedIn(d);
+    await core.enableLock(PIN);
+    core.lock();
+    const checking = core.unlock(PIN);
+    core.lock();
+    const result = await checking;
+    expect(core.stores.security.getState().locked).toBe(true);
+    expect(result.ok).toBe(false);
+  });
+
+  it.each(['interrupted', 'different account', 'same account signs in again'])(
+    'rejects a PIN result from before %s',
+    async reason => {
+      const d = deps(server(routes()), fakeIo(), 'r'.repeat(43));
+      const core = await signedIn(d);
+      await core.enableLock(PIN);
+      core.lock();
+      let release!: () => void;
+      const hash = d.pinHasher.hash;
+      d.pinHasher.hash = async (salt, code) => {
+        await new Promise<void>(resolve => {
+          release = resolve;
+        });
+        return hash(salt, code);
+      };
+      const checking = core.unlock(PIN);
+      await settle();
+      const session = core.stores.session;
+      const initialUser = session.getState().me!;
+      if (reason === 'interrupted') core.interruptPinCheck();
+      else if (reason === 'different account')
+        session.getState().signedIn({ ...initialUser, id: 'second' });
+      else {
+        await core.signOut();
+        session.getState().signedIn(initialUser);
+      }
+      release();
+      expect((await checking).ok).toBe(false);
+    },
+  );
+
+  it('clears pending enrollment when sign-in replaces the account', async () => {
+    let user = me;
+    const d = deps(
+      server(
+        routes({
+          'GET /me': () => ({ status: 200, body: user }),
+          'POST /auth/otp/verify': () => ({ status: 200, body: pair }),
+        }),
+      ),
+      fakeIo(),
+      'r'.repeat(43),
+    );
+    const core = await signedIn(d);
+    const set = d.pin.set;
+    let finish!: () => void;
+    d.pin.set = async hash => {
+      await new Promise<void>(resolve => {
+        finish = resolve;
+      });
+      await set(hash);
+    };
+    const pending = core.enableLock(PIN);
+    await settle();
+    user = { ...me, id: otherRideId, phone: '+85512345679' };
+    const replacement = core.signIn(user.phone, '000000');
+    await settle();
+    finish();
+    await Promise.all([pending, replacement]);
+    expect(core.stores.session.getState().me?.id).toBe(user.id);
+    expect(d.storedPin()).toBeUndefined();
+    expect(core.stores.security.getState().enabled).toBe(false);
+  });
+
+  it('serializes enrollment with sign-out while a Keychain write is pending', async () => {
+    const d = deps(server(routes()), fakeIo(), 'r'.repeat(43));
+    const core = await signedIn(d);
+    const set = d.pin.set;
+    let finish!: () => void;
+    d.pin.set = value =>
+      new Promise<void>(resolve => {
+        finish = () => {
+          set(value).then(resolve);
+        };
+      });
+    const enrollment = core.enableLock(PIN);
+    await settle();
+    await core.signOut();
+    finish();
+    await enrollment;
+    await settle();
+    expect(d.storedPin()).toBeUndefined();
+    expect(core.stores.security.getState().enabled).toBe(false);
+  });
+
   it('is off and unlocked by default', async () => {
     const core = await signedIn(
       deps(server(routes()), fakeIo(), 'r'.repeat(43)),
@@ -1087,6 +1184,16 @@ describe('app lock', () => {
       locked: false,
       waitMs: 0,
     });
+  });
+
+  it('keeps an enrolled session locked if its PIN disappears before verification', async () => {
+    const d = deps(server(routes()), fakeIo(), 'r'.repeat(43));
+    const core = await signedIn(d);
+    await core.enableLock(PIN);
+    core.lock();
+    await d.pin.clear();
+    expect(await core.unlock(PIN)).toEqual({ ok: false, waitMs: 0 });
+    expect(core.stores.security.getState().locked).toBe(true);
   });
 
   it('boots locked when the Keychain refuses to say whether a PIN is set', async () => {
@@ -1206,4 +1313,98 @@ describe('app lock', () => {
     expect(d.storedPin()).toBeUndefined();
     expect(core.stores.security.getState().locked).toBe(false);
   });
+});
+
+it('reads driver availability again on reconnect and ignores an earlier profile response', async () => {
+  let reply = async () => routes()['GET /drivers/me']();
+  const f = fakeIo();
+  const core = createCore(
+    deps(
+      server(routes({ 'GET /drivers/me': () => reply() })),
+      f,
+      'r'.repeat(43),
+    ),
+  );
+  await core.boot();
+  let finish!: () => void;
+  const profile = routes()['GET /drivers/me']();
+  reply = () =>
+    new Promise(resolve => {
+      finish = () => resolve(profile);
+    });
+  f.fire('connect');
+  await settle();
+  reply = async () => ({
+    ...profile,
+    body: { ...profile.body, availability: 'offline' },
+  });
+  f.fire('connect');
+  await settle();
+  expect(core.stores.driverMode.getState().availability).toBe('offline');
+  finish();
+  await settle();
+  expect(core.stores.driverMode.getState().availability).toBe('offline');
+});
+
+it('keeps a newer driver toggle when a delayed profile read finishes', async () => {
+  const profile = routes()['GET /drivers/me']();
+  let reply = async () => profile;
+  const core = createCore(
+    deps(
+      server(
+        routes({
+          'GET /drivers/me': () => reply(),
+          'PUT /drivers/me/availability': () => ({
+            status: 200,
+            body: { availability: 'available' },
+          }),
+        }),
+      ),
+      fakeIo(),
+      'r'.repeat(43),
+    ),
+  );
+  await core.boot();
+  let finish!: () => void;
+  reply = () =>
+    new Promise(resolve => {
+      finish = () => resolve(profile);
+    });
+  const refresh = core.refreshAvailability();
+  await settle();
+  await core.setOnline(true);
+  finish();
+  await refresh;
+  expect(core.stores.driverMode.getState().availability).toBe('available');
+});
+
+it('ignores a superseded profile read even when the latest read is offline', async () => {
+  const profile = routes()['GET /drivers/me']();
+  let reply = async () => profile;
+  const core = createCore(
+    deps(
+      server(routes({ 'GET /drivers/me': () => reply() })),
+      fakeIo(),
+      'r'.repeat(43),
+    ),
+  );
+  await core.boot();
+  let finish!: () => void;
+  reply = () =>
+    new Promise(resolve => {
+      finish = () =>
+        resolve({
+          ...profile,
+          body: { ...profile.body, availability: 'offline' },
+        });
+    });
+  const first = core.refreshAvailability();
+  await settle();
+  reply = async () => {
+    throw new Error('network unavailable');
+  };
+  await core.refreshAvailability();
+  finish();
+  await first;
+  expect(core.stores.driverMode.getState().availability).toBe('on_trip');
 });

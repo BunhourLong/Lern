@@ -13,7 +13,7 @@ type Props = { edges?: Edge[] } & (
       title: string;
       body?: string;
       updateAction?: Action & { loading: boolean; error?: string };
-      debugAction?: Action;
+      secondaryAction?: Action;
     }
 );
 
@@ -37,7 +37,7 @@ export default function RouteMessageScreen(props: Props) {
     );
   }
 
-  const { title, body, updateAction, debugAction } = props;
+  const { title, body, updateAction, secondaryAction } = props;
   return (
     <Screen scroll edges={props.edges}>
       <View style={styles.message}>
@@ -57,10 +57,10 @@ export default function RouteMessageScreen(props: Props) {
             )}
           </>
         )}
-        {debugAction && (
+        {secondaryAction && (
           <Button
-            label={debugAction.label}
-            onPress={debugAction.onPress}
+            label={secondaryAction.label}
+            onPress={secondaryAction.onPress}
             variant="secondary"
           />
         )}

@@ -1,11 +1,13 @@
 import type { Me } from '@lern/contracts';
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
 import { createContext, useContext } from 'react';
-import { Linking, StyleSheet, Text, useColorScheme } from 'react-native';
+import { Linking, Modal, StyleSheet, Text, useColorScheme } from 'react-native';
 import { createStore } from 'zustand/vanilla';
 import { themes } from '@theme';
+import { InteractionContext } from '../hooks/use-interaction';
 import type { NotificationTarget } from '../boot/core';
 import { createAppConfigStore } from '../stores/app-config.store';
+import { createSecurityStore } from '../stores/security.store';
 import { createSessionStore } from '../stores/session.store';
 import { RootNavigator } from './RootNavigator';
 
@@ -37,8 +39,12 @@ beforeEach(() => {
 
 afterEach(() => jest.restoreAllMocks());
 
-function setup() {
+function setup(
+  foreground = true,
+  debug = <Text accessibilityRole="header">Debug tools</Text>,
+) {
   const session = createSessionStore();
+  const security = createSecurityStore();
   const appConfig = createAppConfigStore();
   const notification = createStore<NotificationTarget | null>()(() => null);
   const requestOtp = jest
@@ -47,19 +53,111 @@ function setup() {
   const signIn = jest
     .fn<Promise<void>, [string, string]>()
     .mockResolvedValue(undefined);
+  const enableLock = jest.fn(async () =>
+    security.getState().update({ enabled: true }),
+  );
   const core = {
-    stores: { session, appConfig, notification },
+    stores: { session, security, appConfig, notification },
     api: { requestOtp },
     signIn,
+    unlock: jest.fn(async () => {
+      security.getState().update({ locked: false });
+      return { ok: true as const };
+    }),
+    signOut: jest.fn(),
+    enableLock,
+    interruptPinCheck: jest.fn(),
+    pinWaitMs: () => 0,
   };
   const navigator = (
-    <RootNavigator
-      core={core}
-      debug={<Text accessibilityRole="header">Debug tools</Text>}
-    />
+    <RootNavigator core={core} foreground={foreground} debug={debug} />
   );
-  return { session, appConfig, notification, navigator, requestOtp, signIn };
+  return {
+    core,
+    enableLock,
+    session,
+    security,
+    appConfig,
+    notification,
+    navigator,
+    requestOtp,
+    signIn,
+  };
 }
+
+test('keeps a locked rider’s notification queued after navigation is ready', async () => {
+  const { session, security, appConfig, notification, navigator } = setup();
+  session.getState().signedIn(me('rider'));
+  appConfig.getState().setGate({ status: 'ok' });
+  security.getState().update({ enabled: true, locked: true });
+  const target = {
+    type: 'ride',
+    id: 'ride-1',
+    status: 'driver_arrived',
+  } as const;
+  notification.setState(target, true);
+  await render(navigator);
+  expect(notification.getState()).toBe(target);
+  expect(screen.queryAllByRole('tab')).toHaveLength(0);
+  expect(screen.getByLabelText('6-digit PIN')).toBeOnTheScreen();
+  await fireEvent.changeText(screen.getByLabelText('6-digit PIN'), '123456');
+  await fireEvent.press(screen.getByRole('button', { name: 'Unlock' }));
+  expect(
+    screen.getByRole('header', { name: 'Driver arrived' }),
+  ).toBeOnTheScreen();
+  expect(notification.getState()).toBeNull();
+});
+
+test('enrolls from Account after both PIN entries match', async () => {
+  const { enableLock, session, appConfig, navigator } = setup();
+  session.getState().signedIn(me('rider'));
+  appConfig.getState().setGate({ status: 'ok' });
+  await render(navigator);
+  await fireEvent.press(screen.getByRole('tab', { name: 'Account' }));
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Set up app lock' }),
+  );
+  await fireEvent.changeText(screen.getByLabelText('6-digit PIN'), '123456');
+  await fireEvent.changeText(screen.getByLabelText('Confirm PIN'), '123457');
+  await fireEvent.press(screen.getByRole('button', { name: 'Save PIN' }));
+  expect(enableLock).not.toHaveBeenCalled();
+  expect(screen.getByText('The PINs must match.')).toBeOnTheScreen();
+  await fireEvent.changeText(screen.getByLabelText('Confirm PIN'), '123456');
+  await fireEvent.press(screen.getByRole('button', { name: 'Save PIN' }));
+  expect(enableLock).toHaveBeenCalledWith('123456');
+  expect(screen.getByText('App lock is on.')).toBeOnTheScreen();
+});
+
+test('requires a fresh PIN for signed-in Debug and cancels without opening it', async () => {
+  const { security, session, appConfig, navigator } = setup();
+  session.getState().signedIn(me('driver'));
+  appConfig.getState().setGate({ status: 'ok' });
+  security.getState().update({ enabled: true });
+  await render(navigator);
+  const openDebug = () =>
+    fireEvent.press(screen.getByRole('button', { name: 'Debug' }));
+  await openDebug();
+  expect(screen.queryByText('Debug tools')).toBeNull();
+  await fireEvent.press(screen.getByRole('button', { name: 'Cancel' }));
+  await openDebug();
+  await fireEvent.changeText(screen.getByLabelText('6-digit PIN'), '123456');
+  await fireEvent.press(screen.getByRole('button', { name: 'Continue' }));
+  expect(screen.getByText('Debug tools')).toBeOnTheScreen();
+});
+
+test('leaves the notification queued while the app is backgrounded', async () => {
+  const { session, appConfig, navigator, notification } = setup(false);
+  session.getState().signedIn(me('rider'));
+  appConfig.getState().setGate({ status: 'ok' });
+  const target = {
+    type: 'ride',
+    status: 'driver_arrived',
+    id: 'ride-1',
+  } as const;
+  notification.setState(target, true);
+  await render(navigator);
+  expect(notification.getState()).toBe(target);
+});
 
 test('loads until both stores are ready', async () => {
   const { session, appConfig, navigator } = setup();
@@ -227,7 +325,11 @@ test.each([
   for (const name of [middle, 'Account']) {
     await fireEvent.press(screen.getByRole('tab', { name }));
     expect(screen.getByRole('header', { name })).toBeOnTheScreen();
-    expect(screen.getByText('Coming soon.')).toBeOnTheScreen();
+    if (name === 'Account')
+      expect(
+        screen.getByRole('button', { name: 'Set up app lock' }),
+      ).toBeOnTheScreen();
+    else expect(screen.getByText('Coming soon.')).toBeOnTheScreen();
   }
 });
 
@@ -475,4 +577,137 @@ test('updates the screen background from the light to the dark token', async () 
 
   await rerender(withScheme('dark'));
   expect(background()).toBe(themes.dark.background);
+});
+
+test('closing the protected stack also dismisses an open modal across unlock', async () => {
+  const { session, security, appConfig, navigator } = setup(
+    true,
+    <Modal visible>
+      <Text>Ride detail modal</Text>
+    </Modal>,
+  );
+  session.getState().signedIn(me('driver'));
+  appConfig.getState().setGate({ status: 'ok' });
+  await render(navigator);
+  await fireEvent.press(screen.getByRole('button', { name: 'Debug' }));
+  expect(screen.getByText('Ride detail modal')).toBeOnTheScreen();
+  await act(() => security.getState().update({ enabled: true, locked: true }));
+  expect(screen.queryByText('Ride detail modal')).toBeNull();
+  await fireEvent.changeText(screen.getByLabelText('6-digit PIN'), '123456');
+  await fireEvent.press(screen.getByRole('button', { name: 'Unlock' }));
+  expect(screen.getByText('Driver home')).toBeOnTheScreen();
+  expect(screen.queryByText('Ride detail modal')).toBeNull();
+});
+
+test('drops an open Debug route when a different driver signs in', async () => {
+  const { session, appConfig, navigator } = setup();
+  session.getState().signedIn(me('driver'));
+  appConfig.getState().setGate({ status: 'ok' });
+  await render(navigator);
+  await fireEvent.press(screen.getByRole('button', { name: 'Debug' }));
+  expect(screen.getByText('Debug tools')).toBeOnTheScreen();
+  await act(() =>
+    session.getState().signedIn({ ...me('driver'), id: 'second-driver' }),
+  );
+  expect(screen.queryByText('Debug tools')).toBeNull();
+});
+
+test('tab activation, form buttons and keyboard edits all report interaction', async () => {
+  const { session, appConfig, navigator } = setup();
+  session.getState().signedIn(me('rider'));
+  appConfig.getState().setGate({ status: 'ok' });
+  const interact = jest.fn(() => true);
+  await render(
+    <InteractionContext.Provider value={interact}>
+      {navigator}
+    </InteractionContext.Provider>,
+  );
+  await fireEvent.press(screen.getByRole('tab', { name: 'Account' }));
+  expect(interact).toHaveBeenCalledTimes(1);
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Set up app lock' }),
+  );
+  expect(interact).toHaveBeenCalledTimes(2);
+  await fireEvent.changeText(screen.getByLabelText('6-digit PIN'), '1');
+  expect(interact).toHaveBeenCalledTimes(3);
+});
+
+test('lock countdown resumes from the remaining wait and permits signing out', async () => {
+  jest.useFakeTimers();
+  try {
+    const { core, session, security, appConfig, navigator } = setup();
+    session.getState().signedIn(me('rider'));
+    appConfig.getState().setGate({ status: 'ok' });
+    security.getState().update({ enabled: true, locked: true });
+    let remaining = 2250;
+    core.pinWaitMs = () => remaining;
+    const view = await render(navigator);
+    const timer = () => screen.getByText(/Try again in/);
+    expect(timer()).toHaveTextContent(/3s/);
+    await fireEvent.press(screen.getByRole('button', { name: 'Sign out' }));
+    expect(core.signOut).toHaveBeenCalledTimes(1);
+    await view.unmount();
+    remaining = 750;
+    await render(navigator);
+    expect(timer()).toHaveTextContent(/1s/);
+    expect(screen.getByLabelText('6-digit PIN')).toHaveProp('editable', false);
+    remaining = 0;
+    await act(() => jest.advanceTimersByTime(1000));
+    expect(screen.getByLabelText('6-digit PIN')).toHaveProp('editable', true);
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
+test('a storage rejection keeps enrollment open and a double press writes once', async () => {
+  const { core, session, appConfig, navigator } = setup();
+  session.getState().signedIn(me('rider'));
+  appConfig.getState().setGate({ status: 'ok' });
+  let reject!: (reason: Error) => void;
+  core.enableLock.mockImplementationOnce(() => new Promise<void>((_, fail) => { reject = fail; }));
+  await render(navigator);
+  await fireEvent.press(screen.getByRole('tab', { name: 'Account' }));
+  await fireEvent.press(screen.getByRole('button', { name: 'Set up app lock' }));
+  await fireEvent.changeText(screen.getByLabelText('6-digit PIN'), '123456');
+  await fireEvent.changeText(screen.getByLabelText('Confirm PIN'), '123456');
+  const save = () => screen.getByRole('button', { name: 'Save PIN' });
+  await act(async () => {
+    await fireEvent.press(save());
+    await fireEvent.press(save());
+  });
+  expect(core.enableLock).toHaveBeenCalledTimes(1);
+  expect(save()).toBeBusy();
+  await act(() => reject(new Error('Storage unavailable')));
+  expect(save()).toBeEnabled();
+  expect(screen.getByText('Something went wrong. Try again.')).toBeOnTheScreen();
+});
+
+test('denies the button and text callbacks when the interaction expires', async () => {
+  const { core, session, appConfig, navigator } = setup();
+  session.getState().signedIn(me('rider'));
+  appConfig.getState().setGate({ status: 'ok' });
+  const interact = jest.fn(() => true);
+  await render(
+    <InteractionContext.Provider value={interact}>
+      {navigator}
+    </InteractionContext.Provider>,
+  );
+  interact.mockReturnValue(false);
+  await fireEvent.press(screen.getByRole('tab', { name: 'Account' }));
+  expect(screen.getByText('Rider home')).toBeOnTheScreen();
+  interact.mockReturnValue(true);
+  await fireEvent.press(screen.getByRole('tab', { name: 'Account' }));
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Set up app lock' }),
+  );
+  const field = screen.getByLabelText('6-digit PIN');
+  interact.mockReturnValue(false);
+  await fireEvent.changeText(field, '123456');
+  expect(field.props.value).toBe('');
+  interact.mockReturnValue(true);
+  await fireEvent.changeText(field, '123456');
+  await fireEvent.changeText(screen.getByLabelText('Confirm PIN'), '123456');
+  interact.mockReturnValue(false);
+  await fireEvent.press(screen.getByRole('button', { name: 'Save PIN' }));
+  expect(core.enableLock).not.toHaveBeenCalled();
 });

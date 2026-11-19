@@ -4,6 +4,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { useStore } from 'zustand';
 import { core, startApp } from './app/boot/app-core';
 import { LanguageContext } from './app/i18n';
+import { SecurityProvider } from './app/boot/SecurityProvider';
 import { RootNavigator } from './app/routes/RootNavigator';
 import DebugContainer from './app/screens/Debug/DebugContainer';
 
@@ -16,10 +17,15 @@ function App() {
     <LanguageContext.Provider value={language}>
       <SafeAreaProvider>
         <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
-        <RootNavigator
-          core={core}
-          debug={__DEV__ ? <DebugContainer core={core} /> : null}
-        />
+        <SecurityProvider core={core}>
+          {foreground => (
+            <RootNavigator
+              foreground={foreground}
+              core={core}
+              debug={__DEV__ ? <DebugContainer core={core} /> : null}
+            />
+          )}
+        </SecurityProvider>
       </SafeAreaProvider>
     </LanguageContext.Provider>
   );

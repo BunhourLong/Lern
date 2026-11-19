@@ -62,7 +62,7 @@ export function createPinLock({
     return run;
   }
 
-  async function compare(pin: string): Promise<PinCheck> {
+  async function compare(pin: string, requireStoredPin: boolean): Promise<PinCheck> {
     const wait = remaining();
     if (wait > 0) return { ok: false, waitMs: wait };
     let stored: string | undefined;
@@ -71,7 +71,8 @@ export function createPinLock({
     } catch {
       return { ok: false, waitMs: 0 }; // can't read the PIN: stay locked, count nothing
     }
-    if (stored === undefined) return { ok: true };
+    if (stored === undefined)
+      return requireStoredPin ? { ok: false, waitMs: 0 } : { ok: true };
     const [salt, hash] = stored.split(':');
     if ((await hasher.hash(salt, pin)) === hash) {
       kv.remove(FAILURES);
@@ -87,7 +88,8 @@ export function createPinLock({
     waitStart = elapsed();
     return { ok: false, waitMs: WAIT_MS[count] ?? 0 };
   }
-  const check = (pin: string) => serial(() => compare(pin));
+  const check = (pin: string, requireStoredPin = false) =>
+    serial(() => compare(pin, requireStoredPin));
   const clear = () => serial(wipe);
 
   async function store(pin: string): Promise<void> {
@@ -99,9 +101,11 @@ export function createPinLock({
     isEnabled: async () => (await secret.get()) !== undefined,
     async enable(pin: string): Promise<void> {
       assertFormat(pin);
-      if ((await secret.get()) !== undefined)
-        throw new Error('PIN already set: change it with the old one');
-      await store(pin);
+      await serial(async () => {
+        if ((await secret.get()) !== undefined)
+          throw new Error('PIN already set: change it with the old one');
+        await store(pin);
+      });
     },
     async change(old: string, next: string): Promise<PinCheck> {
       assertFormat(next);

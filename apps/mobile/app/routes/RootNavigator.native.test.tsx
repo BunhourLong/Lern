@@ -5,6 +5,7 @@ import type { TabSelectedEvent } from 'react-native-screens';
 import { createStore } from 'zustand/vanilla';
 import type { NotificationTarget } from '../boot/core';
 import { createAppConfigStore } from '../stores/app-config.store';
+import { createSecurityStore } from '../stores/security.store';
 import { createSessionStore } from '../stores/session.store';
 import { RootNavigator } from './RootNavigator';
 
@@ -32,9 +33,19 @@ function renderRiderTabs(debug: ReactNode = null) {
   return render(
     <RootNavigator
       core={{
-        stores: { session, appConfig, notification },
+        stores: {
+          session,
+          appConfig,
+          notification,
+          security: createSecurityStore(),
+        },
         api: { requestOtp: jest.fn() },
         signIn: jest.fn(),
+        enableLock: jest.fn(),
+        unlock: jest.fn(),
+        interruptPinCheck: jest.fn(),
+        signOut: jest.fn(),
+        pinWaitMs: () => 0,
       }}
       debug={debug}
     />,

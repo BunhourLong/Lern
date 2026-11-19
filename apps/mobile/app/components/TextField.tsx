@@ -9,6 +9,7 @@ import {
   type,
   useTheme,
 } from '@theme';
+import { useInteraction } from '../hooks/use-interaction';
 import { Text } from './Text';
 
 export function TextField({
@@ -23,10 +24,14 @@ export function TextField({
   prefix?: string;
 }) {
   const { colors } = useTheme();
+  const interact = useInteraction();
   const styles = useStyles();
   const input = (
     <TextInput
       {...props}
+      onChangeText={value => {
+        if (interact()) props.onChangeText?.(value);
+      }}
       accessibilityLabel={label}
       accessibilityHint={error || accessibilityHint}
       placeholderTextColor={colors.textMuted}

@@ -84,7 +84,7 @@ export default function RouteMessageContainer({
       title={t(message.title)}
       body={'body' in message ? t(message.body) : undefined}
       updateAction={updateAction}
-      debugAction={
+      secondaryAction={
         onDebug ? { label: t('route.debug'), onPress: onDebug } : undefined
       }
     />

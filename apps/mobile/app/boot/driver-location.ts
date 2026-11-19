@@ -3,6 +3,9 @@ import type { StoreApi } from 'zustand/vanilla';
 import type { LocationService, Permission } from '../services/location.service';
 import type { DriverModeState } from '../stores/driver-mode.store';
 
+export const isDriverOnline = (a: DriverAvailability | null) =>
+  a !== null && a !== 'offline';
+
 // Tracking runs exactly while the server says the driver is online (available, holding an offer, on a trip).
 // The server can end that on its own (presence time-out), so this follows the store, not the toggle.
 // onStart gets each start's outcome: 'denied' or 'failed' means not tracking (the caller can't keep the driver
@@ -12,8 +15,6 @@ export function followAvailability(
   location: Pick<LocationService, 'start' | 'stop'>,
   onStart: (result: Permission | 'failed') => void,
 ): () => void {
-  const online = (a: DriverAvailability | null) =>
-    a !== null && a !== 'offline';
   let tracking = false;
   let latest = 0; // the newest availability change; only its failed start may reset `tracking`
   let chain = Promise.resolve(); // start and stop run in the order the availability changed
@@ -24,7 +25,7 @@ export function followAvailability(
     );
   };
   const follow = (availability: DriverAvailability | null) => {
-    const want = online(availability);
+    const want = isDriverOnline(availability);
     if (want === tracking) return;
     tracking = want;
     const request = ++latest;

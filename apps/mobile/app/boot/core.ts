@@ -98,6 +98,7 @@ export function createCore({
   let tapVersion = 0;
   // Bumped on sign-out: an answer to a request sent before it must not land in the next user's stores
   let epoch = 0;
+  let pinAttempt = 0;
   const live = () => {
     const started = epoch;
     return () => started === epoch;
@@ -122,10 +123,17 @@ export function createCore({
     rawEvents.getState().reset(); // the next user on this phone must not see the last one's rides
     session.getState().signedOut();
     // The PIN belongs to who was signed in; a Keychain that refuses to clear keeps it until the next sign-out
-    pinLock.clear().catch(() => undefined);
     security.getState().update({ enabled: false, locked: false, waitMs: 0 });
+    return pinLock.clear();
   };
-  const api = createApi({ baseUrl, fetch, refreshToken, onSignedOut: forget });
+  const api = createApi({
+    baseUrl,
+    fetch,
+    refreshToken,
+    onSignedOut: () => {
+      forget().catch(() => undefined);
+    },
+  });
   const queue = createOfflineQueue({
     store: kv,
     api,
@@ -232,7 +240,39 @@ export function createCore({
     return current() ? snapshot : undefined;
   }
 
+  let availabilityRequest = 0;
+  async function refreshAvailability() {
+    const user = session.getState().me;
+    if (!user?.roles.includes('driver')) return;
+    const request = ++availabilityRequest;
+    const initial = driverMode.getState();
+    try {
+      const profile = await api.profile();
+      if (
+        request === availabilityRequest &&
+        session.getState().me === user &&
+        driverMode.getState() === initial
+      )
+        initial.setAvailability(profile.availability);
+    } catch {
+      // Keep the last known shift status when the server cannot be reached. The next resume or reconnect retries.
+    }
+  }
+
   async function start(user: Me): Promise<void> {
+    const previous = session.getState().me;
+    if (previous && previous.id !== user.id) {
+      // Queue cleanup behind any old PIN write before exposing the replacement account.
+      const cleared = forget();
+      const stillReplacing = live();
+      try {
+        await cleared;
+      } catch (err) {
+        if (stillReplacing()) await api.signOut();
+        throw err;
+      }
+      if (!stillReplacing()) return;
+    }
     const current = live();
     const availability = user.roles.includes('driver')
       ? (await api.profile()).availability
@@ -251,6 +291,7 @@ export function createCore({
         onRaw: (event, payload) => rawEvents.getState().add(event, payload),
         onConnect: () => {
           connection.getState().setConnected(true);
+          refreshAvailability();
           resync();
           push.sync();
         },
@@ -297,6 +338,7 @@ export function createCore({
     },
     api,
     queue,
+    refreshAvailability,
     // App start: a stored refresh token becomes a session. Offline keeps the session 'restoring' (the token stays,
     // the queue keeps filling) and tries again with backoff; only none or refused means sign in again.
     async boot(): Promise<void> {
@@ -350,17 +392,32 @@ export function createCore({
     signOut: () => api.signOut(),
 
     // Optional app lock: covers the screen only, the session stays valid behind it
+    pinWaitMs: pinLock.waitMs,
+    interruptPinCheck(): void {
+      pinAttempt++;
+    },
     lock(): void {
+      pinAttempt++;
       if (security.getState().enabled)
         security.getState().update({ locked: true });
     },
-    unlock: async (pinCode: string) =>
-      pinResult(await pinLock.check(pinCode), () =>
+    async unlock(pinCode: string): Promise<PinCheck> {
+      const current = live();
+      const user = session.getState().me?.id;
+      const attempt = ++pinAttempt;
+      const result = await pinLock.check(pinCode, security.getState().enabled);
+      if (!current() || session.getState().me?.id !== user)
+        return { ok: false, waitMs: 0 };
+      if (result.ok && attempt !== pinAttempt)
+        return { ok: false, waitMs: pinLock.waitMs() };
+      return pinResult(result, () =>
         security.getState().update({ locked: false, waitMs: 0 }),
-      ),
+      );
+    },
     async enableLock(pinCode: string): Promise<void> {
+      const current = live();
       await pinLock.enable(pinCode);
-      security.getState().update({ enabled: true });
+      if (current()) security.getState().update({ enabled: true });
     },
     disableLock: async (pinCode: string) =>
       pinResult(await pinLock.disable(pinCode), () =>
