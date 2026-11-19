@@ -6,10 +6,10 @@ Agents: copy rows into other files verbatim; never paraphrase the model names or
 
 # Locked workflow (set by the user)
 
-## Main orchestrator (decided 2026-11-19)
-- `antigravity` / `gemini-4-neon`, `thinking_level: low` on low tasks, `medium` on medium and high-risk tasks. Never `high`/`xhigh`. Never any other Gemini model (Argon, Hydrogen, Flash, ...).
-- Reason: keep Claude Pro / Opus 5.5 free for other projects.
-- Antigravity skips `.claude/settings.json` hooks and `.claude/rules/`, so the main session explicitly runs `graphify query`, follows `ponytail` (`ultra`) and reads the matching `.claude/rules/gotchas-*.md`.
+## Main orchestrator (changed by the user 2026-11-19: Opus 5.5 replaces Gemini 4 Neon)
+- `claudeAgent_2` / `claude-opus-5-5`, `effort: high`, for plan, briefs, diff check, gates, mutation checks and commits on every task.
+- The main orchestrator and the high-risk writer are both Opus 5.5, and only those two. The orchestrator never works alone: the writer, reviewer and search rows below still go to their subagents through `delegate_task`.
+- No Gemini model is used in this project any more.
 
 ## Standing routing
 | Job | Provider and model | Options |
@@ -32,5 +32,5 @@ The user's OpenCode Go monthly allowance is nearly spent (about 5% left, about 1
 
 - Writer and reviewer stay different models (Haiku writes, Sonnet reviews).
 - Haiku 5.5 and Sonnet 5.5 are allowed only under this override. When the user says OpenCode Go has reset, delete this section and the Standing routing applies again.
-- No other substitutes. Never any Gemini model besides Gemini 4 Neon, never GPT-6 Luna, GPT-6 Astra, GPT-6.2 Astra, GPT-6.1-*, OpenCode free models, Claude native `Agent` tool or launcher scripts.
+- No other substitutes. Never any Gemini model, never GPT-6 Luna, GPT-6 Astra, GPT-6.2 Astra, GPT-6.1-*, OpenCode free models, Claude native `Agent` tool or launcher scripts.
 - A Claude Pro limit pauses the task per the Limit rule in `.claude/run-task.md`; nothing takes over and no model or plan is switched.
