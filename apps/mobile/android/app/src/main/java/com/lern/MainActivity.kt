@@ -18,6 +18,7 @@ class MainActivity : ReactActivity() {
   // react-native-screens can't restore its fragments after the activity is recreated (font size
   // change, process death), so start without saved state; navigation state lives in JS.
   override fun onCreate(savedInstanceState: Bundle?) {
+    setTheme(R.style.AppTheme)
     super.onCreate(null)
   }
 
