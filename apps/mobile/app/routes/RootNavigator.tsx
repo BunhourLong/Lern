@@ -50,48 +50,78 @@ export function RootNavigator({ core, debug }: Props) {
   return (
     <NavigationContainer theme={theme}>
       <Stack.Navigator screenOptions={screenOptions}>
-        <Stack.Screen
-          name={route}
-          options={
-            route === 'login'
-              ? { headerShown: true, title: t('route.login.title') }
-              : undefined
-          }
-        >
-          {({ navigation }) => {
-            const onDebug = showDebug
-              ? () => navigation.navigate('Debug')
-              : undefined;
-            if (route === 'login')
-              return (
+        {route === 'login' && (
+          <Stack.Group>
+            <Stack.Screen
+              name="login"
+              options={{ headerShown: true, title: t('route.login.title') }}
+            >
+              {({ navigation }) => (
                 <LoginContainer
                   requestOtp={core.api.requestOtp}
                   onSent={params => navigation.navigate('Otp', params)}
-                  onDebug={onDebug}
+                  onDebug={
+                    showDebug ? () => navigation.navigate('Debug') : undefined
+                  }
                 />
-              );
-            if (route === 'rider' || route === 'driver')
-              return <RoleTabs role={route} onDebug={onDebug} />;
-            return <RouteMessageContainer route={route} storeUrl={storeUrl} />;
-          }}
-        </Stack.Screen>
-        {route === 'login' && (
-          <Stack.Screen
-            name="Otp"
-            options={{
-              headerShown: true,
-              title: t('otp.title'),
-              headerBackTitle: t('route.back'),
-            }}
-          >
-            {({ route: { params } }) => (
-              <OtpContainer
-                {...params}
-                requestOtp={core.api.requestOtp}
-                signIn={core.signIn}
-              />
-            )}
-          </Stack.Screen>
+              )}
+            </Stack.Screen>
+            <Stack.Screen
+              name="Otp"
+              options={{
+                headerShown: true,
+                title: t('otp.title'),
+                headerBackTitle: t('route.back'),
+              }}
+            >
+              {({ route: { params } }) => (
+                <OtpContainer
+                  {...params}
+                  requestOtp={core.api.requestOtp}
+                  signIn={core.signIn}
+                />
+              )}
+            </Stack.Screen>
+          </Stack.Group>
+        )}
+        {route === 'rider' && (
+          <Stack.Group>
+            <Stack.Screen name="rider">
+              {({ navigation }) => (
+                <RoleTabs
+                  role="rider"
+                  onDebug={
+                    showDebug ? () => navigation.navigate('Debug') : undefined
+                  }
+                />
+              )}
+            </Stack.Screen>
+          </Stack.Group>
+        )}
+        {route === 'driver' && (
+          <Stack.Group>
+            <Stack.Screen name="driver">
+              {({ navigation }) => (
+                <RoleTabs
+                  role="driver"
+                  onDebug={
+                    showDebug ? () => navigation.navigate('Debug') : undefined
+                  }
+                />
+              )}
+            </Stack.Screen>
+          </Stack.Group>
+        )}
+        {(route === 'loading' ||
+          route === 'maintenance' ||
+          route === 'update') && (
+          <Stack.Group>
+            <Stack.Screen name={route}>
+              {() => (
+                <RouteMessageContainer route={route} storeUrl={storeUrl} />
+              )}
+            </Stack.Screen>
+          </Stack.Group>
         )}
         {showDebug && (
           <Stack.Screen
