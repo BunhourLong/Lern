@@ -54,6 +54,7 @@ export default function LoginContainer({
   return (
     <LoginScreen
       phone={phone}
+      logoLabel={t('brand.name')}
       phoneLabel={t('login.phone')}
       prefix={t('login.prefix')}
       sendLabel={t('login.send')}

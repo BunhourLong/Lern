@@ -1,10 +1,11 @@
-import { View } from 'react-native';
-import { makeStyles, spacing } from '@theme';
+import { Image, View } from 'react-native';
+import { logoSize, makeStyles, spacing } from '@theme';
 import { Button } from '../../components/Button';
 import { Screen } from '../../components/Screen';
 import { TextField } from '../../components/TextField';
 
 type Props = {
+  logoLabel: string;
   phone: string;
   phoneLabel: string;
   prefix: string;
@@ -18,6 +19,7 @@ type Props = {
 };
 
 export default function LoginScreen({
+  logoLabel,
   phone,
   phoneLabel,
   prefix,
@@ -32,6 +34,15 @@ export default function LoginScreen({
   const styles = useStyles();
   return (
     <Screen scroll edges={['left', 'right', 'bottom']}>
+      <View style={styles.hero}>
+        <Image
+          source={require('../../assets/logo.png')}
+          style={styles.logo}
+          accessible
+          accessibilityRole="image"
+          accessibilityLabel={logoLabel}
+        />
+      </View>
       <View style={styles.form}>
         <TextField
           label={phoneLabel}
@@ -62,6 +73,9 @@ export default function LoginScreen({
   );
 }
 
-const useStyles = makeStyles(() => ({
-  form: { gap: spacing.md },
+const useStyles = makeStyles(t => ({
+  // Logo centred in the space above; the form keeps the lower third (design/brand/README.md).
+  hero: { flex: 2, alignItems: 'center', justifyContent: 'center' },
+  logo: { width: logoSize, height: logoSize, tintColor: t.colors.brand },
+  form: { flex: 1, gap: spacing.md, justifyContent: 'flex-end' },
 }));

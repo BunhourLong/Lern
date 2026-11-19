@@ -42,6 +42,20 @@ afterEach(() => {
   jest.mocked(useColorScheme).mockReset();
 });
 
+test.each([
+  ['light', '#191919'],
+  ['dark', '#89F597'],
+] as const)(
+  'shows the Lern logo in %s mode, ink on light',
+  async (scheme, tint) => {
+    jest.mocked(useColorScheme).mockReturnValue(scheme);
+    await setup();
+    const logo = screen.getByRole('image', { name: 'Lern' });
+    expect(logo).toHaveStyle({ tintColor: tint });
+    expect(logo).toHaveProp('source', require('../../assets/logo.png'));
+  },
+);
+
 test('shows the Cambodian prefix and rejects invalid input inline', async () => {
   const { requestOtp, onSent } = await setup();
   expect(screen.getByText('+855')).toBeOnTheScreen();
