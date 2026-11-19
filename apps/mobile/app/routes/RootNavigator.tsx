@@ -8,13 +8,19 @@ import { useStore } from 'zustand';
 import { useTheme } from '@theme';
 import type { Core } from '../boot/core';
 import { useT } from '../i18n';
+import LoginContainer from '../screens/Login/LoginContainer';
+import OtpContainer from '../screens/Otp/OtpContainer';
 import RouteMessageContainer from '../screens/RouteMessage/RouteMessageContainer';
 import { Stack } from './index';
 import { rootRoute } from './root-route';
 import { RoleTabs } from './RoleTabs';
 
 type Props = {
-  core: { stores: Pick<Core['stores'], 'session' | 'appConfig'> };
+  core: {
+    stores: Pick<Core['stores'], 'session' | 'appConfig'>;
+    api: Pick<Core['api'], 'requestOtp'>;
+    signIn: Core['signIn'];
+  };
   debug: ReactNode;
 };
 
@@ -44,22 +50,49 @@ export function RootNavigator({ core, debug }: Props) {
   return (
     <NavigationContainer theme={theme}>
       <Stack.Navigator screenOptions={screenOptions}>
-        <Stack.Screen name={route}>
+        <Stack.Screen
+          name={route}
+          options={
+            route === 'login'
+              ? { headerShown: true, title: t('route.login.title') }
+              : undefined
+          }
+        >
           {({ navigation }) => {
             const onDebug = showDebug
               ? () => navigation.navigate('Debug')
               : undefined;
-            return route === 'rider' || route === 'driver' ? (
-              <RoleTabs role={route} onDebug={onDebug} />
-            ) : (
-              <RouteMessageContainer
-                route={route}
-                storeUrl={storeUrl}
-                onDebug={onDebug}
-              />
-            );
+            if (route === 'login')
+              return (
+                <LoginContainer
+                  requestOtp={core.api.requestOtp}
+                  onSent={params => navigation.navigate('Otp', params)}
+                  onDebug={onDebug}
+                />
+              );
+            if (route === 'rider' || route === 'driver')
+              return <RoleTabs role={route} onDebug={onDebug} />;
+            return <RouteMessageContainer route={route} storeUrl={storeUrl} />;
           }}
         </Stack.Screen>
+        {route === 'login' && (
+          <Stack.Screen
+            name="Otp"
+            options={{
+              headerShown: true,
+              title: t('otp.title'),
+              headerBackTitle: t('route.back'),
+            }}
+          >
+            {({ route: { params } }) => (
+              <OtpContainer
+                {...params}
+                requestOtp={core.api.requestOtp}
+                signIn={core.signIn}
+              />
+            )}
+          </Stack.Screen>
+        )}
         {showDebug && (
           <Stack.Screen
             name="Debug"

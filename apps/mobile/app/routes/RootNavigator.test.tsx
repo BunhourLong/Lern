@@ -38,13 +38,20 @@ afterEach(() => jest.restoreAllMocks());
 function setup() {
   const session = createSessionStore();
   const appConfig = createAppConfigStore();
+  const requestOtp = jest
+    .fn<Promise<undefined>, [string]>()
+    .mockResolvedValue(undefined);
+  const signIn = jest
+    .fn<Promise<void>, [string, string]>()
+    .mockResolvedValue(undefined);
+  const core = { stores: { session, appConfig }, api: { requestOtp }, signIn };
   const navigator = (
     <RootNavigator
-      core={{ stores: { session, appConfig } }}
+      core={core}
       debug={<Text accessibilityRole="header">Debug tools</Text>}
     />
   );
-  return { session, appConfig, navigator };
+  return { session, appConfig, navigator, requestOtp, signIn };
 }
 
 test('loads until both stores are ready', async () => {
@@ -61,8 +68,8 @@ test('loads until both stores are ready', async () => {
 
   await act(() => session.getState().signedOut());
   expect(screen.queryByRole('progressbar')).toBeNull();
-  expect(screen.getByRole('header', { name: 'Sign in' })).toBeOnTheScreen();
-  expect(screen.getByText('sign-in screen comes next')).toBeOnTheScreen();
+  expect(screen.getByLabelText('Phone number')).toBeOnTheScreen();
+  expect(screen.getByRole('button', { name: 'Send code' })).toBeEnabled();
 });
 
 test('switches between login, rider and driver as the session changes', async () => {
@@ -70,10 +77,10 @@ test('switches between login, rider and driver as the session changes', async ()
   appConfig.getState().setGate({ status: 'ok' });
   session.getState().signedOut();
   await render(navigator);
-  expect(screen.getByRole('header', { name: 'Sign in' })).toBeOnTheScreen();
+  expect(screen.getByLabelText('Phone number')).toBeOnTheScreen();
 
   await act(() => session.getState().signedIn(me('rider')));
-  expect(screen.queryByRole('header', { name: 'Sign in' })).toBeNull();
+  expect(screen.queryByLabelText('Phone number')).toBeNull();
   expect(screen.getByRole('header', { name: 'Rider home' })).toBeOnTheScreen();
 
   await act(() => session.getState().signedIn(me('rider', 'driver')));
@@ -82,8 +89,57 @@ test('switches between login, rider and driver as the session changes', async ()
 
   await act(() => session.getState().signedOut());
   expect(screen.queryByRole('header', { name: 'Driver home' })).toBeNull();
-  expect(screen.getByRole('header', { name: 'Sign in' })).toBeOnTheScreen();
+  expect(screen.getByLabelText('Phone number')).toBeOnTheScreen();
 });
+
+test.each([
+  ['rider', 'Rider home'],
+  ['driver', 'Driver home'],
+] as const)(
+  'replaces both sign-in screens with %s home after verification',
+  async (role, title) => {
+    const { session, appConfig, navigator, requestOtp, signIn } = setup();
+    appConfig.getState().setGate({ status: 'ok' });
+    session.getState().signedOut();
+    signIn.mockImplementationOnce(async () => {
+      session.getState().signedIn(me(role));
+    });
+    await render(navigator);
+
+    await fireEvent.changeText(
+      screen.getByLabelText('Phone number'),
+      '012 345 678',
+    );
+    await fireEvent.press(screen.getByRole('button', { name: 'Send code' }));
+    expect(requestOtp).toHaveBeenCalledWith('+85512345678');
+    expect(
+      screen.getByText('Enter the code sent to +85512345678.'),
+    ).toBeOnTheScreen();
+    expect(
+      screen.container
+        .queryAll(node => node.type === 'RNSScreenStackHeaderConfig')
+        .map(header => header.props),
+    ).toContainEqual(
+      expect.objectContaining({
+        title: 'Verification code',
+        backTitle: 'Back',
+      }),
+    );
+    expect(
+      screen.getByRole('button', { name: /^Resend in \d+s$/ }),
+    ).toBeDisabled();
+
+    await fireEvent.changeText(screen.getByLabelText('Code'), '123456');
+    expect(signIn).toHaveBeenCalledWith('+85512345678', '123456');
+    expect(screen.getByRole('header', { name: title })).toBeOnTheScreen();
+    expect(
+      screen.queryByLabelText('Phone number', { includeHiddenElements: true }),
+    ).toBeNull();
+    expect(
+      screen.queryByLabelText('Code', { includeHiddenElements: true }),
+    ).toBeNull();
+  },
+);
 
 test('selects Driver Home when a rider on Activity becomes a driver', async () => {
   const { session, appConfig, navigator } = setup();
@@ -127,7 +183,7 @@ test('removes the tabs when a user signs out from Account', async () => {
 
   await act(() => session.getState().signedOut());
 
-  expect(screen.getByRole('header', { name: 'Sign in' })).toBeOnTheScreen();
+  expect(screen.getByLabelText('Phone number')).toBeOnTheScreen();
   expect(
     screen.queryByRole('tablist', { includeHiddenElements: true }),
   ).toBeNull();
@@ -312,7 +368,7 @@ test.each([true, false])(
       if (isDev) expect(button).toBeOnTheScreen();
       else expect(button).toBeNull();
     };
-    expect(screen.getByRole('header', { name: 'Sign in' })).toBeOnTheScreen();
+    expect(screen.getByLabelText('Phone number')).toBeOnTheScreen();
     checkDebug();
     await act(() => session.getState().signedIn(me('rider')));
     checkDebug();

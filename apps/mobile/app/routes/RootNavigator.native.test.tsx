@@ -27,7 +27,14 @@ function renderRiderTabs(debug: ReactNode = null) {
     .signedIn({ id: 'u-1', phone: '+85512345678', roles: ['rider'] });
   appConfig.getState().setGate({ status: 'ok' });
   return render(
-    <RootNavigator core={{ stores: { session, appConfig } }} debug={debug} />,
+    <RootNavigator
+      core={{
+        stores: { session, appConfig },
+        api: { requestOtp: jest.fn() },
+        signIn: jest.fn(),
+      }}
+      debug={debug}
+    />,
   );
 }
 

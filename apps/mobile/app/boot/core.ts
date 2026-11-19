@@ -83,6 +83,7 @@ export function createCore({
     elapsed,
   });
   let socket: RealtimeSocket | undefined;
+  let verifiedPhone: string | undefined;
   // Bumped on sign-out: an answer to a request sent before it must not land in the next user's stores
   let epoch = 0;
   const live = () => {
@@ -256,7 +257,12 @@ export function createCore({
       }
     },
     async signIn(phone: string, code: string): Promise<void> {
-      await api.verifyOtp(phone, code);
+      // Reuse an access token only for the phone whose OTP verification completed.
+      if (phone !== verifiedPhone || !api.accessToken()) {
+        verifiedPhone = undefined;
+        await api.verifyOtp(phone, code);
+        verifiedPhone = phone;
+      }
       await start(await api.me());
     },
     signOut: () => api.signOut(),

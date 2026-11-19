@@ -165,6 +165,125 @@ const routes = (
   ...extra,
 });
 
+it('retries the profile load without verifying a consumed OTP again', async () => {
+  let profileReady = false;
+  const verify = jest
+    .fn<{ status: number; body?: unknown }, []>()
+    .mockReturnValueOnce({ status: 200, body: pair })
+    .mockReturnValue({ status: 401 });
+  const s = server(
+    routes({
+      'POST /auth/otp/verify': verify,
+      'GET /me': () => {
+        if (!profileReady) throw new TypeError('Network request failed');
+        return { status: 200, body: me };
+      },
+    }),
+  );
+  const core = createCore(deps(s, fakeIo()));
+
+  await expect(core.signIn(me.phone, '123456')).rejects.toMatchObject({
+    status: 0,
+  });
+  profileReady = true;
+  await core.signIn(me.phone, '123456');
+
+  expect(s.calls.filter(call => call === 'GET /me')).toHaveLength(2);
+  expect(verify).toHaveBeenCalledTimes(1);
+  expect(core.stores.session.getState().status).toBe('signed_in');
+});
+
+it('verifies a different phone after the first phone could not load its profile', async () => {
+  let profileReady = false;
+  const verify = jest
+    .fn<{ status: number; body?: unknown }, []>()
+    .mockReturnValueOnce({ status: 200, body: pair })
+    .mockReturnValue({ status: 401 });
+  const s = server(
+    routes({
+      'POST /auth/otp/verify': verify,
+      'GET /me': () => {
+        if (!profileReady) throw new TypeError('Network request failed');
+        return { status: 200, body: me };
+      },
+    }),
+  );
+  const core = createCore(deps(s, fakeIo()));
+
+  await expect(core.signIn(me.phone, '123456')).rejects.toMatchObject({
+    status: 0,
+  });
+  profileReady = true;
+  const phone = '+85598765432';
+  const code = '654321';
+  await expect(core.signIn(phone, code)).rejects.toMatchObject({ status: 401 });
+
+  expect(jest.mocked(s.fetch)).toHaveBeenCalledWith(
+    'http://api.test/auth/otp/verify',
+    expect.objectContaining({ body: JSON.stringify({ phone, code }) }),
+  );
+});
+
+it('verifies the same phone again after signing out before the profile loaded', async () => {
+  let profileReady = false;
+  const s = server(
+    routes({
+      'POST /auth/otp/verify': () => ({ status: 200, body: pair }),
+      'POST /auth/logout': () => ({ status: 204 }),
+      'GET /me': () => {
+        if (!profileReady) throw new TypeError('Network request failed');
+        return { status: 200, body: me };
+      },
+    }),
+  );
+  const core = createCore(deps(s, fakeIo()));
+
+  await expect(core.signIn(me.phone, '123456')).rejects.toMatchObject({
+    status: 0,
+  });
+  await core.signOut();
+  expect(core.api.accessToken()).toBeUndefined();
+
+  profileReady = true;
+  await core.signIn(me.phone, '654321');
+  expect(s.calls.filter(call => call === 'POST /auth/otp/verify')).toHaveLength(
+    2,
+  );
+});
+
+it('verifies the original phone again after storing another phone’s refresh token fails', async () => {
+  let profileReady = false;
+  const otherPair = { accessToken: 'other-access', refreshToken: 's'.repeat(43) };
+  const verify = jest
+    .fn(() => ({ status: 200, body: pair }))
+    .mockReturnValueOnce({ status: 200, body: pair })
+    .mockReturnValueOnce({ status: 200, body: otherPair });
+  const s = server(
+    routes({
+      'POST /auth/otp/verify': verify,
+      'GET /me': () => {
+        if (!profileReady) throw new TypeError('Network request failed');
+        return { status: 200, body: me };
+      },
+    }),
+  );
+  const d = deps(s, fakeIo());
+  const core = createCore(d);
+
+  await expect(core.signIn(me.phone, '123456')).rejects.toMatchObject({
+    status: 0,
+  });
+  const storageError = new Error('Could not save refresh token');
+  jest.spyOn(d.refreshToken, 'set').mockRejectedValueOnce(storageError);
+  await expect(core.signIn('+85598765432', '234567')).rejects.toBe(storageError);
+  expect(core.api.accessToken()).toBe(otherPair.accessToken);
+
+  profileReady = true;
+  await core.signIn(me.phone, '345678');
+  expect(verify).toHaveBeenCalledTimes(3);
+  expect(core.api.accessToken()).toBe(pair.accessToken);
+});
+
 it('boots from a stored refresh token: session, driver availability, then the snapshot on connect', async () => {
   const s = server(routes());
   const f = fakeIo();

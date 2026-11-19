@@ -6,7 +6,11 @@ import type { StringKey } from '../../i18n';
 import type { RootRoute } from '../../routes/root-route';
 import RouteMessageScreen from './RouteMessageScreen';
 
-type MessageRoute = RootRoute | 'activity' | 'earnings' | 'account';
+type MessageRoute =
+  | Exclude<RootRoute, 'login'>
+  | 'activity'
+  | 'earnings'
+  | 'account';
 
 type Props = {
   route: MessageRoute;
@@ -21,7 +25,6 @@ const messages = {
     body: 'route.maintenance.body',
   },
   update: { title: 'route.update.title', body: 'route.update.body' },
-  login: { title: 'route.login.title', body: 'route.login.body' },
   driver: { title: 'route.driver.title' },
   rider: { title: 'route.rider.title' },
   activity: { title: 'tab.activity', body: 'tab.comingSoon' },
