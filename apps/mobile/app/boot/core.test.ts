@@ -14,6 +14,10 @@ const me = {
   roles: ['rider', 'driver'],
 };
 const rideId = '00000000-0000-4000-8000-000000000001';
+const otherRideId = '00000000-0000-4000-8000-000000000002';
+const offerId = '00000000-0000-4000-8000-000000000003';
+const rideTap = { type: 'ride', rideId, seq: '4' };
+const offerTap = { type: 'offer', rideId, offerId };
 const ride = (status: string, version: number) => ({
   id: rideId,
   status,
@@ -24,11 +28,11 @@ const ride = (status: string, version: number) => ({
   fare: { amountMinor: 4000, currency: 'KHR' },
 });
 const pair = { accessToken: 'access-2', refreshToken: 'r'.repeat(43) };
+type Reply = { status: number; body?: unknown };
+type Routes = Record<string, () => Reply | Promise<Reply>>;
 
 // A server keyed by "METHOD /path"; offline = every request fails at the network
-function server(
-  routes: Record<string, () => { status: number; body?: unknown }>,
-) {
+function server(routes: Routes) {
   const calls: string[] = [];
   const state = { offline: false };
   const fetch = jest.fn(async (url: string, init: RequestInit) => {
@@ -36,7 +40,7 @@ function server(
     calls.push(route);
     if (state.offline || !routes[route])
       throw new TypeError('Network request failed');
-    const { status, body } = routes[route]();
+    const { status, body } = await routes[route]();
     return {
       status,
       ok: status < 300,
@@ -68,6 +72,8 @@ function fakeIo() {
 // Notifications refused unless a test says otherwise, so other tests see no registration requests
 function fakePush(overrides: Partial<PushNative> = {}) {
   const messages: (() => void)[] = [];
+  const opened: ((data: unknown) => void)[] = [];
+  const unsubscribeOpen = jest.fn();
   const native: PushNative = {
     platform: 'android',
     locale: () => 'en',
@@ -79,9 +85,14 @@ function fakePush(overrides: Partial<PushNative> = {}) {
       messages.push(cb);
       return () => undefined;
     },
+    onNotificationOpenedApp: cb => {
+      opened.push(cb);
+      return unsubscribeOpen;
+    },
+    getInitialNotification: async () => null,
     ...overrides,
   };
-  return { native, messages };
+  return { native, messages, opened, unsubscribeOpen };
 }
 function deps(
   s: ReturnType<typeof server>,
@@ -144,9 +155,7 @@ function deps(
 }
 const settle = () =>
   new Promise<void>(resolve => setImmediate(() => resolve()));
-const routes = (
-  extra: Record<string, () => { status: number; body?: unknown }> = {},
-) => ({
+const routes = (extra: Routes = {}) => ({
   'POST /auth/refresh': () => ({ status: 200, body: pair }),
   'GET /me': () => ({ status: 200, body: me }),
   'GET /drivers/me': () => ({
@@ -696,6 +705,238 @@ describe('push', () => {
   const allowed = (overrides: Partial<PushNative> = {}) =>
     fakePush({ requestPermission: async () => true, ...overrides });
   const nap = async () => undefined;
+  const active = 'GET /me/active-ride';
+  const details = `GET /rides/${rideId}`;
+  const emptyRides = { rider: null, driver: null, offer: null };
+  const offer = {
+    ...ride('pending', 1),
+    id: offerId,
+    rideId,
+    distanceM: 800,
+    expiresAt: '2099-01-01T00:00:00.000Z',
+  };
+
+  function deferred<T>() {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>(done => (resolve = done));
+    return { promise, resolve };
+  }
+
+  async function bootPush(extra: Routes = {}, overrides: Partial<PushNative> = {}) {
+    const s = server(routes(extra));
+    const push = fakePush(overrides);
+    const socket = fakeIo();
+    const core = createCore(deps(s, socket, pair.refreshToken, nap, push.native));
+    await core.boot();
+    await settle();
+    return { core, push, s, socket, open: push.opened[0] };
+  }
+
+  it('refreshes a cold notification tap before the socket connects', async () => {
+    const config = deferred<Reply>();
+    const { core, s } = await bootPush(
+      { 'GET /app-config': () => config.promise },
+      { getInitialNotification: async () => rideTap },
+    );
+    expect(s.calls).not.toContain(active);
+    config.resolve({
+      status: 200,
+      body: { maintenance: false, ios: null, android: null },
+    });
+    await settle();
+
+    expect(count(s.calls, active)).toBe(1);
+    expect(s.calls).not.toContain(details);
+    expect(core.stores.notification.getState()).toEqual({
+      type: 'ride',
+      id: rideId,
+      status: 'in_progress',
+    });
+  });
+
+  it('opens only the pending offer with both tapped ids after a warm refresh', async () => {
+    let held: typeof offer | null = offer;
+    const { core, open, s } = await bootPush({
+      [active]: () => ({ status: 200, body: { ...emptyRides, offer: held } }),
+    });
+    for (const tap of [
+      { ...offerTap, offerId: otherRideId },
+      { ...offerTap, rideId: otherRideId },
+    ]) {
+      open(tap);
+      await settle();
+      expect(core.stores.notification.getState()).toBeNull();
+    }
+    // The device clock is fast. The database clock determines whether the offer is still pending.
+    const phoneClock = jest.spyOn(Date, 'now').mockReturnValue(Date.parse(offer.expiresAt) + 60_000);
+    try {
+      open(offerTap);
+      await settle();
+    } finally {
+      phoneClock.mockRestore();
+    }
+    expect(core.stores.notification.getState()).toEqual({
+      type: 'offer',
+      id: offerId,
+    });
+
+    held = null; // the server stops returning expired offers
+    open(offerTap);
+    await settle();
+    expect(core.stores.notification.getState()).toBeNull();
+    expect(count(s.calls, active)).toBe(4);
+    expect(s.calls).not.toContain(details);
+  });
+
+  it('does not open an offer for a rider-only session', async () => {
+    const { core, open } = await bootPush({
+      'GET /me': () => ({ status: 200, body: { ...me, roles: ['rider'] } }),
+      [active]: () => ({ status: 200, body: { ...emptyRides, offer } }),
+    });
+    open(offerTap);
+    await settle();
+    expect(core.stores.notification.getState()).toBeNull();
+  });
+
+  it('opens a cancelled ride absent from the snapshot using its participant read', async () => {
+    const { core, open, s } = await bootPush({
+      [active]: () => ({ status: 200, body: emptyRides }),
+      [details]: () => ({ status: 200, body: ride('cancelled', 5) }),
+    });
+    open(rideTap);
+    await settle();
+    expect(s.calls.slice(-2)).toEqual([active, details]);
+    expect(core.stores.notification.getState()).toEqual({
+      type: 'ride',
+      id: rideId,
+      status: 'cancelled',
+    });
+    expect(core.stores.activeRide.getState().rider).toBeNull();
+    expect(core.stores.activeRide.getState().driver).toBeNull();
+  });
+
+  it.each<Reply>([
+    { status: 404 },
+    { status: 200, body: { ...ride('cancelled', 5), id: otherRideId } },
+    { status: 200, body: ride('driver_arrived', 3) },
+  ])(
+    'discards an unavailable, mismatched or older ride response (%j)',
+    async reply => {
+      const { core, open, s } = await bootPush({
+        [active]: () => ({ status: 200, body: emptyRides }),
+        [details]: () => reply,
+      });
+      open(rideTap);
+      await settle();
+      expect(s.calls.slice(-2)).toEqual([active, details]);
+      expect(core.stores.notification.getState()).toBeNull();
+    },
+  );
+
+  it('ignores malformed taps and refuses a warm open when the refresh fails', async () => {
+    const { core, open, s } = await bootPush();
+    open(rideTap);
+    await settle();
+    expect(core.stores.activeRide.getState().driver?.id).toBe(rideId);
+    for (const tap of [
+      { ...rideTap, seq: 4 },
+      { ...rideTap, seq: '1e1' },
+      { ...rideTap, rideId: '../me' },
+      { ...offerTap, offerId: undefined },
+    ]) {
+      open(tap);
+      await settle();
+      expect(core.stores.notification.getState()).toBeNull();
+    }
+    expect(count(s.calls, active)).toBe(1);
+
+    s.state.offline = true;
+    open(rideTap);
+    await settle();
+    expect(count(s.calls, active)).toBe(2);
+    expect(s.calls).not.toContain(details);
+    expect(core.stores.activeRide.getState().driver?.id).toBe(rideId);
+    expect(core.stores.notification.getState()).toBeNull();
+  });
+
+  it('keeps a newer warm tap when an older ride read and the cold message finish later', async () => {
+    const oldRide = deferred<Reply>();
+    const initial = deferred<unknown>();
+    const { core, open, s } = await bootPush(
+      {
+        [active]: () => ({
+          status: 200,
+          body: {
+            ...emptyRides,
+            rider: { ...ride('driver_arrived', 4), id: otherRideId },
+          },
+        }),
+        [details]: () => oldRide.promise,
+      },
+      { getInitialNotification: () => initial.promise },
+    );
+    open(rideTap);
+    await settle();
+    expect(s.calls).toContain(details);
+    open({ ...rideTap, rideId: otherRideId });
+    await settle();
+    const target = { type: 'ride', id: otherRideId, status: 'driver_arrived' };
+    expect(core.stores.notification.getState()).toEqual(target);
+
+    oldRide.resolve({ status: 200, body: ride('cancelled', 5) });
+    initial.resolve(rideTap);
+    await settle();
+    expect(count(s.calls, active)).toBe(2);
+    expect(core.stores.notification.getState()).toEqual(target);
+  });
+
+  it.each(['maintenance', 'update_required', 'sign_out'] as const)(
+    'drops an in-flight tap when %s intervenes and does not replay it',
+    async gate => {
+      const snapshot = deferred<Reply>();
+      const { core, open, s } = await bootPush({
+        [active]: () => snapshot.promise,
+        'POST /auth/otp/verify': () => ({ status: 200, body: pair }),
+      });
+      open(rideTap);
+      await settle();
+      expect(s.calls).toContain(active);
+      if (gate === 'sign_out') {
+        await core.signOut();
+        open(rideTap); // a notification still in the tray while signed out
+        await core.signIn(me.phone, '000000');
+      } else {
+        core.stores.appConfig.getState().setGate(
+          gate === 'maintenance'
+            ? { status: gate }
+            : { status: gate, storeUrl: 'https://example.com/lern' },
+        );
+        open(rideTap);
+        core.stores.appConfig.getState().setGate({ status: 'ok' });
+      }
+      snapshot.resolve({ status: 200, body: { ...emptyRides, driver: ride('driver_arrived', 4) } });
+      await settle();
+      expect(core.stores.activeRide.getState().driver).toBeNull();
+      expect(count(s.calls, active)).toBe(1);
+      expect(s.calls).not.toContain(details);
+      expect(core.stores.notification.getState()).toBeNull();
+    },
+  );
+
+  it('removes the native open listener and ignores a late initial notification on app cleanup', async () => {
+    const initial = deferred<unknown>();
+    const { core, open, push, s } = await bootPush(
+      {},
+      { getInitialNotification: () => initial.promise },
+    );
+    core.stopListeningForPush();
+    expect(push.unsubscribeOpen).toHaveBeenCalledTimes(1);
+    open(rideTap);
+    initial.resolve(rideTap);
+    await settle();
+    expect(s.calls).not.toContain(active);
+    expect(core.stores.notification.getState()).toBeNull();
+  });
 
   it('registers the phone once connected, not again on a reconnect', async () => {
     const s = server(routes(registered));
@@ -722,6 +963,7 @@ describe('push', () => {
     push.messages[0]();
     await settle();
     expect(count(s.calls, 'GET /me/active-ride')).toBe(before + 1);
+    expect(core.stores.notification.getState()).toBeNull();
   });
 
   it('gives up the token on sign-out, and on a refused session', async () => {

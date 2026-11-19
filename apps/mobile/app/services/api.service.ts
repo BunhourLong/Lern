@@ -202,6 +202,8 @@ export function createApi(deps: ApiDeps) {
     me: (): Promise<Me> => send('GET', '/me', meSchema),
     activeRide: (): Promise<ActiveRides> =>
       send('GET', '/me/active-ride', activeRidesSchema),
+    ride: (rideId: string): Promise<Ride> =>
+      send('GET', `/rides/${encodeURIComponent(rideId)}`, rideSchema),
     quote: (trip: CreateQuote): Promise<Quote> =>
       send('POST', '/quotes', quoteSchema, { body: trip, key: uuid() }),
     book: (quoteId: string, key = uuid()): Promise<Ride> =>

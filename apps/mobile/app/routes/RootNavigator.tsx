@@ -2,8 +2,9 @@ import {
   DarkTheme,
   DefaultTheme,
   NavigationContainer,
+  useNavigationContainerRef,
 } from '@react-navigation/native';
-import type { ReactNode } from 'react';
+import { type ReactNode, useEffect, useState } from 'react';
 import { useStore } from 'zustand';
 import { useTheme } from '@theme';
 import type { Core } from '../boot/core';
@@ -11,13 +12,14 @@ import { useT } from '../i18n';
 import LoginContainer from '../screens/Login/LoginContainer';
 import OtpContainer from '../screens/Otp/OtpContainer';
 import RouteMessageContainer from '../screens/RouteMessage/RouteMessageContainer';
-import { Stack } from './index';
+import RouteMessageScreen from '../screens/RouteMessage/RouteMessageScreen';
+import { type RootStackParams, Stack } from './index';
 import { rootRoute } from './root-route';
 import { RoleTabs } from './RoleTabs';
 
 type Props = {
   core: {
-    stores: Pick<Core['stores'], 'session' | 'appConfig'>;
+    stores: Pick<Core['stores'], 'session' | 'appConfig' | 'notification'>;
     api: Pick<Core['api'], 'requestOtp'>;
     signIn: Core['signIn'];
   };
@@ -27,7 +29,24 @@ type Props = {
 export function RootNavigator({ core, debug }: Props) {
   const session = useStore(core.stores.session);
   const gate = useStore(core.stores.appConfig, state => state.gate);
+  const notifications = core.stores.notification;
+  const notification = useStore(notifications);
   const route = rootRoute(session, gate);
+  const signedIn = route === 'rider' || route === 'driver';
+  const navigationRef = useNavigationContainerRef<RootStackParams>();
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    if (
+      ready &&
+      signedIn &&
+      notification &&
+      notifications.getState() === notification
+    ) {
+      notifications.setState(null, true);
+      navigationRef.navigate('NotificationStatus', notification);
+    }
+  }, [navigationRef, notification, notifications, ready, signedIn]);
+
   const { colors, dark } = useTheme();
   const t = useT();
   const base = dark ? DarkTheme : DefaultTheme;
@@ -48,7 +67,11 @@ export function RootNavigator({ core, debug }: Props) {
     gate?.status === 'update_required' ? gate.storeUrl : undefined;
 
   return (
-    <NavigationContainer theme={theme}>
+    <NavigationContainer
+      theme={theme}
+      ref={navigationRef}
+      onReady={() => setReady(true)}
+    >
       <Stack.Navigator screenOptions={screenOptions}>
         {route === 'login' && (
           <Stack.Group>
@@ -84,29 +107,34 @@ export function RootNavigator({ core, debug }: Props) {
             </Stack.Screen>
           </Stack.Group>
         )}
-        {route === 'rider' && (
-          <Stack.Group>
-            <Stack.Screen name="rider">
+        {signedIn && (
+          <Stack.Group navigationKey={`${route}:${session.me?.id}`}>
+            <Stack.Screen name={route}>
               {({ navigation }) => (
                 <RoleTabs
-                  role="rider"
+                  role={route}
                   onDebug={
                     showDebug ? () => navigation.navigate('Debug') : undefined
                   }
                 />
               )}
             </Stack.Screen>
-          </Stack.Group>
-        )}
-        {route === 'driver' && (
-          <Stack.Group>
-            <Stack.Screen name="driver">
-              {({ navigation }) => (
-                <RoleTabs
-                  role="driver"
-                  onDebug={
-                    showDebug ? () => navigation.navigate('Debug') : undefined
-                  }
+            <Stack.Screen
+              name="NotificationStatus"
+              options={({ route: { params } }) => ({
+                headerShown: true,
+                title: t(`notification.${params.type}`),
+                headerBackTitle: t('route.back'),
+              })}
+            >
+              {({ route: { params } }) => (
+                <RouteMessageScreen
+                  edges={['left', 'right', 'bottom']}
+                  title={t(
+                    params.type === 'offer'
+                      ? 'notification.offer.pending'
+                      : `notification.ride.${params.status}`,
+                  )}
                 />
               )}
             </Stack.Screen>

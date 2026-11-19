@@ -16,6 +16,7 @@ jest.mock('../app/boot/app-core', () => {
   const { createSessionStore } = jest.requireActual<
     typeof import('../app/stores/session.store')
   >('../app/stores/session.store');
+  const { createStore } = jest.requireActual('zustand/vanilla');
   const language = createLanguageStore(
     { get: () => undefined, set: jest.fn(), remove: jest.fn() },
     () => 'km-KH',
@@ -26,6 +27,7 @@ jest.mock('../app/boot/app-core', () => {
         language,
         session: createSessionStore(),
         appConfig: createAppConfigStore(),
+        notification: createStore(() => null),
       },
     },
     startApp: jest.fn(),

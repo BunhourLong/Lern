@@ -2,7 +2,9 @@ import type { Me } from '@lern/contracts';
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
 import { createContext, useContext } from 'react';
 import { Linking, StyleSheet, Text, useColorScheme } from 'react-native';
+import { createStore } from 'zustand/vanilla';
 import { themes } from '@theme';
+import type { NotificationTarget } from '../boot/core';
 import { createAppConfigStore } from '../stores/app-config.store';
 import { createSessionStore } from '../stores/session.store';
 import { RootNavigator } from './RootNavigator';
@@ -38,20 +40,25 @@ afterEach(() => jest.restoreAllMocks());
 function setup() {
   const session = createSessionStore();
   const appConfig = createAppConfigStore();
+  const notification = createStore<NotificationTarget | null>()(() => null);
   const requestOtp = jest
     .fn<Promise<undefined>, [string]>()
     .mockResolvedValue(undefined);
   const signIn = jest
     .fn<Promise<void>, [string, string]>()
     .mockResolvedValue(undefined);
-  const core = { stores: { session, appConfig }, api: { requestOtp }, signIn };
+  const core = {
+    stores: { session, appConfig, notification },
+    api: { requestOtp },
+    signIn,
+  };
   const navigator = (
     <RootNavigator
       core={core}
       debug={<Text accessibilityRole="header">Debug tools</Text>}
     />
   );
-  return { session, appConfig, navigator, requestOtp, signIn };
+  return { session, appConfig, notification, navigator, requestOtp, signIn };
 }
 
 test('loads until both stores are ready', async () => {
@@ -235,6 +242,53 @@ test('opens the root Debug screen from the Home tab', async () => {
   ).toBeOnTheScreen();
   await fireEvent.press(screen.getByRole('button', { name: 'Debug' }));
   expect(screen.getByRole('header', { name: 'Debug tools' })).toBeOnTheScreen();
+});
+
+test('opens a notification status in the signed-in stack and returns to the selected tab', async () => {
+  const { session, appConfig, notification, navigator } = setup();
+  session.getState().signedIn(me('rider'));
+  appConfig.getState().setGate({ status: 'ok' });
+  await render(navigator);
+  await fireEvent.press(screen.getByRole('tab', { name: 'Activity' }));
+
+  await act(() =>
+    notification.setState(
+      { type: 'ride', id: 'ride-1', status: 'driver_arrived' },
+      true,
+    ),
+  );
+  expect(
+    screen.getByRole('header', { name: 'Driver arrived' }),
+  ).toBeOnTheScreen();
+  expect(notification.getState()).toBeNull();
+  const [header] = screen.container.queryAll(
+    node =>
+      node.type === 'RNSScreenStackHeaderConfig' && node.props.title === 'Ride',
+  );
+  expect(header.props.backTitle).toBe('Back');
+  const statusScreen = screen.container
+    .queryAll(
+      node =>
+        node.type === 'RNSScreen' &&
+        typeof node.props.onHeaderBackButtonClicked === 'function',
+    )
+    .at(-1)!;
+  await fireEvent(statusScreen, 'headerBackButtonClicked');
+  expect(screen.getByRole('header', { name: 'Activity' })).toBeOnTheScreen();
+  expect(screen.queryByRole('header', { name: 'Driver arrived' })).toBeNull();
+});
+
+test('opens a cold offer as soon as the driver stack mounts and drops it on sign-out', async () => {
+  const { session, appConfig, notification, navigator } = setup();
+  session.getState().signedIn(me('driver'));
+  appConfig.getState().setGate({ status: 'ok' });
+  notification.setState({ type: 'offer', id: 'offer-1' }, true);
+  await render(navigator);
+  expect(screen.getByRole('header', { name: 'Offer pending' })).toBeOnTheScreen();
+
+  await act(() => session.getState().signedOut());
+  expect(screen.getByLabelText('Phone number')).toBeOnTheScreen();
+  expect(screen.queryByRole('header', { name: 'Offer pending' })).toBeNull();
 });
 
 test('omits the Debug button from the Activity tab in development', async () => {

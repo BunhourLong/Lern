@@ -1,9 +1,10 @@
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import type { NotificationTarget } from '../boot/core';
 import type { RootRoute } from './root-route';
 
-export const Stack =
-  createNativeStackNavigator<
-    Record<RootRoute | 'Debug', undefined> & {
-      Otp: { phone: string; sentAt: number };
-    }
-  >();
+export type RootStackParams = Record<RootRoute | 'Debug', undefined> & {
+  Otp: { phone: string; sentAt: number };
+  NotificationStatus: NotificationTarget;
+};
+
+export const Stack = createNativeStackNavigator<RootStackParams>();

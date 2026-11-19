@@ -1,10 +1,14 @@
 import {
+  type ActiveRides,
   type CancelReason,
   type LocationPoint,
   type Me,
+  type PushData,
+  type Ride,
   rideSchema,
 } from '@lern/contracts';
 import type { io } from 'socket.io-client';
+import { createStore } from 'zustand/vanilla';
 import { ApiError, createApi } from '../services/api.service';
 import {
   createOfflineQueue,
@@ -26,6 +30,11 @@ import { createLanguageStore } from '../stores/language.store';
 import { createRawEventsStore } from '../stores/raw-events.store';
 import { createSecurityStore } from '../stores/security.store';
 import { createSessionStore } from '../stores/session.store';
+import { keepRide } from '../utils/ordering';
+
+export type NotificationTarget =
+  | { type: 'offer'; id: string }
+  | { type: 'ride'; id: string; status: Ride['status'] };
 
 export type CoreDeps = {
   baseUrl: string;
@@ -70,6 +79,7 @@ export function createCore({
 }: CoreDeps) {
   const session = createSessionStore();
   const activeRide = createActiveRideStore();
+  const notification = createStore<NotificationTarget | null>()(() => null);
   const driverMode = createDriverModeStore();
   const rawEvents = createRawEventsStore();
   const appConfig = createAppConfigStore();
@@ -84,6 +94,8 @@ export function createCore({
   });
   let socket: RealtimeSocket | undefined;
   let verifiedPhone: string | undefined;
+  let pendingTap: PushData | undefined;
+  let tapVersion = 0;
   // Bumped on sign-out: an answer to a request sent before it must not land in the next user's stores
   let epoch = 0;
   const live = () => {
@@ -91,8 +103,15 @@ export function createCore({
     return () => started === epoch;
   };
 
+  function clearTap() {
+    tapVersion++;
+    pendingTap = undefined;
+    notification.setState(null, true);
+  }
+
   const forget = () => {
     epoch++;
+    clearTap();
     socket?.close();
     socket = undefined;
     connection.getState().setConnected(false); // close() fires disconnect only while connected; reset here so sign-out never relies on it
@@ -127,7 +146,62 @@ export function createCore({
     onWake: () => {
       resync();
     },
+    onOpen: tap => {
+      clearTap();
+      pendingTap = tap;
+      openPendingTap();
+    },
   });
+
+  function openPendingTap() {
+    const { status, me } = session.getState();
+    const { gate } = appConfig.getState();
+    if (status === 'signed_out' || (gate && gate.status !== 'ok')) {
+      clearTap();
+      return;
+    }
+    if (!me || gate?.status !== 'ok' || !pendingTap) return;
+    const tap = pendingTap;
+    const version = tapVersion;
+    pendingTap = undefined;
+    openTap(tap, me, () => version === tapVersion);
+  }
+
+  session.subscribe((next, previous) => {
+    if (previous.me && previous.me.id !== next.me?.id) clearTap();
+    openPendingTap();
+  });
+  appConfig.subscribe(openPendingTap);
+
+  async function openTap(tap: PushData, user: Me, current: () => boolean) {
+    const snapshot = await resync(current);
+    if (!snapshot || !current()) return;
+
+    if (tap.type === 'offer') {
+      const { offer } = activeRide.getState();
+      if (
+        user.roles.includes('driver') &&
+        snapshot.offer?.id === tap.offerId &&
+        offer?.id === tap.offerId &&
+        offer.rideId === tap.rideId &&
+        offer.status === 'pending'
+      )
+        notification.setState({ type: 'offer', id: offer.id }, true);
+      return;
+    }
+
+    const match = ({ rider, driver }: Pick<ActiveRides, 'rider' | 'driver'>) =>
+      [rider, driver].find(ride => ride?.id === tap.rideId);
+    const ride =
+      match(snapshot) ?? (await api.ride(tap.rideId).catch(() => undefined));
+    if (!current() || ride?.id !== tap.rideId) return;
+    const latest = keepRide(match(activeRide.getState()) ?? null, ride);
+    if (latest.version >= Number(tap.seq))
+      notification.setState(
+        { type: 'ride', id: latest.id, status: latest.status },
+        true,
+      );
+  }
 
   // Started, never awaited: a slow or missing /app-config must not delay session restore, and any failure (offline,
   // a 5xx, a rejected body) is ok — never lock users out when the API is down
@@ -145,15 +219,17 @@ export function createCore({
   }
 
   // After every (re)connect: what was missed is not replayed, so read the snapshot, then send what waited
-  async function resync(): Promise<void> {
-    const current = live();
+  async function resync(current = live()): Promise<ActiveRides | undefined> {
+    let snapshot: ActiveRides | undefined;
     try {
-      const snapshot = await api.activeRide();
-      if (current()) activeRide.getState().applySnapshot(snapshot);
+      snapshot = await api.activeRide();
     } catch {
       // offline again or signed out; the next connect tries again
     }
-    if (current()) await queue.flush();
+    if (!current()) return;
+    if (snapshot) activeRide.getState().applySnapshot(snapshot);
+    await queue.flush();
+    return current() ? snapshot : undefined;
   }
 
   async function start(user: Me): Promise<void> {
@@ -211,6 +287,7 @@ export function createCore({
     stores: {
       session,
       activeRide,
+      notification,
       driverMode,
       rawEvents,
       appConfig,
@@ -223,6 +300,7 @@ export function createCore({
     // App start: a stored refresh token becomes a session. Offline keeps the session 'restoring' (the token stays,
     // the queue keeps filling) and tries again with backoff; only none or refused means sign in again.
     async boot(): Promise<void> {
+      push.listenForOpens();
       checkAppConfig();
       // A reinstall can still find the old token in the iOS Keychain: drop it before any restore attempt.
       // Clear first, then set the flag, so a crash in between checks again instead of keeping the stale token.
@@ -255,6 +333,10 @@ export function createCore({
         }
         await sleep(delay);
       }
+    },
+    stopListeningForPush(): void {
+      clearTap();
+      push.removeListeners();
     },
     async signIn(phone: string, code: string): Promise<void> {
       // Reuse an access token only for the phone whose OTP verification completed.

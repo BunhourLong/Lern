@@ -2,6 +2,8 @@ import { fireEvent, render, screen } from '@testing-library/react-native';
 import type { ReactNode } from 'react';
 import { Text } from 'react-native';
 import type { TabSelectedEvent } from 'react-native-screens';
+import { createStore } from 'zustand/vanilla';
+import type { NotificationTarget } from '../boot/core';
 import { createAppConfigStore } from '../stores/app-config.store';
 import { createSessionStore } from '../stores/session.store';
 import { RootNavigator } from './RootNavigator';
@@ -22,6 +24,7 @@ afterEach(() => jest.restoreAllMocks());
 function renderRiderTabs(debug: ReactNode = null) {
   const session = createSessionStore();
   const appConfig = createAppConfigStore();
+  const notification = createStore<NotificationTarget | null>()(() => null);
   session
     .getState()
     .signedIn({ id: 'u-1', phone: '+85512345678', roles: ['rider'] });
@@ -29,7 +32,7 @@ function renderRiderTabs(debug: ReactNode = null) {
   return render(
     <RootNavigator
       core={{
-        stores: { session, appConfig },
+        stores: { session, appConfig, notification },
         api: { requestOtp: jest.fn() },
         signIn: jest.fn(),
       }}
