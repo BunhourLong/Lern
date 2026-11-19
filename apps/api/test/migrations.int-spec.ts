@@ -43,8 +43,19 @@ it('runs every migration up, down and up again', async () => {
     expect(await hasPostgis()).toBe(true);
     expect(await ds.showMigrations()).toBe(false); // nothing pending
 
+    // The balance SUM reads a driver's entries by driver_id (M6.9); undoing that newest migration drops the index
+    const ledgerIndex = async () =>
+      ds.query<{ indexdef: string }[]>(`SELECT indexdef FROM pg_indexes WHERE indexname = 'driver_ledger_entries_driver_id_idx'`);
+    expect(await ledgerIndex()).toEqual([
+      { indexdef: 'CREATE INDEX driver_ledger_entries_driver_id_idx ON public.driver_ledger_entries USING btree (driver_id)' },
+    ]);
+    await ds.undoLastMigration();
+    expect(await ledgerIndex()).toEqual([]);
+    await ds.runMigrations();
+
     // A ride completed before the ledger owes its commission, dated at its completed event; a cancelled one owes
-    // nothing. Undo once: driver_ledger_entries (each new migration adds one undo here).
+    // nothing. Undo twice: the ledger's driver index, driver_ledger_entries (each new migration adds one undo here).
+    await ds.undoLastMigration();
     await ds.undoLastMigration();
     const [{ id: ledgerRiderId }] = await ds.query<{ id: string }[]>('INSERT INTO users (phone) VALUES ($1) RETURNING id', ['+85510000012']);
     const [{ id: ledgerDriverId }] = await ds.query<{ id: string }[]>('INSERT INTO users (phone) VALUES ($1) RETURNING id', ['+85510000013']);
@@ -81,8 +92,9 @@ it('runs every migration up, down and up again', async () => {
     await expect(ds.query(entry, [ledgerDriverId, cancelledId, 'payout', 100])).rejects.toThrow(/driver_ledger_entries_kind_check/);
 
     // A ride booked before commission snapshots gets 15% of trip + surge from its quote's lines, rounded up once,
-    // plus the whole fee: (10100 + 5000) × 15% = 2265 → 2300, + 500. Cards read 1500 bp. Undo twice: driver_ledger_entries,
-    // rides_commission (each new migration adds one undo here).
+    // plus the whole fee: (10100 + 5000) × 15% = 2265 → 2300, + 500. Cards read 1500 bp. Undo three times: the ledger's
+    // driver index, driver_ledger_entries, rides_commission (each new migration adds one undo here).
+    await ds.undoLastMigration();
     await ds.undoLastMigration();
     await ds.undoLastMigration();
     const [{ id: cutRiderId }] = await ds.query<{ id: string }[]>('INSERT INTO users (phone) VALUES ($1) RETURNING id', ['+85510000004']);
@@ -134,8 +146,9 @@ it('runs every migration up, down and up again', async () => {
     await expect(ds.query(ride, ['+85510000011', cutQuoteId, 1500, 15_700])).rejects.toThrow(/check constraint/);
 
     // A quote priced before surge reads 1.0x and receipt lines from its own card's fee (500 here, so a backfill
-    // that ignored the card would show). Undo three times: driver_ledger_entries, rides_commission, quotes_surge (each new
-    // migration adds one undo here).
+    // that ignored the card would show). Undo four times: the ledger's driver index, driver_ledger_entries, rides_commission,
+    // quotes_surge (each new migration adds one undo here).
+    await ds.undoLastMigration();
     await ds.undoLastMigration();
     await ds.undoLastMigration();
     await ds.undoLastMigration();
@@ -155,8 +168,9 @@ it('runs every migration up, down and up again', async () => {
     ]);
 
     // A quote priced before rate cards existed points at the seeded card of its vehicle type afterwards, and
-    // reads duration 0, the duration it was priced with. Undo six times: driver_ledger_entries, rides_commission, quotes_surge, the created_at
-    // index, quotes.duration_s, then rate cards (each new migration adds one undo here).
+    // reads duration 0, the duration it was priced with. Undo seven times: the ledger's driver index, driver_ledger_entries, rides_commission,
+    // quotes_surge, the created_at index, quotes.duration_s, then rate cards (each new migration adds one undo here).
+    await ds.undoLastMigration();
     await ds.undoLastMigration();
     await ds.undoLastMigration();
     await ds.undoLastMigration();
@@ -176,8 +190,9 @@ it('runs every migration up, down and up again', async () => {
     ]);
 
     // A phone registered before the locale column existed must read English after the migration.
-    // Undo seven times: driver_ledger_entries, rides_commission, quotes_surge, the created_at index, quotes.duration_s,
-    // rate cards, then the locale column (each new migration adds one undo here).
+    // Undo eight times: the ledger's driver index, driver_ledger_entries, rides_commission, quotes_surge, the
+    // created_at index, quotes.duration_s, rate cards, then the locale column (each new migration adds one undo here).
+    await ds.undoLastMigration();
     await ds.undoLastMigration();
     await ds.undoLastMigration();
     await ds.undoLastMigration();

@@ -55,6 +55,17 @@ export class DriversRepository {
     return rows.length === 1;
   }
 
+  // SUM over bigint is numeric (a string in node-pg), so the comparison stays in SQL. KHR only: cents never add to riel.
+  // Inside a ride's transaction pass its manager: another connection can't see the debit that ride just wrote.
+  async withinDebtLimit(driverId: string, limitMinor: number, m: EntityManager = this.db.manager): Promise<boolean> {
+    const [{ ok }] = await m.query<{ ok: boolean }[]>(
+      `SELECT coalesce(sum(amount_minor), 0) >= -$2::bigint AS ok
+       FROM driver_ledger_entries WHERE driver_id = $1 AND currency = 'KHR'`,
+      [driverId, limitMinor],
+    );
+    return ok;
+  }
+
   async state(userId: string): Promise<{ verification: DriverVerification; availability: DriverAvailability } | undefined> {
     const [row] = await this.db.query<{ verification: DriverVerification; availability: DriverAvailability }[]>(
       'SELECT verification, availability FROM drivers WHERE user_id = $1',

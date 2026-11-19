@@ -34,8 +34,13 @@ it('returns typed config with defaults for a valid env', () => {
     SURGE_SLOPE_BP: 5000,
     SURGE_CAP_BP: 20000,
     SURGE_MAX_STEP_BP: 1000,
+    DRIVER_DEBT_LIMIT_MINOR: 40000,
     MAINTENANCE: false,
   });
+});
+
+it('rejects a negative driver debt limit', () => {
+  expect(() => parseEnv({ ...valid, DRIVER_DEBT_LIMIT_MINOR: '-1' })).toThrow(/DRIVER_DEBT_LIMIT_MINOR/);
 });
 
 it('reads MATCHING_WORKER=false as off, not as a truthy string', () => {

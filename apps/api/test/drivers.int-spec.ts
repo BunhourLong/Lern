@@ -2,7 +2,6 @@ import { Controller, Get, HttpStatus, type INestApplication, Module } from '@nes
 import request from 'supertest';
 import type { App } from 'supertest/types';
 import { DataSource } from 'typeorm';
-import { DriversModule } from '../src/drivers/drivers.module';
 import { VerifiedDriver } from '../src/drivers/verified-driver.guard';
 import { bootApp, signIn } from './support/actors';
 import { lockTable } from './support/gate';
@@ -20,7 +19,7 @@ class ProbeController {
   }
 }
 
-@Module({ imports: [DriversModule], controllers: [ProbeController] })
+@Module({ controllers: [ProbeController] })
 class ProbeModule {}
 
 let app: INestApplication<App>;

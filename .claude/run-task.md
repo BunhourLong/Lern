@@ -17,8 +17,29 @@
 - Review: every task except a one-file fix with an obvious test. One fresh-context reviewer (see Worker routing: high-risk tasks go to GPT-6.2 Sol) on the full staged diff (`git diff --cached > .superpowers/plans/<date>-<task>.diff`), correctness only: requirements, edge cases, tests that catch regressions, §3 invariants/races/transaction boundaries, security (IDOR, missing auth guard, unbounded queries; for auth, OTP, sessions, ownership, sockets or money also the matching `security-audit` file). Each finding with `path:line` and the failing input. At most 2 fix rounds.
 - Limit: a worker that fails on a Go or ChatGPT Plus usage limit → stage nothing new, record `Paused: <Go|Plus> limit`, the task id, what is finished and the brief path in `STATE.md`, and stop. Never take over its work or switch model, provider or plan. A new session dispatches the brief again.
 - Budget: past ~50 tool calls, finish the current green step and stage it; record the rest as `PLAN.md` boxes and "Resuming <id>: ..." in `STATE.md`, then stop.
+- Branch (user, 2026-11-18; never ask): one branch per `PLAN.md` milestone and per `UI-PLAN.md` §3 section, picked from the task id before any work. `PLAN.md`: M5 `m5-resilience`, M6 `m6-fares`, M7 `m7-admin`, M8 `m8-stretch`. `UI-PLAN.md`: Foundation `ui-foundation`, Shell and auth `ui-shell-auth`, Driver `ui-driver`, Rider `ui-rider`, After M6.10–M6.13 `ui-history`. A new section gets `ui-<slug of its heading>` / `m<N>-<slug>`, added here.
+  1. On the right branch → keep going; if its PR has merged, `git fetch` then `git merge origin/main` (no rebase).
+  2. The branch exists → `git switch` to it, then step 1.
+  3. It doesn't → `git fetch`; cut it from `origin/main` if the previous section's PR has merged, else from that section's branch (stacked: record it in `STATE.md`, its PR targets that branch). Then `git cherry-pick` each `chore(workflow)` commit in `git log origin/main..<branch you left>`, oldest first, so `.claude/run-task.md` stays current.
 - Git: stage by explicit path, then commit the task with a conventional message and no AI attribution; never push.
 - Close: tick the `PLAN.md` box (at most 2 lines; longer goes in `PLAN-notes.md`, gotchas in `.claude/rules/gotchas-*.md`), rewrite `STATE.md` (under 40 lines, names the next task and its risk), run `graphify update .`; commit; stop after one task with "`/clear`, then `delikit run-task`".
+
+## Temporary routing: Codex-only window (2026-11-18 until the Plus weekly reset, ~2026-11-20)
+
+User decision 2026-11-18: spend the Plus weekly Codex limit (60% left) on quality and save OpenCode Go (25% of the month left). Nothing goes to OpenCode in this window. The table under Worker routing applies again after the reset, when the user says so, or on a Plus limit error (then pause per Limit until the reset).
+
+| Job | Provider and model | Options |
+| --- | --- | --- |
+| High risk: plan critic, after the think half and before the `/goal` goes to the user | `codex` / `gpt-6.2-astra` | `reasoningEffort: high` |
+| High risk: write | main session | |
+| High risk: diff review | `codex` / `gpt-6.2-sol` | `reasoningEffort: high` |
+| Medium and low: write | `codex` / `gpt-6.2-sol` | `reasoningEffort: high` |
+| Medium and low: diff review | `codex` / `gpt-6.1-sol` | `reasoningEffort: high` |
+| Read-only search | `codex` / `gpt-6-luna` | `reasoningEffort: low` |
+
+- The plan critic reads the one-page plan and the `path:line`s it cites (a small input, so Astra's cost per message stays low; it leads the third-party SecureSWE and PatchBench numbers) and returns objections with `path:line`: a missed race, a wrong transaction boundary, a red test that can't fail, a simpler design. It never writes code and never reviews a diff (still one diff reviewer per task). The main session settles each objection in the plan before ending the turn.
+- Writer and diff reviewer are always different models. GPT-6 Astra stays banned (user, 2026-11-18: 6.2 Astra replaces it as plan critic).
+- **Revert** (at session start on or after 2026-11-20, or when the user says so; ask first if the window seems still wanted): delete this whole section; in `CLAUDE.md` §1 drop the "(except GPT-6.2 Astra and GPT-6.1 Sol in the Codex-only window …)" clause; in memory `subagents-opencode-go-only.md` drop the "Temporary, 2026-11-18" paragraph and in `MEMORY.md` the "Until ~2026-11-20" sentence; in `STATE.md` drop the "Codex-only window" sentence; commit `chore(workflow): end the Codex-only window`. The Worker routing table below is the old workflow and needs no edit.
 
 ## Worker routing
 

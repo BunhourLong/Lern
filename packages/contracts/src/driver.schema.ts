@@ -16,8 +16,17 @@ export const driverAvailabilitySchema = z.enum(['offline', 'available', 'reserve
 export type DriverAvailability = z.infer<typeof driverAvailabilitySchema>;
 
 // go_* = the driver's toggle; reserve/release = an offer made/ended; assign = offer accepted; finish = ride ended;
-// time_out = the presence sweep took a silent driver offline
-export const driverAvailabilityActionSchema = z.enum(['go_online', 'go_offline', 'reserve', 'release', 'assign', 'finish', 'time_out']);
+// debt_stop = ride ended past the commission debt limit; time_out = the presence sweep took a silent driver offline
+export const driverAvailabilityActionSchema = z.enum([
+  'go_online',
+  'go_offline',
+  'reserve',
+  'release',
+  'assign',
+  'finish',
+  'debt_stop',
+  'time_out',
+]);
 export type DriverAvailabilityAction = z.infer<typeof driverAvailabilityActionSchema>;
 
 export const driverProfileSchema = applyDriverSchema.extend({
