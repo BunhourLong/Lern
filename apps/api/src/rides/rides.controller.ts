@@ -1,5 +1,5 @@
-import type { Rating, Ride } from '@lern/contracts';
-import { Body, Controller, Get, HttpCode, HttpStatus, Param, ParseEnumPipe, ParseUUIDPipe, Post } from '@nestjs/common';
+import type { Rating, Ride, RideHistoryPage } from '@lern/contracts';
+import { Body, Controller, Get, HttpCode, HttpStatus, Param, ParseEnumPipe, ParseUUIDPipe, Post, Query } from '@nestjs/common';
 import { ZodSerializerDto } from 'nestjs-zod';
 import { type AuthUser, CurrentUser, Roles } from '../auth/auth.decorators';
 import { Idempotent } from '../shared/idempotency/idempotency.interceptor';
@@ -8,6 +8,8 @@ import { CreateRatingDto } from './dto/create-rating.dto';
 import { CreateRideDto } from './dto/create-ride.dto';
 import { RatingDto } from './dto/rating.dto';
 import { RideDto } from './dto/ride.dto';
+import { RideHistoryPageDto } from './dto/ride-history-page.dto';
+import { RideHistoryQueryDto } from './dto/ride-history-query.dto';
 import { RidesService } from './rides.service';
 
 const DRIVER_STEPS = { arrive: 'arrive', start: 'start', complete: 'complete' } as const;
@@ -22,6 +24,13 @@ export class RidesController {
   @ZodSerializerDto(RideDto)
   book(@CurrentUser() user: AuthUser, @Body() body: CreateRideDto): Promise<Ride> {
     return this.rides.book(user.id, body.quoteId);
+  }
+
+  // Finished rides on the side `as` names, newest first; no @Roles: the WHERE decides, like get
+  @Get()
+  @ZodSerializerDto(RideHistoryPageDto)
+  list(@CurrentUser() user: AuthUser, @Query() query: RideHistoryQueryDto): Promise<RideHistoryPage> {
+    return this.rides.history(user.id, query);
   }
 
   // No @Roles: the ownership check in the query is what decides

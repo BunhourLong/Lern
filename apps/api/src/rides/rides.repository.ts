@@ -8,6 +8,7 @@ import {
   type Ride,
   type RideAction,
   type RideActor,
+  type RideHistoryItem,
   type RideStatus,
   type VehicleType,
 } from '@lern/contracts';
@@ -48,6 +49,10 @@ export type NewRide = {
 // driverId never reaches a client: @ZodSerializerDto(RideDto) strips unknown keys, and the outbox payload is the RIDE projection
 export type MovedRide = Ride & { driverId: string | null };
 export type MatchableRide = { status: RideStatus; riderId: string; vehicleType: VehicleType; pickup: Point; elapsedS: number };
+
+// The ride's side for history: a fixed map, so the column is never taken from input
+const HISTORY_SIDE = { rider: 'rider_id', driver: 'driver_id' } as const;
+export type RideHistoryRow = RideHistoryItem & { cursorAt: string };
 
 @Injectable()
 export class RidesRepository {
@@ -142,6 +147,27 @@ export class RidesRepository {
   async hasRating(rideId: string, userId: string): Promise<boolean> {
     const rows = await this.db.query<unknown[]>('SELECT 1 FROM ratings WHERE ride_id = $1 AND from_user = $2', [rideId, userId]);
     return rows.length > 0;
+  }
+
+  // Finished rides of one side, newest first. The row comparison picks up after the cursor (null: the first page), and
+  // matches the partial history indexes. cursorAt keeps microseconds (a JS Date would skip or repeat rows).
+  async history(
+    userId: string,
+    side: keyof typeof HISTORY_SIDE,
+    after: { at: string; id: string } | null,
+    limit: number,
+  ): Promise<RideHistoryRow[]> {
+    return this.db.query<RideHistoryRow[]>(
+      `SELECT ${RIDE},
+         to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS "createdAt",
+         to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS "cursorAt"
+       FROM rides
+       WHERE ${HISTORY_SIDE[side]} = $1 AND status IN ('completed', 'cancelled', 'no_driver_found')
+         AND ($2::timestamptz IS NULL OR (created_at, id) < ($2::timestamptz, $3::uuid))
+       ORDER BY created_at DESC, id DESC
+       LIMIT $4`,
+      [userId, after?.at ?? null, after?.id ?? null, limit],
+    );
   }
 
   // The caller's ride on one side that hasn't ended; the partial uniques allow at most one per side

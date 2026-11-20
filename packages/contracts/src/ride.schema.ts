@@ -64,3 +64,22 @@ export const activeRidesSchema = z.object({
   offer: offerSchema.nullish(),
 });
 export type ActiveRides = z.infer<typeof activeRidesSchema>;
+
+// GET /rides: the caller's finished rides on one side (rider or driver), newest first. Query strings arrive as text;
+// cursor is an opaque token the server made, and limit defaults to 20 (one page, at most 50).
+export const rideHistoryQuerySchema = z.object({
+  as: z.enum(['rider', 'driver']),
+  cursor: z.string().max(200).optional(),
+  limit: z.coerce.number().int().min(1).max(50).default(20),
+});
+export type RideHistoryQuery = z.infer<typeof rideHistoryQuerySchema>;
+
+// createdAt is the ride's created_at as ISO-8601 UTC, in ms
+export const rideHistoryItemSchema = rideSchema.extend({ createdAt: z.iso.datetime() });
+export type RideHistoryItem = z.infer<typeof rideHistoryItemSchema>;
+
+export const rideHistoryPageSchema = z.object({
+  items: z.array(rideHistoryItemSchema),
+  nextCursor: z.string().nullable(),
+});
+export type RideHistoryPage = z.infer<typeof rideHistoryPageSchema>;

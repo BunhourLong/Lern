@@ -43,8 +43,15 @@ it('runs every migration up, down and up again', async () => {
     expect(await hasPostgis()).toBe(true);
     expect(await ds.showMigrations()).toBe(false); // nothing pending
 
-    // The ratings table (M6.10) is the newest migration: undo it, and it is gone. Left undone so the next check's
-    // undo reaches the ledger index; the runMigrations() after that check puts it back.
+    // The history indexes (M6.11) are the newest migration: undo it, and both are gone. Then the ratings table (M6.10),
+    // left undone so the next check's undo reaches the ledger index; the runMigrations() after that check puts all back.
+    const historyIndexes = async () =>
+      ds.query<{ indexname: string }[]>(
+        `SELECT indexname FROM pg_indexes WHERE indexname IN ('rides_rider_history_idx', 'rides_driver_history_idx') ORDER BY indexname`,
+      );
+    expect(await historyIndexes()).toEqual([{ indexname: 'rides_driver_history_idx' }, { indexname: 'rides_rider_history_idx' }]);
+    await ds.undoLastMigration();
+    expect(await historyIndexes()).toEqual([]);
     await ds.undoLastMigration();
     expect(await ds.query(`SELECT to_regclass('ratings')::text AS t`)).toEqual([{ t: null }]);
 
@@ -59,7 +66,8 @@ it('runs every migration up, down and up again', async () => {
     await ds.runMigrations();
 
     // A ride completed before the ledger owes its commission, dated at its completed event; a cancelled one owes
-    // nothing. Undo three times: ratings, the ledger's driver index, driver_ledger_entries (each new migration adds one undo here).
+    // nothing. Undo four times: history indexes, ratings, the ledger's driver index, driver_ledger_entries (each new migration adds one undo here).
+    await ds.undoLastMigration();
     await ds.undoLastMigration();
     await ds.undoLastMigration();
     await ds.undoLastMigration();
@@ -98,8 +106,9 @@ it('runs every migration up, down and up again', async () => {
     await expect(ds.query(entry, [ledgerDriverId, cancelledId, 'payout', 100])).rejects.toThrow(/driver_ledger_entries_kind_check/);
 
     // A ride booked before commission snapshots gets 15% of trip + surge from its quote's lines, rounded up once,
-    // plus the whole fee: (10100 + 5000) × 15% = 2265 → 2300, + 500. Cards read 1500 bp. Undo four times: ratings, the
-    // ledger's driver index, driver_ledger_entries, rides_commission (each new migration adds one undo here).
+    // plus the whole fee: (10100 + 5000) × 15% = 2265 → 2300, + 500. Cards read 1500 bp. Undo five times: history indexes,
+    // ratings, the ledger's driver index, driver_ledger_entries, rides_commission (each new migration adds one undo here).
+    await ds.undoLastMigration();
     await ds.undoLastMigration();
     await ds.undoLastMigration();
     await ds.undoLastMigration();
@@ -153,8 +162,9 @@ it('runs every migration up, down and up again', async () => {
     await expect(ds.query(ride, ['+85510000011', cutQuoteId, 1500, 15_700])).rejects.toThrow(/check constraint/);
 
     // A quote priced before surge reads 1.0x and receipt lines from its own card's fee (500 here, so a backfill
-    // that ignored the card would show). Undo five times: ratings, the ledger's driver index, driver_ledger_entries,
-    // rides_commission, quotes_surge (each new migration adds one undo here).
+    // that ignored the card would show). Undo six times: history indexes, ratings, the ledger's driver index,
+    // driver_ledger_entries, rides_commission, quotes_surge (each new migration adds one undo here).
+    await ds.undoLastMigration();
     await ds.undoLastMigration();
     await ds.undoLastMigration();
     await ds.undoLastMigration();
@@ -176,8 +186,9 @@ it('runs every migration up, down and up again', async () => {
     ]);
 
     // A quote priced before rate cards existed points at the seeded card of its vehicle type afterwards, and
-    // reads duration 0, the duration it was priced with. Undo eight times: ratings, the ledger's driver index, driver_ledger_entries,
-    // rides_commission, quotes_surge, the created_at index, quotes.duration_s, then rate cards (each new migration adds one undo here).
+    // reads duration 0, the duration it was priced with. Undo nine times: history indexes, ratings, the ledger's driver index,
+    // driver_ledger_entries, rides_commission, quotes_surge, the created_at index, quotes.duration_s, then rate cards (each new migration adds one undo here).
+    await ds.undoLastMigration();
     await ds.undoLastMigration();
     await ds.undoLastMigration();
     await ds.undoLastMigration();
@@ -199,8 +210,9 @@ it('runs every migration up, down and up again', async () => {
     ]);
 
     // A phone registered before the locale column existed must read English after the migration.
-    // Undo nine times: ratings, the ledger's driver index, driver_ledger_entries, rides_commission, quotes_surge, the
-    // created_at index, quotes.duration_s, rate cards, then the locale column (each new migration adds one undo here).
+    // Undo ten times: history indexes, ratings, the ledger's driver index, driver_ledger_entries, rides_commission, quotes_surge,
+    // the created_at index, quotes.duration_s, rate cards, then the locale column (each new migration adds one undo here).
+    await ds.undoLastMigration();
     await ds.undoLastMigration();
     await ds.undoLastMigration();
     await ds.undoLastMigration();

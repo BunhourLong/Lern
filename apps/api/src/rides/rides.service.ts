@@ -5,10 +5,21 @@ import {
   type Rating,
   type Ride,
   type RideAction,
+  type RideHistoryPage,
+  type RideHistoryQuery,
   rideTransition,
 } from '@lern/contracts';
-import { ConflictException, GoneException, HttpStatus, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  GoneException,
+  HttpStatus,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { DataSource, type EntityManager, QueryFailedError } from 'typeorm';
+import { z } from 'zod';
 import { OutboxService } from '../outbox/outbox.service';
 import { PricingService } from '../pricing/pricing.service';
 import { DriversService } from '../drivers/drivers.service';
@@ -25,6 +36,28 @@ const CONFLICTS: Record<string, string> = {
 function ratingRefused(code: string, message: string): ConflictException {
   return new ConflictException({ statusCode: HttpStatus.CONFLICT, code, message });
 }
+
+// The keyset position. at is the last row's created_at to the microsecond (a Date would keep ms only). zod already
+// rejects impossible days; Postgres has no year 0, so that one is refused here (a 500 otherwise).
+const cursorSchema = z.object({
+  at: z.iso.datetime({ precision: 6 }).refine((at) => !at.startsWith('0000'), 'cursor time out of range'),
+  id: z.uuid(),
+});
+
+function decodeCursor(token: string): z.infer<typeof cursorSchema> {
+  let json: unknown = null;
+  try {
+    json = JSON.parse(Buffer.from(token, 'base64url').toString('utf8'));
+  } catch {
+    // not JSON: the schema refuses null below
+  }
+  const cursor = cursorSchema.safeParse(json);
+  if (!cursor.success) throw new BadRequestException('Invalid cursor');
+  return cursor.data;
+}
+
+const encodeCursor = (last: { cursorAt: string; id: string }): string =>
+  Buffer.from(JSON.stringify({ at: last.cursorAt, id: last.id })).toString('base64url');
 
 // Maps a unique violation the schema uses to decide a race onto a 409; anything else is rethrown
 function conflict(err: unknown): unknown {
@@ -151,6 +184,18 @@ export class RidesService {
       message: `Ride can't ${action} from its current status`,
       ride: mine,
     });
+  }
+
+  // Finished rides only (active ones come from active()). The query's WHERE decides ownership; the DTO drops any
+  // owner parameter in the URL before it gets here.
+  async history(userId: string, query: RideHistoryQuery): Promise<RideHistoryPage> {
+    const after = query.cursor === undefined ? null : decodeCursor(query.cursor);
+    // One row past the page says whether there is a next page
+    const rows = await this.rides.history(userId, query.as, after, query.limit + 1);
+    const items = rows.slice(0, query.limit);
+    const last = items.at(-1);
+    // cursorAt isn't in the item schema: the serializer strips it, as it strips driverId from a ride
+    return { items, nextCursor: rows.length > query.limit && last ? encodeCursor(last) : null };
   }
 
   async get(userId: string, rideId: string): Promise<Ride> {
