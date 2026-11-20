@@ -3,6 +3,7 @@ import {
   type CancelReason,
   type CreateRating,
   type Rating,
+  type Receipt,
   type Ride,
   type RideAction,
   type RideHistoryPage,
@@ -33,7 +34,7 @@ const CONFLICTS: Record<string, string> = {
 };
 
 // Same shape as the INVALID_TRANSITION 409 in move(): clients branch on `code`
-function ratingRefused(code: string, message: string): ConflictException {
+function refused(code: string, message: string): ConflictException {
   return new ConflictException({ statusCode: HttpStatus.CONFLICT, code, message });
 }
 
@@ -124,9 +125,18 @@ export class RidesService {
     // Only a participant gets a reason; anyone else can't tell the ride exists
     const mine = await this.rides.findForParticipant(rideId, userId);
     if (!mine) throw new NotFoundException('Ride not found');
-    if (await this.rides.hasRating(rideId, userId)) throw ratingRefused('ALREADY_RATED', 'You already rated this ride');
-    if (mine.status !== 'completed') throw ratingRefused('RIDE_NOT_COMPLETED', 'Only a completed ride can be rated');
-    throw ratingRefused('RATING_WINDOW_CLOSED', 'Ratings close 7 days after the ride completes');
+    if (await this.rides.hasRating(rideId, userId)) throw refused('ALREADY_RATED', 'You already rated this ride');
+    if (mine.status !== 'completed') throw refused('RIDE_NOT_COMPLETED', 'Only a completed ride can be rated');
+    throw refused('RATING_WINDOW_CLOSED', 'Ratings close 7 days after the ride completes');
+  }
+
+  // The query decides; on a miss the reads say why, as in rate(). Only a participant gets a reason.
+  async receipt(userId: string, rideId: string): Promise<Receipt> {
+    const receipt = await this.rides.receipt(rideId, userId);
+    if (receipt) return receipt;
+    const mine = await this.rides.findForParticipant(rideId, userId);
+    if (!mine) throw new NotFoundException('Ride not found');
+    throw refused('RIDE_NOT_COMPLETED', 'Only a completed ride has a receipt');
   }
 
   // Matching's read of a ride, locked for the rest of its transaction

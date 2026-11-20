@@ -83,3 +83,19 @@ export const rideHistoryPageSchema = z.object({
   nextCursor: z.string().nullable(),
 });
 export type RideHistoryPage = z.infer<typeof rideHistoryPageSchema>;
+
+// GET /rides/:id/receipt: built from the ride's stored quote and commission snapshots. driver is set only for the driver.
+export const receiptSchema = z.object({
+  rideId: z.uuid(),
+  vehicleType: vehicleTypeSchema,
+  pickup: pointSchema,
+  dropoff: pointSchema,
+  completedAt: z.iso.datetime(), // the ride's `completed` ride_events row, ISO-8601 UTC, ms
+  distanceM: z.number().int().nonnegative(), // the quote's route estimate (no measured trip exists)
+  durationS: z.number().int().nonnegative(),
+  surgeBp: z.number().int().min(10000),
+  lines: z.object({ trip: moneySchema, surge: moneySchema, bookingFee: moneySchema }),
+  total: moneySchema,
+  driver: z.object({ commission: moneySchema, earnings: moneySchema }).nullable(),
+});
+export type Receipt = z.infer<typeof receiptSchema>;

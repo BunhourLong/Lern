@@ -4,6 +4,7 @@ import {
   type Money,
   type Point,
   type Rating,
+  type Receipt,
   RIDE_UPDATED_EVENT,
   type Ride,
   type RideAction,
@@ -147,6 +148,34 @@ export class RidesRepository {
   async hasRating(rideId: string, userId: string): Promise<boolean> {
     const rows = await this.db.query<unknown[]>('SELECT 1 FROM ratings WHERE ride_id = $1 AND from_user = $2', [rideId, userId]);
     return rows.length > 0;
+  }
+
+  // Only the stored snapshots (quote breakdown, ride commission), never a rate card: a receipt never changes after completion.
+  // The WHERE decides ownership and status, so anyone else or an unfinished ride matches nothing.
+  async receipt(rideId: string, userId: string): Promise<Receipt | undefined> {
+    const [row] = await this.db.query<Receipt[]>(
+      `SELECT r.id AS "rideId", r.vehicle_type AS "vehicleType",
+         json_build_object('lat', ST_Y(r.pickup::geometry), 'lng', ST_X(r.pickup::geometry)) AS pickup,
+         json_build_object('lat', ST_Y(r.dropoff::geometry), 'lng', ST_X(r.dropoff::geometry)) AS dropoff,
+         to_char(e.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS "completedAt",
+         q.distance_m AS "distanceM", q.duration_s AS "durationS", q.surge_bp AS "surgeBp",
+         json_build_object(
+           'trip', json_build_object('amountMinor', (q.breakdown->>'tripMinor')::bigint, 'currency', r.currency),
+           'surge', json_build_object('amountMinor', (q.breakdown->>'surgeMinor')::bigint, 'currency', r.currency),
+           'bookingFee', json_build_object('amountMinor', (q.breakdown->>'bookingFeeMinor')::bigint, 'currency', r.currency)
+         ) AS lines,
+         json_build_object('amountMinor', r.fare_minor, 'currency', r.currency) AS total,
+         CASE WHEN r.driver_id = $2 THEN json_build_object(
+           'commission', json_build_object('amountMinor', r.commission_minor, 'currency', r.currency),
+           'earnings', json_build_object('amountMinor', r.fare_minor - r.commission_minor, 'currency', r.currency)
+         ) END AS driver
+       FROM rides r
+       JOIN quotes q ON q.id = r.quote_id
+       JOIN ride_events e ON e.ride_id = r.id AND e.status = 'completed'
+       WHERE r.id = $1 AND $2 IN (r.rider_id, r.driver_id) AND r.status = 'completed'`,
+      [rideId, userId],
+    );
+    return row;
   }
 
   // Finished rides of one side, newest first. The row comparison picks up after the cursor (null: the first page), and

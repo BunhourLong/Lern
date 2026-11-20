@@ -1,4 +1,4 @@
-import type { Rating, Ride, RideHistoryPage } from '@lern/contracts';
+import type { Rating, Receipt, Ride, RideHistoryPage } from '@lern/contracts';
 import { Body, Controller, Get, HttpCode, HttpStatus, Param, ParseEnumPipe, ParseUUIDPipe, Post, Query } from '@nestjs/common';
 import { ZodSerializerDto } from 'nestjs-zod';
 import { type AuthUser, CurrentUser, Roles } from '../auth/auth.decorators';
@@ -7,6 +7,7 @@ import { CancelRideDto } from './dto/cancel-ride.dto';
 import { CreateRatingDto } from './dto/create-rating.dto';
 import { CreateRideDto } from './dto/create-ride.dto';
 import { RatingDto } from './dto/rating.dto';
+import { ReceiptDto } from './dto/receipt.dto';
 import { RideDto } from './dto/ride.dto';
 import { RideHistoryPageDto } from './dto/ride-history-page.dto';
 import { RideHistoryQueryDto } from './dto/ride-history-query.dto';
@@ -38,6 +39,13 @@ export class RidesController {
   @ZodSerializerDto(RideDto)
   get(@CurrentUser() user: AuthUser, @Param('id', ParseUUIDPipe) id: string): Promise<Ride> {
     return this.rides.get(user.id, id);
+  }
+
+  // No @Roles: the query decides, like get; its driver block is NULL for the rider, so the commission never reaches them
+  @Get(':id/receipt')
+  @ZodSerializerDto(ReceiptDto)
+  receipt(@CurrentUser() user: AuthUser, @Param('id', ParseUUIDPipe) id: string): Promise<Receipt> {
+    return this.rides.receipt(user.id, id);
   }
 
   // Rider or assigned driver; no @Roles, the guarded UPDATE decides. Not @VerifiedDriver either: a
