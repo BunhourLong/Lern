@@ -555,6 +555,7 @@ it('signs out completely: secret, stores, queue and socket', async () => {
     lng: 104.92,
     recordedAt: '2026-11-01T10:00:00.000Z',
   });
+  core.stores.driverMode.setState({ locationPermission: 'foreground' });
 
   await core.signOut();
 
@@ -564,6 +565,7 @@ it('signs out completely: secret, stores, queue and socket', async () => {
   expect(core.stores.activeRide.getState().driver).toBeNull();
   expect(core.stores.driverMode.getState().availability).toBeNull();
   expect(core.stores.driverMode.getState().verification).toBeNull();
+  expect(core.stores.driverMode.getState().locationPermission).toBeNull();
   expect(core.queue.pending().points).toBe(0);
   expect(f.socket.disconnect).toHaveBeenCalled();
 });
@@ -1503,6 +1505,37 @@ it('keeps a newer driver toggle while applying verification from a delayed profi
   await refresh;
   expect(core.stores.driverMode.getState().availability).toBe('available');
   expect(core.stores.driverMode.getState().verification).toBe('suspended');
+});
+
+it('applies a profile availability refresh across a location permission update', async () => {
+  const profile = routes()['GET /drivers/me']();
+  let reply = async () => profile;
+  const core = createCore(
+    deps(
+      server(routes({ 'GET /drivers/me': () => reply() })),
+      fakeIo(),
+      'r'.repeat(43),
+    ),
+  );
+  await core.boot();
+  let finish!: () => void;
+  reply = () =>
+    new Promise(resolve => {
+      finish = () =>
+        resolve({
+          ...profile,
+          body: { ...profile.body, availability: 'offline' },
+        });
+    });
+  const refresh = core.refreshAvailability();
+  await settle();
+  core.stores.driverMode.setState({ locationPermission: 'foreground' });
+  finish();
+  await refresh;
+  expect(core.stores.driverMode.getState()).toMatchObject({
+    availability: 'offline',
+    locationPermission: 'foreground',
+  });
 });
 
 it('ignores a superseded profile read even when the latest read is offline', async () => {

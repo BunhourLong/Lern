@@ -17,6 +17,7 @@ import {
 import DriverApplyContainer from '../screens/DriverApply/DriverApplyContainer';
 import LoginContainer from '../screens/Login/LoginContainer';
 import OtpContainer from '../screens/Otp/OtpContainer';
+import type { DriverStatusActions } from '../screens/DriverStatus/DriverStatusContainer';
 import RouteMessageContainer from '../screens/RouteMessage/RouteMessageContainer';
 import RouteMessageScreen from '../screens/RouteMessage/RouteMessageScreen';
 import { type RootStackParams, Stack } from './index';
@@ -24,21 +25,36 @@ import { rootRoute } from './root-route';
 import { PrivacyFrame } from './PrivacyFrame';
 import { RoleTabs } from './RoleTabs';
 
-type Props = {
-  core: PinActions & {
-    stores: Pick<
-      Core['stores'],
-      'session' | 'appConfig' | 'notification' | 'security' | 'driverMode'
-    >;
-    api: Pick<Core['api'], 'requestOtp'>;
-    signIn: Core['signIn'];
-    becomeDriver: Core['becomeDriver'];
-  };
+type Props = Pick<
+  DriverStatusActions,
+  'requestLocationPermission' | 'refreshLocationPermission'
+> & {
+  core: PinActions &
+    Pick<Core, 'setOnline' | 'refreshAvailability'> & {
+      stores: Pick<
+        Core['stores'],
+        | 'session'
+        | 'appConfig'
+        | 'notification'
+        | 'security'
+        | 'driverMode'
+        | 'connection'
+      >;
+      api: Pick<Core['api'], 'requestOtp'>;
+      signIn: Core['signIn'];
+      becomeDriver: Core['becomeDriver'];
+    };
   debug: ReactNode;
   foreground?: boolean;
 };
 
-export function RootNavigator({ core, debug, foreground = true }: Props) {
+export function RootNavigator({
+  core,
+  requestLocationPermission,
+  refreshLocationPermission,
+  debug,
+  foreground = true,
+}: Props) {
   const session = useStore(core.stores.session);
   const gate = useStore(core.stores.appConfig, state => state.gate);
   const notifications = core.stores.notification;
@@ -162,7 +178,14 @@ export function RootNavigator({ core, debug, foreground = true }: Props) {
               {({ navigation }) => (
                 <RoleTabs
                   role={route}
-                  driverMode={core.stores.driverMode}
+                  driverStatus={{
+                    driverMode: core.stores.driverMode,
+                    connection: core.stores.connection,
+                    setOnline: core.setOnline,
+                    refreshAvailability: core.refreshAvailability,
+                    requestLocationPermission,
+                    refreshLocationPermission,
+                  }}
                   onApply={() => navigation.navigate('DriverApply')}
                   onEnroll={
                     enabled ? undefined : () => navigation.navigate('EnrollPin')

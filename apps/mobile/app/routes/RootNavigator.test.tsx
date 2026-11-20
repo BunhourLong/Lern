@@ -7,6 +7,7 @@ import { themes } from '@theme';
 import { InteractionContext } from '../hooks/use-interaction';
 import type { NotificationTarget } from '../boot/core';
 import { createAppConfigStore } from '../stores/app-config.store';
+import { createConnectionStore } from '../stores/connection.store';
 import { createDriverModeStore } from '../stores/driver-mode.store';
 import { createSecurityStore } from '../stores/security.store';
 import { createSessionStore } from '../stores/session.store';
@@ -49,6 +50,8 @@ function setup(
   const appConfig = createAppConfigStore();
   const driverMode = createDriverModeStore();
   driverMode.setState({ verification: 'pending' });
+  const connection = createConnectionStore();
+  const requestLocationPermission = jest.fn(async () => 'always' as const);
   const notification = createStore<NotificationTarget | null>()(() => null);
   const requestOtp = jest
     .fn<Promise<undefined>, [string]>()
@@ -60,8 +63,17 @@ function setup(
     security.getState().update({ enabled: true }),
   );
   const core = {
-    stores: { session, security, appConfig, notification, driverMode },
+    stores: {
+      session,
+      security,
+      appConfig,
+      notification,
+      driverMode,
+      connection,
+    },
     api: { requestOtp },
+    setOnline: jest.fn(),
+    refreshAvailability: jest.fn(),
     signIn,
     becomeDriver: jest.fn(async () => {
       session.getState().signedIn(me('rider', 'driver'));
@@ -76,7 +88,13 @@ function setup(
     pinWaitMs: () => 0,
   };
   const navigator = (
-    <RootNavigator core={core} foreground={foreground} debug={debug} />
+    <RootNavigator
+      core={core}
+      foreground={foreground}
+      debug={debug}
+      requestLocationPermission={requestLocationPermission}
+      refreshLocationPermission={jest.fn()}
+    />
   );
   return {
     core,
@@ -87,9 +105,27 @@ function setup(
     notification,
     navigator,
     requestOtp,
+    requestLocationPermission,
     signIn,
   };
 }
+
+test('wires the driver Home toggle to the injected permission and core action', async () => {
+  const { core, session, appConfig, navigator, requestLocationPermission } =
+    setup();
+  session.getState().signedIn(me('driver'));
+  appConfig.getState().setGate({ status: 'ok' });
+  core.stores.driverMode.setState({
+    availability: 'offline',
+    verification: 'verified',
+  });
+  core.stores.connection.getState().setConnected(true);
+  await render(navigator);
+  await fireEvent.press(screen.getByRole('button', { name: 'Go online' }));
+
+  expect(requestLocationPermission).toHaveBeenCalledTimes(1);
+  expect(core.setOnline).toHaveBeenCalledWith(true);
+});
 
 test('keeps a locked rider’s notification queued after navigation is ready', async () => {
   const { session, security, appConfig, notification, navigator } = setup();

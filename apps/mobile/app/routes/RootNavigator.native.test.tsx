@@ -5,6 +5,7 @@ import type { TabSelectedEvent } from 'react-native-screens';
 import { createStore } from 'zustand/vanilla';
 import type { NotificationTarget } from '../boot/core';
 import { createAppConfigStore } from '../stores/app-config.store';
+import { createConnectionStore } from '../stores/connection.store';
 import { createDriverModeStore } from '../stores/driver-mode.store';
 import { createSecurityStore } from '../stores/security.store';
 import { createSessionStore } from '../stores/session.store';
@@ -39,10 +40,13 @@ function renderRiderTabs(debug: ReactNode = null) {
           appConfig,
           notification,
           driverMode: createDriverModeStore(),
+          connection: createConnectionStore(),
           security: createSecurityStore(),
         },
         api: { requestOtp: jest.fn() },
         signIn: jest.fn(),
+        setOnline: jest.fn(),
+        refreshAvailability: jest.fn(),
         becomeDriver: jest.fn(),
         enableLock: jest.fn(),
         unlock: jest.fn(),
@@ -50,6 +54,8 @@ function renderRiderTabs(debug: ReactNode = null) {
         signOut: jest.fn(),
         pinWaitMs: () => 0,
       }}
+      requestLocationPermission={jest.fn()}
+      refreshLocationPermission={jest.fn()}
       debug={debug}
     />,
   );

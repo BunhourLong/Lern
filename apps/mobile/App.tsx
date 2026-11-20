@@ -2,7 +2,12 @@ import { useEffect } from 'react';
 import { StatusBar, useColorScheme } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { useStore } from 'zustand';
-import { core, startApp } from './app/boot/app-core';
+import {
+  core,
+  refreshLocationPermission,
+  requestLocationPermission,
+  startApp,
+} from './app/boot/app-core';
 import { LanguageContext } from './app/i18n';
 import { SecurityProvider } from './app/boot/SecurityProvider';
 import { RootNavigator } from './app/routes/RootNavigator';
@@ -22,6 +27,8 @@ function App() {
             <RootNavigator
               foreground={foreground}
               core={core}
+              requestLocationPermission={requestLocationPermission}
+              refreshLocationPermission={refreshLocationPermission}
               debug={__DEV__ ? <DebugContainer core={core} /> : null}
             />
           )}

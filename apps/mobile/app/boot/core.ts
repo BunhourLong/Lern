@@ -120,7 +120,11 @@ export function createCore({
     push.stop();
     queue.clear();
     activeRide.getState().reset();
-    driverMode.setState({ availability: null, verification: null });
+    driverMode.setState({
+      availability: null,
+      verification: null,
+      locationPermission: null,
+    });
     rawEvents.getState().reset(); // the next user on this phone must not see the last one's rides
     session.getState().signedOut();
     // The PIN belongs to who was signed in; a Keychain that refuses to clear keeps it until the next sign-out
@@ -242,18 +246,21 @@ export function createCore({
   }
 
   let availabilityRequest = 0;
+  let availabilityWrite = 0;
   async function refreshAvailability() {
     const user = session.getState().me;
     if (!user?.roles.includes('driver')) return;
     const request = ++availabilityRequest;
-    const initial = driverMode.getState();
+    const initialWrite = availabilityWrite;
     try {
       const profile = await api.profile();
       if (request === availabilityRequest && session.getState().me === user)
         driverMode.setState(state => ({
           // Keep availability from a newer toggle. Verification only comes from the profile.
           availability:
-            state === initial ? profile.availability : state.availability,
+            initialWrite === availabilityWrite
+              ? profile.availability
+              : state.availability,
           verification: profile.verification,
         }));
     } catch {
@@ -468,7 +475,10 @@ export function createCore({
     setOnline: (online: boolean) =>
       command(
         () => api.setAvailability(online),
-        a => driverMode.getState().setAvailability(a.availability),
+        a => {
+          availabilityWrite++;
+          driverMode.getState().setAvailability(a.availability);
+        },
       ),
     // Trip steps survive a dead zone: queued with their key, sent now if the network allows
     async step(rideId: string, action: QueuedStep['action']): Promise<void> {

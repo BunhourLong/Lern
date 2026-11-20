@@ -37,12 +37,16 @@ jest.mock('../app/boot/app-core', () => {
     core: {
       interruptPinCheck: jest.fn(),
       refreshAvailability: jest.fn(),
+      setOnline: jest.fn(),
       pinWaitMs: () => 0,
       stores: {
         language,
         driverMode: jest
           .requireActual('../app/stores/driver-mode.store')
           .createDriverModeStore(),
+        connection: jest
+          .requireActual('../app/stores/connection.store')
+          .createConnectionStore(),
         security: jest
           .requireActual('../app/stores/security.store')
           .createSecurityStore(),
@@ -51,6 +55,8 @@ jest.mock('../app/boot/app-core', () => {
         notification: createStore(() => null),
       },
     },
+    requestLocationPermission: jest.fn(),
+    refreshLocationPermission: jest.fn(),
     startApp: jest.fn(),
   };
 });

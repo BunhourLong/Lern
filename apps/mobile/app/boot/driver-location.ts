@@ -13,7 +13,7 @@ export const isDriverOnline = (a: DriverAvailability | null) =>
 export function followAvailability(
   driverMode: StoreApi<DriverModeState>,
   location: Pick<LocationService, 'start' | 'stop'>,
-  onStart: (result: Permission | 'failed') => void,
+  onStart: (result: Permission | 'failed', current: boolean) => void,
 ): () => void {
   let tracking = false;
   let latest = 0; // the newest availability change; only its failed start may reset `tracking`
@@ -38,13 +38,20 @@ export function followAvailability(
         result = 'failed';
       }
       // A newer change already set `tracking` for itself: an older failure must not overwrite it
-      if ((result === 'denied' || result === 'failed') && request === latest)
+      const current = request === latest;
+      if ((result === 'denied' || result === 'failed') && current)
         tracking = false;
-      onStart(result);
+      onStart(result, current);
     });
   };
   // iOS restores location updates a previous run left on: stop them until the driver is online again
   run(() => location.stop());
   follow(driverMode.getState().availability);
-  return driverMode.subscribe(s => follow(s.availability));
+  const unsubscribe = driverMode.subscribe((s, previous) => {
+    if (s.availability !== previous.availability) follow(s.availability);
+  });
+  return () => {
+    latest++;
+    unsubscribe();
+  };
 }

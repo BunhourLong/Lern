@@ -1,4 +1,5 @@
-import { View } from 'react-native';
+import { useEffect } from 'react';
+import { AccessibilityInfo, Platform, View } from 'react-native';
 import { bannerEdgeWidth, makeStyles, spacing } from '@theme';
 import { Text } from './Text';
 
@@ -10,6 +11,10 @@ export function Banner({
   tone?: 'info' | 'warning' | 'danger';
 }) {
   const styles = useStyles();
+  useEffect(() => {
+    if (Platform.OS === 'ios')
+      AccessibilityInfo.announceForAccessibility(message);
+  }, [message]);
 
   return (
     <View

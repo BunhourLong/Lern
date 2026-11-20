@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { ActivityIndicator, View } from 'react-native';
 import type { Edge } from 'react-native-safe-area-context';
 import { makeStyles, spacing, useTheme } from '@theme';
@@ -12,6 +13,7 @@ type Props = { edges?: Edge[]; secondaryAction?: Action } & (
   | {
       title: string;
       body?: string;
+      children?: ReactNode;
       updateAction?: Action & { loading: boolean; error?: string };
       primaryAction?: Action;
     }
@@ -69,6 +71,7 @@ export default function RouteMessageScreen(props: Props) {
         {primaryAction && (
           <Button label={primaryAction.label} onPress={primaryAction.onPress} />
         )}
+        {props.children}
         {secondaryButton}
       </View>
     </Screen>

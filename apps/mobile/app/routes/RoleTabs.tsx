@@ -7,9 +7,9 @@ import type { Edge } from 'react-native-safe-area-context';
 import { useInteraction } from '../hooks/use-interaction';
 import { useT } from '../i18n';
 import DriverStatusContainer from '../screens/DriverStatus/DriverStatusContainer';
+import type { DriverStatusActions } from '../screens/DriverStatus/DriverStatusContainer';
 import RouteMessageContainer from '../screens/RouteMessage/RouteMessageContainer';
 import RouteMessageScreen from '../screens/RouteMessage/RouteMessageScreen';
-import type { createDriverModeStore } from '../stores/driver-mode.store';
 import { TabBar } from './TabBar';
 
 type Role = 'rider' | 'driver';
@@ -38,13 +38,13 @@ const tabs = isLiquidGlassAvailable()
 
 export function RoleTabs({
   role,
-  driverMode,
+  driverStatus,
   onApply,
   onDebug,
   onEnroll,
 }: {
   role: Role;
-  driverMode: ReturnType<typeof createDriverModeStore>;
+  driverStatus: DriverStatusActions;
   onApply: () => void;
   onDebug?: () => void;
   onEnroll?: () => void;
@@ -73,7 +73,7 @@ export function RoleTabs({
     if (name === 'home' && role === 'driver')
       return (
         <DriverStatusContainer
-          driverMode={driverMode}
+          {...driverStatus}
           onDebug={onDebug}
           edges={screenEdges}
         />
