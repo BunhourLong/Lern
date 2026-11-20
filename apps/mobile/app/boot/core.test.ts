@@ -1,4 +1,8 @@
-import { RIDE_UPDATED_EVENT } from '@lern/contracts';
+import {
+  type DriverProfile,
+  OFFER_UPDATED_EVENT,
+  RIDE_UPDATED_EVENT,
+} from '@lern/contracts';
 import type { io } from 'socket.io-client';
 import { rootRoute } from '../routes/root-route';
 import { ApiError } from '../services/api.service';
@@ -29,6 +33,13 @@ const ride = (status: string, version: number) => ({
   dropoff: { lat: 11.54, lng: 104.92 },
   fare: { amountMinor: 4000, currency: 'KHR' },
 });
+const offer = {
+  ...ride('pending', 1),
+  id: offerId,
+  rideId,
+  distanceM: 800,
+  expiresAt: '2099-01-01T00:00:00.000Z',
+};
 const pair = { accessToken: 'access-2', refreshToken: 'r'.repeat(43) };
 type Reply = { status: number; body?: unknown };
 type Routes = Record<string, () => Reply | Promise<Reply>>;
@@ -558,8 +569,10 @@ it('signs out completely: secret, stores, queue and socket', async () => {
   });
   core.stores.driverMode.setState({ locationPermission: 'foreground' });
 
+  const callsAtSignOut = s.calls.length;
   await core.signOut();
 
+  expect(s.calls.slice(callsAtSignOut)).not.toContain('GET /drivers/me');
   expect(s.calls).toContain('POST /auth/logout');
   expect(d.secret()).toBeUndefined();
   expect(core.stores.session.getState().status).toBe('signed_out');
@@ -1279,13 +1292,6 @@ describe('push', () => {
   const active = 'GET /me/active-ride';
   const details = `GET /rides/${rideId}`;
   const emptyRides = { rider: null, driver: null, offer: null };
-  const offer = {
-    ...ride('pending', 1),
-    id: offerId,
-    rideId,
-    distanceM: 800,
-    expiresAt: '2099-01-01T00:00:00.000Z',
-  };
 
   function deferred<T>() {
     let resolve!: (value: T) => void;
@@ -1886,6 +1892,192 @@ describe('app lock', () => {
   });
 });
 
+describe('driver availability from active rides', () => {
+  const profile = routes()['GET /drivers/me']().body;
+  const profileReply = (availability: DriverProfile['availability']) => ({
+    status: 200,
+    body: { ...profile, availability },
+  });
+
+  async function connect(extra: Routes = {}) {
+    const s = server(
+      routes({
+        'GET /me/active-ride': () => ({
+          status: 200,
+          body: { rider: null, driver: null, offer: null },
+        }),
+        ...extra,
+      }),
+    );
+    const f = fakeIo();
+    const core = createCore(deps(s, f, pair.refreshToken));
+    await core.boot();
+    f.fire('connect');
+    await settle();
+    return { core, f, calls: s.calls };
+  }
+
+  it.each(['pending', 'expired', 'cancelled'])(
+    'refreshes on an offer update with status %s',
+    async status => {
+      const expected = status === 'pending' ? 'reserved' : 'available';
+      let availability: DriverProfile['availability'] =
+        status === 'pending' ? 'available' : 'reserved';
+      const { core, f } = await connect({
+        'GET /drivers/me': () => profileReply(availability),
+      });
+      if (status !== 'pending') {
+        f.fire(OFFER_UPDATED_EVENT, offer);
+        await settle();
+      }
+
+      availability = expected;
+      f.fire(OFFER_UPDATED_EVENT, { ...offer, status });
+      await settle();
+
+      expect(core.stores.driverMode.getState().availability).toBe(expected);
+    },
+  );
+
+  it('refreshes when a new pending offer arrives before the old expiry update', async () => {
+    let availability: DriverProfile['availability'] = 'available';
+    const { core, f } = await connect({
+      'GET /drivers/me': () => profileReply(availability),
+    });
+    // The first pending event arrived after its offer expired on the server.
+    const previousOffer = { ...offer, expiresAt: '2020-01-01T00:00:00.000Z' };
+    f.fire(OFFER_UPDATED_EVENT, previousOffer);
+    await settle();
+
+    availability = 'reserved';
+    f.fire(OFFER_UPDATED_EVENT, {
+      ...offer,
+      id: '00000000-0000-4000-8000-000000000004',
+      rideId: otherRideId,
+    });
+    f.fire(OFFER_UPDATED_EVENT, { ...previousOffer, status: 'expired' });
+    await settle();
+
+    expect(core.stores.driverMode.getState().availability).toBe('reserved');
+  });
+
+  it.each([
+    ['decline', 'available', { ...offer, status: 'declined' }],
+    ['accept', 'on_trip', ride('driver_assigned', 2)],
+  ] as const)('refreshes after %s', async (action, expected, body) => {
+    let availability: DriverProfile['availability'] = 'reserved';
+    const { core, f } = await connect({
+      'GET /drivers/me': () => profileReply(availability),
+      [`POST /offers/${offerId}/${action}`]: () => {
+        availability = expected;
+        return { status: 200, body };
+      },
+    });
+    f.fire(OFFER_UPDATED_EVENT, offer);
+    await settle();
+
+    await core[action](offerId);
+    await settle();
+
+    expect(core.stores.driverMode.getState().availability).toBe(expected);
+  });
+
+  it('refreshes after accepting an offer while the previous assignment is still cached', async () => {
+    let availability: DriverProfile['availability'] = 'on_trip';
+    const { core, f } = await connect({
+      'GET /drivers/me': () => profileReply(availability),
+      'GET /me/active-ride': () => ({
+        status: 200,
+        body: {
+          rider: null,
+          driver: { ...ride('driver_assigned', 2), id: otherRideId },
+          offer: null,
+        },
+      }),
+      [`POST /offers/${offerId}/accept`]: () => {
+        availability = 'on_trip';
+        return { status: 200, body: ride('driver_assigned', 2) };
+      },
+    });
+    // The server cancelled the previous ride, and its socket update is delayed.
+    availability = 'reserved';
+    f.fire(OFFER_UPDATED_EVENT, offer);
+    await settle();
+    expect(core.stores.driverMode.getState().availability).toBe('reserved');
+
+    await core.accept(offerId);
+    await settle();
+
+    expect(core.stores.driverMode.getState().availability).toBe('on_trip');
+  });
+
+  it('refreshes on a completed driver ride', async () => {
+    let availability: DriverProfile['availability'] = 'on_trip';
+    const { core, f } = await connect({
+      'GET /drivers/me': () => profileReply(availability),
+      'GET /me/active-ride': routes()['GET /me/active-ride'],
+    });
+
+    availability = 'offline';
+    f.fire(RIDE_UPDATED_EVENT, ride('completed', 5));
+    await settle();
+
+    expect(core.stores.driverMode.getState().availability).toBe('offline');
+  });
+
+  it('skips profile reads for a duplicate offer and a rider ride update', async () => {
+    const { f, calls } = await connect();
+    f.fire(OFFER_UPDATED_EVENT, offer);
+    await settle();
+    const before = calls.length;
+
+    f.fire(OFFER_UPDATED_EVENT, { ...offer });
+    f.fire(RIDE_UPDATED_EVENT, { ...ride('searching', 1), id: otherRideId });
+    await settle();
+
+    expect(calls.slice(before)).not.toContain('GET /drivers/me');
+  });
+
+  it('never reads the driver profile for a rider-only user', async () => {
+    const { f, calls } = await connect({
+      'GET /me': () => ({ status: 200, body: rider }),
+    });
+    f.fire(OFFER_UPDATED_EVENT, offer);
+    await settle();
+
+    expect(calls).not.toContain('GET /drivers/me');
+  });
+
+  it('keeps a newer toggle when an offer-triggered profile read finishes', async () => {
+    let reply: Routes[string] = () => profileReply('available');
+    const { core, f } = await connect({
+      'GET /drivers/me': () => reply(),
+      'PUT /drivers/me/availability': () => ({
+        status: 200,
+        body: { availability: 'offline' },
+      }),
+    });
+    let finish!: (result: Reply) => void;
+    const reading = new Promise<Reply>(resolve => {
+      finish = resolve;
+    });
+    reply = () => reading;
+    f.fire(OFFER_UPDATED_EVENT, offer);
+
+    await core.setOnline(false);
+    finish({
+      status: 200,
+      body: { ...profile, availability: 'reserved', verification: 'suspended' },
+    });
+    await settle();
+
+    expect(core.stores.driverMode.getState()).toMatchObject({
+      availability: 'offline',
+      verification: 'suspended',
+    });
+  });
+});
+
 it('refreshes driver verification and availability on reconnect and ignores an earlier profile response', async () => {
   const profile = routes()['GET /drivers/me']();
   const pending = {
@@ -1903,10 +2095,10 @@ it('refreshes driver verification and availability on reconnect and ignores an e
   );
   await core.boot();
   let finish!: () => void;
-  reply = () =>
-    new Promise(resolve => {
-      finish = () => resolve(pending);
-    });
+  const delayed = new Promise<typeof pending>(resolve => {
+    finish = () => resolve(pending);
+  });
+  reply = () => delayed;
   expect(core.stores.driverMode.getState().verification).toBe('pending');
   f.fire('connect');
   await settle();

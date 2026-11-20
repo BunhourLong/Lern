@@ -142,7 +142,6 @@ export function createCore({
     connection.getState().setConnected(false); // close() fires disconnect only while connected; reset here so sign-out never relies on it
     push.stop();
     queue.clear();
-    activeRide.getState().reset();
     driverMode.setState({
       availability: null,
       verification: null,
@@ -150,6 +149,7 @@ export function createCore({
     });
     rawEvents.getState().reset(); // the next user on this phone must not see the last one's rides
     session.getState().signedOut();
+    activeRide.getState().reset(); // Clear the session first so resetting the ride does not read the profile.
     // The PIN belongs to who was signed in; a Keychain that refuses to clear keeps it until the next sign-out
     security.getState().update({ enabled: false, locked: false, waitMs: 0 });
     return pinLock.clear();
@@ -301,6 +301,16 @@ export function createCore({
       // Keep the last known driver status. The next resume or reconnect retries.
     }
   }
+
+  activeRide.subscribe((next, previous) => {
+    if (
+      next.offer?.id !== previous.offer?.id ||
+      next.offer?.status !== previous.offer?.status ||
+      next.driver?.id !== previous.driver?.id ||
+      next.driver?.status !== previous.driver?.status
+    )
+      refreshAvailability();
+  });
 
   async function start(user: Me): Promise<void> {
     const previous = session.getState().me;
