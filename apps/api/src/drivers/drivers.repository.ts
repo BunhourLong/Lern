@@ -4,6 +4,8 @@ import {
   type DriverAvailabilityAction,
   type DriverProfile,
   type DriverVerification,
+  type Earnings,
+  type EarningsQuery,
   driverTransition,
 } from '@lern/contracts';
 import { Injectable } from '@nestjs/common';
@@ -12,6 +14,23 @@ import { DataSource, type EntityManager } from 'typeorm';
 const PROFILE = 'vehicle_type AS "vehicleType", plate, verification, availability';
 // What the driver owes in KHR (negative = owes). KHR only: cents never add to riel.
 const KHR_BALANCE = `(SELECT coalesce(sum(amount_minor), 0) FROM driver_ledger_entries WHERE driver_id = $1 AND currency = 'KHR')`;
+// A driver's KHR earnings per Phnom Penh day or ISO week. Dates become local midnights before truncating ($2 is the
+// Zod enum 'day' | 'week'), so the bounds and buckets don't follow the session time zone. Money stays bigint in SQL;
+// json_build_object puts the sums on the wire as JSON numbers.
+// shortcut: scans all of a driver's entries via the (driver_id) index; add (driver_id, created_at) past ~50k entries.
+const EARNINGS = `
+  WITH b AS (
+    SELECT date_trunc($2::text, $3::date::timestamp) AT TIME ZONE 'Asia/Phnom_Penh' AS lo,
+           (date_trunc($2::text, $4::date::timestamp) + ('1 ' || $2::text)::interval) AT TIME ZONE 'Asia/Phnom_Penh' AS hi
+  )
+  SELECT to_char(date_trunc($2::text, e.created_at AT TIME ZONE 'Asia/Phnom_Penh'), 'YYYY-MM-DD') AS start,
+         count(*)::int AS rides,
+         json_build_object('amountMinor', sum(r.fare_minor), 'currency', 'KHR') AS fare,
+         json_build_object('amountMinor', -sum(e.amount_minor), 'currency', 'KHR') AS commission,
+         json_build_object('amountMinor', sum(r.fare_minor) + sum(e.amount_minor), 'currency', 'KHR') AS earnings
+  FROM driver_ledger_entries e JOIN rides r ON r.id = e.ride_id, b
+  WHERE e.driver_id = $1 AND e.kind = 'commission' AND e.currency = 'KHR' AND e.created_at >= b.lo AND e.created_at < b.hi
+  GROUP BY 1 ORDER BY 1`;
 
 @Injectable()
 export class DriversRepository {
@@ -64,6 +83,10 @@ export class DriversRepository {
   async withinDebtLimit(driverId: string, limitMinor: number, m: EntityManager = this.db.manager): Promise<boolean> {
     const [{ ok }] = await m.query<{ ok: boolean }[]>(`SELECT ${KHR_BALANCE} >= -$2::bigint AS ok`, [driverId, limitMinor]);
     return ok;
+  }
+
+  earnings(driverId: string, q: EarningsQuery): Promise<Earnings['buckets']> {
+    return this.db.query(EARNINGS, [driverId, q.by, q.from, q.to]);
   }
 
   async state(userId: string): Promise<{ verification: DriverVerification; availability: DriverAvailability } | undefined> {

@@ -1,11 +1,12 @@
-import type { Availability, DriverProfile } from '@lern/contracts';
-import { Body, Controller, Get, Post, Put } from '@nestjs/common';
+import type { Availability, DriverProfile, Earnings } from '@lern/contracts';
+import { Body, Controller, Get, Post, Put, Query } from '@nestjs/common';
 import { ZodSerializerDto } from 'nestjs-zod';
 import { type AuthUser, CurrentUser } from '../auth/auth.decorators';
 import { Idempotent } from '../shared/idempotency/idempotency.interceptor';
 import { ApplyDriverDto } from './dto/apply-driver.dto';
 import { AvailabilityDto, SetAvailabilityDto } from './dto/set-availability.dto';
 import { DriverProfileDto } from './dto/driver-profile.dto';
+import { EarningsDto, EarningsQueryDto } from './dto/earnings.dto';
 import { DriversService } from './drivers.service';
 
 // "me" routes only: the caller's id comes from the token, so there is no other driver's id to tamper with
@@ -33,5 +34,12 @@ export class DriversController {
   @ZodSerializerDto(AvailabilityDto)
   setAvailability(@CurrentUser() user: AuthUser, @Body() body: SetAvailabilityDto): Promise<Availability> {
     return this.drivers.setOnline(user.id, body.online);
+  }
+
+  // No @Roles, like GET: a non-driver gets 404; pending and suspended drivers still see what they earned
+  @Get('earnings')
+  @ZodSerializerDto(EarningsDto)
+  earnings(@CurrentUser() user: AuthUser, @Query() query: EarningsQueryDto): Promise<Earnings> {
+    return this.drivers.earnings(user.id, query);
   }
 }

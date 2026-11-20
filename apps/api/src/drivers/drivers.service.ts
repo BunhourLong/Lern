@@ -1,4 +1,12 @@
-import type { ApplyDriver, Availability, DriverAvailabilityAction, DriverProfile, DriverVerification } from '@lern/contracts';
+import type {
+  ApplyDriver,
+  Availability,
+  DriverAvailabilityAction,
+  DriverProfile,
+  DriverVerification,
+  Earnings,
+  EarningsQuery,
+} from '@lern/contracts';
 import { ConflictException, ForbiddenException, HttpStatus, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { DataSource, type EntityManager } from 'typeorm';
 import { UsersService } from '../users/users.service';
@@ -29,6 +37,11 @@ export class DriversService {
     const profile = await this.drivers.find(userId);
     if (!profile) throw new NotFoundException('Not a driver');
     return profile;
+  }
+
+  async earnings(userId: string, query: EarningsQuery): Promise<Earnings> {
+    if (!(await this.drivers.verification(userId))) throw new NotFoundException('Not a driver');
+    return { buckets: await this.drivers.earnings(userId, query) };
   }
 
   verification(userId: string): Promise<DriverVerification | undefined> {
