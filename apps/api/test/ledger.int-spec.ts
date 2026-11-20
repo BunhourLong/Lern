@@ -3,6 +3,7 @@ import { HttpStatus, type INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import type { App } from 'supertest/types';
 import { DataSource } from 'typeorm';
+import { DriversRepository } from '../src/drivers/drivers.repository';
 import { type Actor, bootApp, signIn } from './support/actors';
 import { lockTable } from './support/gate';
 import { isolatedDatabase } from './support/isolated-database';
@@ -155,6 +156,39 @@ describe('the debt limit on going online', () => {
     await setOnline(driver, true).expect(200, { availability: 'available' });
   });
 
+  // M6.9b: a completion that commits its debit and debt_stop while going online is in flight. The gate transaction
+  // plays that completion; SHARE lets the request's state read through and holds its availability UPDATE.
+  it('refuses going online when a completion past the limit commits mid-request', async () => {
+    const { driver } = await assignedRide('arrive', 'start', 'complete'); // owes exactly the limit
+    const { ride } = await rideFor(driver, 'arrive', 'start');
+    const gate = await lockTable(db(), 'drivers', 'SHARE');
+    await gate.manager.query(
+      `INSERT INTO driver_ledger_entries (driver_id, ride_id, kind, amount_minor, currency) VALUES ($1, $2, 'commission', -1700, 'KHR')`,
+      [driver.id, ride.id],
+    );
+    expect(await app.get(DriversRepository).move(gate.manager, driver.id, 'debt_stop')).toBe(true);
+    const racing = setOnline(driver, true).then((r) => r);
+    await gate.arrived(1);
+    await gate.release();
+
+    const res = await racing;
+    expect({ status: res.status, body: res.body as unknown }).toEqual({
+      status: 403,
+      body: {
+        statusCode: 403,
+        code: 'DEBT_LIMIT',
+        message: 'Driver owes more commission than the limit',
+        limitMinor: 1700,
+        currency: 'KHR',
+      },
+    });
+    expect((await http().get('/drivers/me').set(driver.auth).expect(200)).body).toMatchObject({ availability: 'offline' });
+    const [last] = await db().query<{ action: string }[]>(
+      'SELECT action FROM driver_availability_events WHERE driver_id = $1 ORDER BY id DESC LIMIT 1',
+      [driver.id],
+    );
+    expect(last).toEqual({ action: 'debt_stop' });
+  });
 });
 
 // PLAN.md M6.9a: the ride end that leaves the driver past the limit ends their shift, in the ride's own transaction

@@ -51,6 +51,12 @@ export class DriversService {
     if (state.availability === target) return { availability: target };
     // Going offline never checks: a driver in debt must be able to stop
     const limitMinor = this.config.DRIVER_DEBT_LIMIT_MINOR;
+    if (await this.drivers.move(this.db.manager, userId, online ? 'go_online' : 'go_offline', online ? limitMinor : undefined)) {
+      return { availability: target };
+    }
+    // The move missed: a simultaneous identical request (a double tap) may have made it first
+    const availability = (await this.drivers.state(userId))?.availability;
+    if (availability === target) return { availability: target };
     if (online && !(await this.drivers.withinDebtLimit(userId, limitMinor))) {
       throw new ForbiddenException({
         statusCode: HttpStatus.FORBIDDEN,
@@ -60,10 +66,6 @@ export class DriversService {
         currency: 'KHR',
       });
     }
-    if (await this.drivers.move(this.db.manager, userId, online ? 'go_online' : 'go_offline')) return { availability: target };
-    // The move missed: a simultaneous identical request (a double tap) may have made it first
-    const availability = (await this.drivers.state(userId))?.availability;
-    if (availability === target) return { availability: target };
     throw new ConflictException({
       statusCode: HttpStatus.CONFLICT,
       message: "Can't change availability while holding an offer or on a trip",
