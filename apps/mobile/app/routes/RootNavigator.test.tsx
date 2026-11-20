@@ -127,6 +127,23 @@ test('wires the driver Home toggle to the injected permission and core action', 
   expect(core.setOnline).toHaveBeenCalledWith(true);
 });
 
+test('shows the Rider Home reconnecting banner only while disconnected', async () => {
+  const { core, session, appConfig, navigator } = setup();
+  session.getState().signedIn(me('rider'));
+  appConfig.getState().setGate({ status: 'ok' });
+  const { connection } = core.stores;
+
+  await render(navigator);
+  expect(screen.getByRole('header', { name: 'Rider home' })).toBeOnTheScreen();
+  expect(screen.getByRole('alert')).toHaveTextContent('Reconnecting…');
+
+  await act(() => connection.getState().setConnected(true));
+  expect(screen.queryByRole('alert')).toBeNull();
+
+  await act(() => connection.getState().setConnected(false));
+  expect(screen.getByRole('alert')).toHaveTextContent('Reconnecting…');
+});
+
 test('keeps a locked rider’s notification queued after navigation is ready', async () => {
   const { session, security, appConfig, notification, navigator } = setup();
   session.getState().signedIn(me('rider'));

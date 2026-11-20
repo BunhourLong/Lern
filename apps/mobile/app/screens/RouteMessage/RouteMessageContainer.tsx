@@ -1,9 +1,12 @@
 import { useRef, useState } from 'react';
 import { Linking } from 'react-native';
 import type { Edge } from 'react-native-safe-area-context';
+import { useStore } from 'zustand';
+import { Banner } from '../../components/Banner';
 import { useT } from '../../i18n';
 import type { StringKey } from '../../i18n';
 import type { RootRoute } from '../../routes/root-route';
+import type { createConnectionStore } from '../../stores/connection.store';
 import RouteMessageScreen from './RouteMessageScreen';
 
 type MessageRoute =
@@ -14,6 +17,7 @@ type MessageRoute =
 
 type Props = {
   route: MessageRoute;
+  connection: ReturnType<typeof createConnectionStore>;
   storeUrl?: string;
   onDebug?: () => void;
   edges?: Edge[];
@@ -36,11 +40,13 @@ const messages = {
 
 export default function RouteMessageContainer({
   route,
+  connection,
   storeUrl,
   onDebug,
   edges,
 }: Props) {
   const t = useT();
+  const connected = useStore(connection, state => state.connected);
   const opening = useRef(false);
   const [updateState, setUpdateState] = useState<'idle' | 'opening' | 'failed'>(
     'idle',
@@ -86,6 +92,10 @@ export default function RouteMessageContainer({
       secondaryAction={
         onDebug ? { label: t('route.debug'), onPress: onDebug } : undefined
       }
-    />
+    >
+      {route === 'rider' && !connected && (
+        <Banner message={t('driverStatus.reconnecting')} />
+      )}
+    </RouteMessageScreen>
   );
 }

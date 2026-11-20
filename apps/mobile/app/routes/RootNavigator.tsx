@@ -268,7 +268,11 @@ export function RootNavigator({
           <Stack.Group>
             <Stack.Screen name={route}>
               {() => (
-                <RouteMessageContainer route={route} storeUrl={storeUrl} />
+                <RouteMessageContainer
+                  route={route}
+                  connection={core.stores.connection}
+                  storeUrl={storeUrl}
+                />
               )}
             </Stack.Screen>
           </Stack.Group>
