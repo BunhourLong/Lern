@@ -36,6 +36,7 @@ it('returns typed config with defaults for a valid env', () => {
     SURGE_MAX_STEP_BP: 1000,
     DRIVER_DEBT_LIMIT_MINOR: 40000,
     MAINTENANCE: false,
+    KHR_PER_USD: 4000,
   });
 });
 
