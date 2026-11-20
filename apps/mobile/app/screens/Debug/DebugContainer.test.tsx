@@ -100,6 +100,15 @@ it('marks the current language choice as selected', async () => {
   expect(screen.getByRole('button', { name: 'Phone' })).not.toBeSelected();
 });
 
+it('shows all three sync status pill samples', async () => {
+  const { core } = stub();
+  await renderScreen(<DebugContainer core={core as unknown as Props['core']} />);
+
+  for (const name of ['Offline', 'Reconnecting…', 'Connected']) {
+    expect(screen.getByRole('alert', { name })).toBeOnTheScreen();
+  }
+});
+
 it('shows store changes and raw events live', () => {
   const { core, stores } = stub();
   const r = render(core);

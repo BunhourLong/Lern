@@ -159,7 +159,7 @@ test('wires the driver Home offer and its actions to core', async () => {
   expect(core.decline).toHaveBeenCalledWith('offer-1');
 });
 
-test('shows the Rider Home reconnecting banner only while disconnected', async () => {
+test('keeps Rider Home free of inline reconnecting banners', async () => {
   const { core, session, appConfig, navigator } = setup();
   session.getState().signedIn(me('rider'));
   appConfig.getState().setGate({ status: 'ok' });
@@ -167,13 +167,13 @@ test('shows the Rider Home reconnecting banner only while disconnected', async (
 
   await render(navigator);
   expect(screen.getByRole('header', { name: 'Rider home' })).toBeOnTheScreen();
-  expect(screen.getByRole('alert')).toHaveTextContent('Reconnecting…');
+  expect(screen.queryByText('Reconnecting…')).toBeNull();
 
   await act(() => connection.getState().setConnected(true));
   expect(screen.queryByRole('alert')).toBeNull();
 
   await act(() => connection.getState().setConnected(false));
-  expect(screen.getByRole('alert')).toHaveTextContent('Reconnecting…');
+  expect(screen.queryByText('Reconnecting…')).toBeNull();
 });
 
 test('keeps a locked rider’s notification queued after navigation is ready', async () => {

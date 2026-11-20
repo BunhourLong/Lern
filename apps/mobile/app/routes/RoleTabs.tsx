@@ -81,7 +81,6 @@ export function RoleTabs({
     return (
       <RouteMessageContainer
         route={name === 'home' ? 'rider' : name}
-        connection={driverStatus.connection}
         onDebug={name === 'home' ? onDebug : undefined}
         edges={screenEdges}
       />

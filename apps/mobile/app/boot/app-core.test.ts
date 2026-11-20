@@ -1,3 +1,4 @@
+import NetInfo, { NetInfoStateType } from '@react-native-community/netinfo';
 import {
   createLocationService,
   getLocationPermission,
@@ -25,6 +26,9 @@ jest.mock('./core', () => ({
     setOnline: jest.fn(async () => undefined),
     stopListeningForPush: jest.fn(),
     stores: {
+      connection: jest
+        .requireActual('../stores/connection.store')
+        .createConnectionStore(),
       driverMode: jest
         .requireActual('../stores/driver-mode.store')
         .createDriverModeStore(),
@@ -38,6 +42,8 @@ jest.mock('./core', () => ({
   }),
 }));
 
+// Capture module initialization before beforeEach clears the live mocks.
+const netInfoStartup = jest.mocked(NetInfo.configure).mock;
 const driverMode = core.stores.driverMode;
 const setOnline = jest.mocked(core.setOnline);
 const start = jest.fn();
@@ -57,6 +63,7 @@ function deferPermissionDenial() {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  core.stores.connection.getState().setNetwork(null);
   core.stores.session.getState().signedOut();
   driverMode.setState({
     availability: 'offline',
@@ -71,6 +78,44 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   jest.restoreAllMocks();
+});
+
+test('disables NetInfo reachability polling once before subscribing', () => {
+  expect(netInfoStartup.calls).toHaveLength(1);
+  const [[config]] = netInfoStartup.calls;
+  expect(config.reachabilityShouldRun?.()).toBe(false);
+  expect(netInfoStartup.invocationCallOrder[0]).toBeLessThan(
+    jest.mocked(NetInfo.addEventListener).mock.invocationCallOrder[0],
+  );
+  expect(NetInfo.configure).not.toHaveBeenCalled();
+});
+
+test('tracks NetInfo connectivity throughout the native app lifecycle', () => {
+  const { connection } = core.stores;
+  expect(connection.getState().network).toBeNull();
+  const watchNetwork = jest.mocked(NetInfo.addEventListener);
+  expect(watchNetwork).toHaveBeenCalledTimes(1);
+  const [[update]] = watchNetwork.mock.calls;
+  for (const isConnected of [false, null, true]) {
+    update({
+      type: NetInfoStateType.unknown,
+      isConnected,
+      isInternetReachable: null,
+      details: null,
+    });
+    expect(connection.getState().network).toBe(isConnected);
+    expect(connection.getState().connected).toBe(false);
+  }
+  cleanup();
+  expect(watchNetwork.mock.results[0].value).toHaveBeenCalledTimes(1);
+  cleanup = () => {};
+  update({
+    type: NetInfoStateType.none,
+    isConnected: false,
+    isInternetReachable: false,
+    details: null,
+  });
+  expect(connection.getState().network).toBe(true);
 });
 
 test.each(['denied', 'failed'] as const)(

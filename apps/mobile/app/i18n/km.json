@@ -1,6 +1,9 @@
 {
   "brand.name": "លឿន",
   "common.retry": "ព្យាយាមម្តងទៀត",
+  "sync.offline": "គ្មានអ៊ីនធឺណិត",
+  "sync.reconnecting": "កំពុងភ្ជាប់ឡើងវិញ…",
+  "sync.connected": "បានភ្ជាប់",
   "debug.language.phone": "ភាសាទូរសព្ទ",
   "debug.language.en": "English",
   "debug.language.km": "ខ្មែរ",
@@ -74,7 +77,6 @@
   "driverStatus.availability.on_trip": "កំពុងបំពេញដំណើរ",
   "driverStatus.goOnline": "បើកស្ថានភាពអនឡាញ",
   "driverStatus.goOffline": "បិទស្ថានភាពអនឡាញ",
-  "driverStatus.reconnecting": "កំពុងភ្ជាប់ឡើងវិញ…",
   "driverStatus.location.danger": "អនុញ្ញាតឱ្យចូលប្រើទីតាំង ដើម្បីទទួលសំណើដំណើរ។",
   "driverStatus.location.warning": "អ្នកនឹងទទួលសំណើដំណើរតែនៅពេលកម្មវិធីបើកប៉ុណ្ណោះ។",
   "driverStatus.openSettings": "បើកការកំណត់",

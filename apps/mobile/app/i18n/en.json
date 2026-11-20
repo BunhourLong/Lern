@@ -1,6 +1,9 @@
 {
   "brand.name": "Lern",
   "common.retry": "Try again",
+  "sync.offline": "Offline",
+  "sync.reconnecting": "Reconnecting…",
+  "sync.connected": "Connected",
   "debug.language.phone": "Phone",
   "debug.language.en": "English",
   "debug.language.km": "ខ្មែរ",
@@ -74,7 +77,6 @@
   "driverStatus.availability.on_trip": "On a trip",
   "driverStatus.goOnline": "Go online",
   "driverStatus.goOffline": "Go offline",
-  "driverStatus.reconnecting": "Reconnecting…",
   "driverStatus.location.danger": "Allow location access to receive offers.",
   "driverStatus.location.warning": "You’ll only receive offers while the app is open.",
   "driverStatus.openSettings": "Open Settings",

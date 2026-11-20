@@ -116,7 +116,6 @@ export default function DriverStatusScreen({
     >
       {verified && (
         <>
-          {!connected && <Banner message={t('driverStatus.reconnecting')} />}
           <Text role="bodyStrong" accessibilityLiveRegion="polite">
             {availabilityLabel}
           </Text>

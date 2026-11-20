@@ -82,6 +82,39 @@ test('shows the loading gate in the device language and starts the app once', as
   expect(startApp).toHaveBeenCalledTimes(1);
 });
 
+test('shows one localized sync toast over the PIN lock', async () => {
+  jest.useFakeTimers();
+  const { appConfig, connection, security, session } = core.stores;
+  try {
+    await render(<App />);
+    await act(() => {
+      appConfig.getState().setGate({ status: 'ok' });
+      session.getState().signedIn({
+        id: 'locked-rider',
+        phone: '+85512345678',
+        roles: ['rider'],
+      });
+      security.getState().update({ enabled: true, locked: true });
+      connection.setState({ network: false });
+    });
+    expect(
+      screen.getByRole('header', { name: 'កម្មវិធីបានចាក់សោ' }),
+    ).toBeOnTheScreen();
+    await act(() => jest.advanceTimersByTime(1000));
+    expect(
+      screen.getAllByRole('alert', { name: 'គ្មានអ៊ីនធឺណិត' }),
+    ).toHaveLength(1);
+  } finally {
+    await act(() => {
+      connection.setState(connection.getInitialState());
+      security.setState(security.getInitialState());
+      session.setState(session.getInitialState());
+      appConfig.setState(appConfig.getInitialState());
+    });
+    jest.useRealTimers();
+  }
+});
+
 test('reveals only the most recently activated native cycle after layout', async () => {
   const privacy = requireNativeModule<{
     cycle: jest.Mock<Promise<number>>;

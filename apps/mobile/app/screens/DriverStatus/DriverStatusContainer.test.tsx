@@ -370,7 +370,7 @@ describe('driver Home offer', () => {
     home.connection.getState().setConnected(false);
     await home.render();
 
-    expect(screen.getByRole('alert')).toHaveTextContent('Reconnecting…');
+    expect(screen.queryByText('Reconnecting…')).toBeNull();
     expect(button('Accept')).toBeDisabled();
     expect(button('Decline')).toBeDisabled();
     await fireEvent.press(button('Accept'));
@@ -729,7 +729,7 @@ test('disables the toggle while reconnecting and enables it when the socket retu
   const home = setup();
   await home.render();
   await act(() => home.connection.getState().setConnected(false));
-  expect(screen.getByRole('alert')).toHaveTextContent('Reconnecting…');
+  expect(screen.queryByText('Reconnecting…')).toBeNull();
   expect(button('Go online')).toBeDisabled();
   await fireEvent.press(button('Go online'));
   expect(home.requestLocationPermission).not.toHaveBeenCalled();
@@ -753,7 +753,7 @@ test('does not go online if the socket disconnects while permission is pending',
   await act(() => home.connection.getState().setConnected(false));
   await act(() => grant('always'));
 
-  expect(screen.getByRole('alert')).toHaveTextContent('Reconnecting…');
+  expect(screen.queryByText('Reconnecting…')).toBeNull();
   expect(button('Go online')).toBeDisabled();
   expect(home.setOnline).not.toHaveBeenCalled();
 });

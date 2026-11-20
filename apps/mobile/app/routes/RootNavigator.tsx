@@ -274,7 +274,6 @@ export function RootNavigator({
               {() => (
                 <RouteMessageContainer
                   route={route}
-                  connection={core.stores.connection}
                   storeUrl={storeUrl}
                 />
               )}

@@ -8,6 +8,7 @@ import {
   requestLocationPermission,
   startApp,
 } from './app/boot/app-core';
+import { SyncStatusToastContainer } from './app/components/SyncStatusToastContainer';
 import { LanguageContext } from './app/i18n';
 import { SecurityProvider } from './app/boot/SecurityProvider';
 import { RootNavigator } from './app/routes/RootNavigator';
@@ -33,6 +34,10 @@ function App() {
             />
           )}
         </SecurityProvider>
+        <SyncStatusToastContainer
+          connection={core.stores.connection}
+          session={core.stores.session}
+        />
       </SafeAreaProvider>
     </LanguageContext.Provider>
   );

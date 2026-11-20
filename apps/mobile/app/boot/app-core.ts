@@ -1,3 +1,4 @@
+import NetInfo from '@react-native-community/netinfo';
 import { io } from 'socket.io-client';
 import { Platform } from 'react-native';
 import {
@@ -16,6 +17,9 @@ import { followAvailability, isDriverOnline } from './driver-location';
 // shortcut: simulator/emulator only, move to environments/ when a physical device or a real build needs it
 const baseUrl =
   Platform.OS === 'android' ? 'http://10.0.2.2:3000' : 'http://localhost:3000';
+
+// The app only reads device connectivity, so skip HTTP reachability probes.
+NetInfo.configure({ reachabilityShouldRun: () => false });
 
 export const core = createCore({
   baseUrl,
@@ -76,6 +80,12 @@ export async function refreshLocationPermission() {
 // Returns the unsubscribe for useEffect. Failures go in the raw log so the screen shows them.
 export function startApp(): () => void {
   const log = core.stores.rawEvents.getState().add;
+  let watchingNetwork = true;
+  const unwatchNetwork = NetInfo.addEventListener(({ isConnected }) => {
+    // NetInfo's initial asynchronous delivery can arrive after unsubscribe.
+    if (watchingNetwork)
+      core.stores.connection.getState().setNetwork(isConnected);
+  });
   const unfollowAvailability = followAvailability(
     core.stores.driverMode,
     createLocationService(core.reportPosition),
@@ -88,6 +98,8 @@ export function startApp(): () => void {
   const unfollowDeviceLanguage = followDeviceLanguage(core.stores.language);
   core.boot().catch(err => log('boot.error', String(err)));
   return () => {
+    watchingNetwork = false;
+    unwatchNetwork();
     core.stopListeningForPush();
     unfollowDeviceLanguage();
     unfollowAvailability();
