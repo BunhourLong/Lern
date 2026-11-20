@@ -8,6 +8,13 @@ export async function lockTable(db: DataSource, table: string, mode = 'ACCESS EX
   await gate.connect();
   await gate.startTransaction();
   await gate.query(`LOCK TABLE ${table} IN ${mode} MODE`);
+  let released = false;
+  const release = async () => {
+    if (released) return;
+    released = true;
+    await gate.commitTransaction();
+    await gate.release();
+  };
   return {
     manager: gate.manager,
     async arrived(n: number) {
@@ -20,9 +27,8 @@ export async function lockTable(db: DataSource, table: string, mode = 'ACCESS EX
         await new Promise((resolve) => setTimeout(resolve, 20));
       }
     },
-    async release() {
-      await gate.commitTransaction();
-      await gate.release();
-    },
+    release,
+    // `await using` releases the lock even when the block throws before its explicit release
+    [Symbol.asyncDispose]: release,
   };
 }

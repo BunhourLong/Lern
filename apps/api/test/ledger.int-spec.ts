@@ -86,7 +86,7 @@ it('lets exactly one of 8 parallel completes win and append exactly one entry', 
   const N = 8;
   for (let round = 0; round < 5; round++) {
     const { driver, ride } = await assignedRide('arrive', 'start');
-    const gate = await lockTable(db(), 'rides');
+    await using gate = await lockTable(db(), 'rides');
     const racing = Array.from({ length: N }, () => step(driver, ride.id, 'complete').then((r) => r));
     await gate.arrived(N);
     await gate.release();
@@ -161,7 +161,7 @@ describe('the debt limit on going online', () => {
   it('refuses going online when a completion past the limit commits mid-request', async () => {
     const { driver } = await assignedRide('arrive', 'start', 'complete'); // owes exactly the limit
     const { ride } = await rideFor(driver, 'arrive', 'start');
-    const gate = await lockTable(db(), 'drivers', 'SHARE');
+    await using gate = await lockTable(db(), 'drivers', 'SHARE');
     await gate.manager.query(
       `INSERT INTO driver_ledger_entries (driver_id, ride_id, kind, amount_minor, currency) VALUES ($1, $2, 'commission', -1700, 'KHR')`,
       [driver.id, ride.id],

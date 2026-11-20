@@ -233,7 +233,7 @@ describe('MatchingService.sync', () => {
       const spot = nextSpot();
       const d = await driver(north(spot, 100));
       const rides = [await book(await signIn(app), spot), await book(await signIn(app), spot)];
-      const gate = await lockTable(db(), 'drivers');
+      await using gate = await lockTable(db(), 'drivers');
       const racing = rides.map((r) => sync(r.id));
       await gate.arrived(2);
       await gate.release();
@@ -397,7 +397,7 @@ describe('MatchingService.expire', () => {
       const { first, next, ride, offerId } = await offered();
       const listener = await listen(first);
       await due(offerId);
-      const gate = await lockTable(db(), 'ride_offers');
+      await using gate = await lockTable(db(), 'ride_offers');
       const racing = [expire(offerId), expire(offerId)];
       await gate.arrived(2);
       await gate.release();
