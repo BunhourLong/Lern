@@ -5,6 +5,7 @@ import request from 'supertest';
 import type { App } from 'supertest/types';
 import { DataSource } from 'typeorm';
 import { LocationService } from '../src/location/location.service';
+import { OutboxService } from '../src/outbox/outbox.service';
 import { type Actor, bootApp, signIn } from './support/actors';
 import { isolatedDatabase } from './support/isolated-database';
 import { assign, offer } from './support/offers';
@@ -81,7 +82,8 @@ const listen = async (a: Actor) => {
       DRIVER_CONNECTIVITY_EVENT,
       a.id,
     ]);
-    const seen = await take(events.length + 1, 2000); // nobody kicks for the sentinel: the 1 s poll sends it
+    app.get(OutboxService).kick(); // a raw insert kicks nothing; this sends the sentinel now, not on the 1 s poll
+    const seen = await take(events.length + 1, 2000);
     expect(seen[seen.length - 1]).toEqual({ sentinel: true });
     return seen.slice(0, -1);
   };
