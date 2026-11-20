@@ -84,8 +84,16 @@ it('owes nothing for a ride cancelled at pickup or still in progress', async () 
 // at its guarded ride UPDATE until all N have arrived. N + gate + this monitor fit the pool of 10.
 it('lets exactly one of 8 parallel completes win and append exactly one entry', async () => {
   const N = 8;
+  // One driver and one rider for every round: signing in per round blew the 5 s budget under load (M6.10a)
+  const driver = await newDriver();
+  const rider = await signIn(app);
   for (let round = 0; round < 5; round++) {
-    const { driver, ride } = await assignedRide('arrive', 'start');
+    const quote = (await http().post('/quotes').set(rider.auth).send(trip).expect(201)).body as Quote;
+    const ride = (await http().post('/rides').set(rider.auth).send({ quoteId: quote.id }).expect(201)).body as Ride;
+    await assign(app, driver, ride.id);
+    for (const s of ['arrive', 'start']) await step(driver, ride.id, s).expect(200);
+    // The reused driver would pass the debt limit on the 2nd completion, so zero this ride's commission (KHR stays)
+    await db().query('UPDATE rides SET commission_minor = 0 WHERE id = $1', [ride.id]);
     await using gate = await lockTable(db(), 'rides');
     const racing = Array.from({ length: N }, () => step(driver, ride.id, 'complete').then((r) => r));
     await gate.arrived(N);
@@ -97,7 +105,7 @@ it('lets exactly one of 8 parallel completes win and append exactly one entry', 
       ride.id,
     ]);
     expect(state).toEqual({ status: 'completed', version: 5 });
-    expect(await entries(ride.id)).toEqual(owes(driver));
+    expect(await entries(ride.id)).toEqual([{ driver_id: driver.id, kind: 'commission', amount_minor: '0', currency: 'KHR' }]);
   }
 });
 
