@@ -14,6 +14,7 @@ import {
   AppPinContainer,
   type PinActions,
 } from '../screens/AppPin/AppPinContainer';
+import DriverApplyContainer from '../screens/DriverApply/DriverApplyContainer';
 import LoginContainer from '../screens/Login/LoginContainer';
 import OtpContainer from '../screens/Otp/OtpContainer';
 import RouteMessageContainer from '../screens/RouteMessage/RouteMessageContainer';
@@ -27,10 +28,11 @@ type Props = {
   core: PinActions & {
     stores: Pick<
       Core['stores'],
-      'session' | 'appConfig' | 'notification' | 'security'
+      'session' | 'appConfig' | 'notification' | 'security' | 'driverMode'
     >;
     api: Pick<Core['api'], 'requestOtp'>;
     signIn: Core['signIn'];
+    becomeDriver: Core['becomeDriver'];
   };
   debug: ReactNode;
   foreground?: boolean;
@@ -160,6 +162,8 @@ export function RootNavigator({ core, debug, foreground = true }: Props) {
               {({ navigation }) => (
                 <RoleTabs
                   role={route}
+                  driverMode={core.stores.driverMode}
+                  onApply={() => navigation.navigate('DriverApply')}
                   onEnroll={
                     enabled ? undefined : () => navigation.navigate('EnrollPin')
                   }
@@ -170,6 +174,16 @@ export function RootNavigator({ core, debug, foreground = true }: Props) {
                   }
                 />
               )}
+            </Stack.Screen>
+            <Stack.Screen
+              name="DriverApply"
+              options={{
+                headerShown: true,
+                title: t('driverApply.title'),
+                headerBackTitle: t('route.back'),
+              }}
+            >
+              {() => <DriverApplyContainer becomeDriver={core.becomeDriver} />}
             </Stack.Screen>
             <Stack.Screen name="EnrollPin">
               {({ navigation }) => (

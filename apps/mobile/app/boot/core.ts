@@ -1,5 +1,6 @@
 import {
   type ActiveRides,
+  type ApplyDriver,
   type CancelReason,
   type LocationPoint,
   type Me,
@@ -119,7 +120,7 @@ export function createCore({
     push.stop();
     queue.clear();
     activeRide.getState().reset();
-    driverMode.getState().setAvailability(null);
+    driverMode.setState({ availability: null, verification: null });
     rawEvents.getState().reset(); // the next user on this phone must not see the last one's rides
     session.getState().signedOut();
     // The PIN belongs to who was signed in; a Keychain that refuses to clear keeps it until the next sign-out
@@ -248,14 +249,15 @@ export function createCore({
     const initial = driverMode.getState();
     try {
       const profile = await api.profile();
-      if (
-        request === availabilityRequest &&
-        session.getState().me === user &&
-        driverMode.getState() === initial
-      )
-        initial.setAvailability(profile.availability);
+      if (request === availabilityRequest && session.getState().me === user)
+        driverMode.setState(state => ({
+          // Keep availability from a newer toggle. Verification only comes from the profile.
+          availability:
+            state === initial ? profile.availability : state.availability,
+          verification: profile.verification,
+        }));
     } catch {
-      // Keep the last known shift status when the server cannot be reached. The next resume or reconnect retries.
+      // Keep the last known driver status. The next resume or reconnect retries.
     }
   }
 
@@ -274,12 +276,13 @@ export function createCore({
       if (!stillReplacing()) return;
     }
     const current = live();
-    const availability = user.roles.includes('driver')
-      ? (await api.profile()).availability
-      : null;
+    const profile = user.roles.includes('driver') ? await api.profile() : null;
     if (!current()) return;
     session.getState().signedIn(user);
-    driverMode.getState().setAvailability(availability);
+    driverMode.setState({
+      availability: profile?.availability ?? null,
+      verification: profile?.verification ?? null,
+    });
     socket?.close();
     socket = connectSocket({
       url: baseUrl,
@@ -390,6 +393,17 @@ export function createCore({
       await start(await api.me());
     },
     signOut: () => api.signOut(),
+    async becomeDriver(input: ApplyDriver): Promise<void> {
+      const current = live();
+      try {
+        await api.applyDriver(input);
+      } catch (err) {
+        if (!(err instanceof ApiError && err.status === 409)) throw err;
+      }
+      if (!current()) return;
+      const user = await api.me();
+      if (current()) await start(user);
+    },
 
     // Optional app lock: covers the screen only, the session stays valid behind it
     pinWaitMs: pinLock.waitMs,

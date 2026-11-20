@@ -7,6 +7,7 @@ import { themes } from '@theme';
 import { InteractionContext } from '../hooks/use-interaction';
 import type { NotificationTarget } from '../boot/core';
 import { createAppConfigStore } from '../stores/app-config.store';
+import { createDriverModeStore } from '../stores/driver-mode.store';
 import { createSecurityStore } from '../stores/security.store';
 import { createSessionStore } from '../stores/session.store';
 import { RootNavigator } from './RootNavigator';
@@ -46,6 +47,8 @@ function setup(
   const session = createSessionStore();
   const security = createSecurityStore();
   const appConfig = createAppConfigStore();
+  const driverMode = createDriverModeStore();
+  driverMode.setState({ verification: 'pending' });
   const notification = createStore<NotificationTarget | null>()(() => null);
   const requestOtp = jest
     .fn<Promise<undefined>, [string]>()
@@ -57,9 +60,12 @@ function setup(
     security.getState().update({ enabled: true }),
   );
   const core = {
-    stores: { session, security, appConfig, notification },
+    stores: { session, security, appConfig, notification, driverMode },
     api: { requestOtp },
     signIn,
+    becomeDriver: jest.fn(async () => {
+      session.getState().signedIn(me('rider', 'driver'));
+    }),
     unlock: jest.fn(async () => {
       security.getState().update({ locked: false });
       return { ok: true as const };
@@ -128,6 +134,60 @@ test('enrolls from Account after both PIN entries match', async () => {
   expect(screen.getByText('App lock is on.')).toBeOnTheScreen();
 });
 
+test('opens the driver application from rider Account and resets to Driver Home on success', async () => {
+  const { core, session, appConfig, navigator } = setup();
+  session.getState().signedIn(me('rider'));
+  appConfig.getState().setGate({ status: 'ok' });
+  await render(navigator);
+
+  await fireEvent.press(screen.getByRole('tab', { name: 'Account' }));
+  expect(
+    screen.getByRole('button', { name: 'Set up app lock' }),
+  ).toBeOnTheScreen();
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Drive with Lern' }),
+  );
+  expect(
+    screen.container
+      .queryAll(node => node.type === 'RNSScreenStackHeaderConfig')
+      .map(header => header.props),
+  ).toContainEqual(
+    expect.objectContaining({ title: 'Drive with Lern', backTitle: 'Back' }),
+  );
+  await fireEvent.press(screen.getByRole('radio', { name: 'Motorbike' }));
+  await fireEvent.changeText(screen.getByLabelText('License plate'), 'PP 1');
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Send application' }),
+  );
+
+  expect(core.becomeDriver).toHaveBeenCalledWith({
+    vehicleType: 'moto',
+    plate: 'PP 1',
+  });
+  expect(
+    screen.getByRole('header', { name: 'Application under review' }),
+  ).toBeOnTheScreen();
+  expect(
+    screen.getByRole('tab', { name: 'Home', selected: true }),
+  ).toBeOnTheScreen();
+  expect(
+    screen.queryByLabelText('License plate', { includeHiddenElements: true }),
+  ).toBeNull();
+});
+
+test('driver Account keeps app-lock enrollment and hides the application action', async () => {
+  const { session, appConfig, navigator } = setup();
+  session.getState().signedIn(me('rider', 'driver'));
+  appConfig.getState().setGate({ status: 'ok' });
+  await render(navigator);
+
+  await fireEvent.press(screen.getByRole('tab', { name: 'Account' }));
+  expect(
+    screen.getByRole('button', { name: 'Set up app lock' }),
+  ).toBeOnTheScreen();
+  expect(screen.queryByRole('button', { name: 'Drive with Lern' })).toBeNull();
+});
+
 test('requires a fresh PIN for signed-in Debug and cancels without opening it', async () => {
   const { security, session, appConfig, navigator } = setup();
   session.getState().signedIn(me('driver'));
@@ -190,16 +250,20 @@ test('switches between login, rider and driver as the session changes', async ()
 
   await act(() => session.getState().signedIn(me('rider', 'driver')));
   expect(screen.queryByRole('header', { name: 'Rider home' })).toBeNull();
-  expect(screen.getByRole('header', { name: 'Driver home' })).toBeOnTheScreen();
+  expect(
+    screen.getByRole('header', { name: 'Application under review' }),
+  ).toBeOnTheScreen();
 
   await act(() => session.getState().signedOut());
-  expect(screen.queryByRole('header', { name: 'Driver home' })).toBeNull();
+  expect(
+    screen.queryByRole('header', { name: 'Application under review' }),
+  ).toBeNull();
   expect(screen.getByLabelText('Phone number')).toBeOnTheScreen();
 });
 
 test.each([
   ['rider', 'Rider home'],
-  ['driver', 'Driver home'],
+  ['driver', 'Application under review'],
 ] as const)(
   'replaces both sign-in screens with %s home after verification',
   async (role, title) => {
@@ -257,7 +321,9 @@ test('selects Driver Home when a rider on Activity becomes a driver', async () =
 
   await act(() => session.getState().signedIn(me('driver')));
 
-  expect(screen.getByRole('header', { name: 'Driver home' })).toBeOnTheScreen();
+  expect(
+    screen.getByRole('header', { name: 'Application under review' }),
+  ).toBeOnTheScreen();
   expect(
     screen.getByRole('tab', { name: 'Home', selected: true }),
   ).toBeOnTheScreen();
@@ -549,7 +615,9 @@ test('opens Debug and drops it from the stack when the session changes', async (
 
   await act(() => session.getState().signedIn(me('driver')));
   expect(screen.queryByRole('header', { name: 'Debug tools' })).toBeNull();
-  expect(screen.getByRole('header', { name: 'Driver home' })).toBeOnTheScreen();
+  expect(
+    screen.getByRole('header', { name: 'Application under review' }),
+  ).toBeOnTheScreen();
 });
 
 test('updates the screen background from the light to the dark token', async () => {
@@ -595,7 +663,7 @@ test('closing the protected stack also dismisses an open modal across unlock', a
   expect(screen.queryByText('Ride detail modal')).toBeNull();
   await fireEvent.changeText(screen.getByLabelText('6-digit PIN'), '123456');
   await fireEvent.press(screen.getByRole('button', { name: 'Unlock' }));
-  expect(screen.getByText('Driver home')).toBeOnTheScreen();
+  expect(screen.getByText('Application under review')).toBeOnTheScreen();
   expect(screen.queryByText('Ride detail modal')).toBeNull();
 });
 

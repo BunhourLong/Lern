@@ -24,6 +24,13 @@ it.each([
   expect(translate(language, 'common.retry')).toBe(text);
 });
 
+it.each(['driverApply.error', 'pin.incorrect'] as const)(
+  'uses the common Khmer retry spelling in %s',
+  key => {
+    expect(translate('km', key)).toContain(translate('km', 'common.retry'));
+  },
+);
+
 it('replaces string and number variables every time they appear', () => {
   jest.replaceProperty(en, 'common.retry', 'Hi {name}, {count} for {name}');
   expect(translate('en', 'common.retry', { name: 'Dara', count: 0 })).toBe(
