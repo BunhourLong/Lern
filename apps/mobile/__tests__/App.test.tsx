@@ -38,6 +38,8 @@ jest.mock('../app/boot/app-core', () => {
       interruptPinCheck: jest.fn(),
       refreshAvailability: jest.fn(),
       setOnline: jest.fn(),
+      accept: jest.fn(),
+      decline: jest.fn(),
       pinWaitMs: () => 0,
       stores: {
         language,
@@ -47,6 +49,9 @@ jest.mock('../app/boot/app-core', () => {
         connection: jest
           .requireActual('../app/stores/connection.store')
           .createConnectionStore(),
+        activeRide: jest
+          .requireActual('../app/stores/active-ride.store')
+          .createActiveRideStore(),
         security: jest
           .requireActual('../app/stores/security.store')
           .createSecurityStore(),

@@ -30,7 +30,7 @@ type Props = Pick<
   'requestLocationPermission' | 'refreshLocationPermission'
 > & {
   core: PinActions &
-    Pick<Core, 'setOnline' | 'refreshAvailability'> & {
+    Pick<Core, 'setOnline' | 'refreshAvailability' | 'accept' | 'decline'> & {
       stores: Pick<
         Core['stores'],
         | 'session'
@@ -39,6 +39,7 @@ type Props = Pick<
         | 'security'
         | 'driverMode'
         | 'connection'
+        | 'activeRide'
       >;
       api: Pick<Core['api'], 'requestOtp'>;
       signIn: Core['signIn'];
@@ -181,8 +182,11 @@ export function RootNavigator({
                   driverStatus={{
                     driverMode: core.stores.driverMode,
                     connection: core.stores.connection,
+                    activeRide: core.stores.activeRide,
                     setOnline: core.setOnline,
                     refreshAvailability: core.refreshAvailability,
+                    accept: core.accept,
+                    decline: core.decline,
                     requestLocationPermission,
                     refreshLocationPermission,
                   }}

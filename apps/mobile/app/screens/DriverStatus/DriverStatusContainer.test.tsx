@@ -1,3 +1,4 @@
+import type { Offer, Ride } from '@lern/contracts';
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
 import {
   AccessibilityInfo,
@@ -10,6 +11,7 @@ import type { AppStateStatus } from 'react-native';
 import { themes } from '@theme';
 import { ApiError } from '../../services/api.service';
 import type { Permission } from '../../services/location.service';
+import { createActiveRideStore } from '../../stores/active-ride.store';
 import { createConnectionStore } from '../../stores/connection.store';
 import { createDriverModeStore } from '../../stores/driver-mode.store';
 import DriverStatusContainer from './DriverStatusContainer';
@@ -18,6 +20,10 @@ jest.mock(
   'react-native-safe-area-context',
   () => jest.requireActual('react-native-safe-area-context/jest/mock').default,
 );
+
+jest.mock('expo-glass-effect', () => ({
+  isLiquidGlassAvailable: () => false,
+}));
 
 jest.mock('react-native/Libraries/Utilities/useColorScheme', () => ({
   default: jest.fn(),
@@ -34,6 +40,9 @@ function setup(verification: 'verified' | null = 'verified') {
   const props = {
     driverMode,
     connection,
+    activeRide: createActiveRideStore(),
+    accept: jest.fn<Promise<void>, [string]>().mockResolvedValue(undefined),
+    decline: jest.fn<Promise<void>, [string]>().mockResolvedValue(undefined),
     requestLocationPermission: jest.fn(
       async (): Promise<Permission> => 'always',
     ),
@@ -45,7 +54,8 @@ function setup(verification: 'verified' | null = 'verified') {
   };
   return {
     ...props,
-    render: () => render(<DriverStatusContainer {...props} />),
+    render: (now?: () => number) =>
+      render(<DriverStatusContainer {...props} now={now} />),
     props,
   };
 }
@@ -53,6 +63,441 @@ function setup(verification: 'verified' | null = 'verified') {
 const button = (name: string) => screen.getByRole('button', { name });
 const locationNeeded = 'Allow location access to receive offers.';
 const foregroundOnly = 'You’ll only receive offers while the app is open.';
+
+const offerStart = Date.parse('2026-11-20T00:00:00.000Z');
+const pendingOffer: Offer = {
+  id: '00000000-0000-4000-8000-000000000001',
+  rideId: '00000000-0000-4000-8000-000000000002',
+  status: 'pending',
+  expiresAt: new Date(offerStart + 10_000).toISOString(),
+  distanceM: 850,
+  vehicleType: 'remork',
+  pickup: { lat: 11.55, lng: 104.92 },
+  dropoff: { lat: 11.54, lng: 104.92 },
+  fare: { amountMinor: 12_000, currency: 'KHR' },
+};
+const driverRide: Ride = {
+  id: pendingOffer.rideId,
+  status: 'driver_assigned',
+  version: 1,
+  vehicleType: pendingOffer.vehicleType,
+  pickup: pendingOffer.pickup,
+  dropoff: pendingOffer.dropoff,
+  fare: pendingOffer.fare,
+};
+
+function setupOffer(offer = pendingOffer) {
+  const home = setup();
+  home.driverMode.getState().setAvailability('reserved');
+  home.activeRide.getState().applyOffer(offer);
+  return { ...home, render: () => home.render(() => offerStart) };
+}
+
+const offerHeading = (name: string) => screen.getByRole('header', { name });
+const queryOfferHeading = (name: string) =>
+  screen.queryByRole('header', { name });
+
+describe('driver Home offer', () => {
+  test.each([
+    [850, { amountMinor: 12_000, currency: 'KHR' }, '850 m', '12,000 ៛'],
+    [1200, { amountMinor: 375, currency: 'USD' }, '1.2 km', '$3.75'],
+  ] as const)(
+    'shows a pending offer at %i metres',
+    async (distanceM, fare, distance, price) => {
+      const home = setupOffer({ ...pendingOffer, distanceM, fare });
+      await home.render();
+
+      expect(offerHeading('New ride offer')).toBeOnTheScreen();
+      expect(
+        screen.getByText(`Pickup distance: ${distance}`),
+      ).toBeOnTheScreen();
+      expect(screen.getByText(`Fare: ${price}`)).toBeOnTheScreen();
+      expect(screen.getByText('Vehicle type: Remork')).toBeOnTheScreen();
+      expect(screen.getByText('10 s remaining')).toBeOnTheScreen();
+      expect(button('Accept')).toBeEnabled();
+      expect(button('Decline')).toBeEnabled();
+    },
+  );
+
+  test('shows and announces a held offer only after the driver is verified', async () => {
+    jest.replaceProperty(Platform, 'OS', 'ios');
+    const announce = jest
+      .spyOn(AccessibilityInfo, 'announceForAccessibility')
+      .mockClear()
+      .mockImplementation(() => undefined);
+    const home = setupOffer();
+    home.driverMode.setState({ verification: 'pending' });
+    await home.render();
+    expect(queryOfferHeading('New ride offer')).toBeNull();
+    expect(announce).not.toHaveBeenCalled();
+
+    await act(() => home.driverMode.setState({ verification: 'verified' }));
+    expect(offerHeading('New ride offer')).toBeOnTheScreen();
+    expect(announce.mock.calls).toEqual([['New ride offer']]);
+  });
+
+  test('ticks to local expiry and announces arrival and expiry once on iOS', async () => {
+    jest.useFakeTimers();
+    const clockOffset = 60_000;
+    jest.setSystemTime(offerStart + clockOffset);
+    jest.replaceProperty(Platform, 'OS', 'ios');
+    const announce = jest
+      .spyOn(AccessibilityInfo, 'announceForAccessibility')
+      .mockClear()
+      .mockImplementation(() => undefined);
+    try {
+      const home = setup();
+      home.driverMode.getState().setAvailability('reserved');
+      await home.render(() => Date.now() - clockOffset);
+      await act(() => home.activeRide.getState().applyOffer(pendingOffer));
+      expect(
+        screen.getByText('10 s remaining').props.accessibilityLiveRegion,
+      ).toBeUndefined();
+      expect(announce.mock.calls).toEqual([['New ride offer']]);
+
+      await act(() => jest.advanceTimersByTime(1000));
+      expect(screen.getByText('9 s remaining')).toBeOnTheScreen();
+      expect(announce).toHaveBeenCalledTimes(1);
+      await act(() => jest.advanceTimersByTime(9000));
+
+      expect(offerHeading('Offer expired')).toBeOnTheScreen();
+      expect(button('Dismiss')).toBeEnabled();
+      expect(
+        screen.queryByRole('button', { name: /Accept|Decline/ }),
+      ).toBeNull();
+      expect(home.activeRide.getState().offer?.status).toBe('pending');
+
+      await act(() => {
+        home.activeRide
+          .getState()
+          .applyOffer({ ...pendingOffer, status: 'expired' });
+        jest.advanceTimersByTime(1000);
+      });
+      expect(announce.mock.calls).toEqual([
+        ['New ride offer'],
+        ['Offer expired'],
+      ]);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  test('hides the offer after accepting when core applies the matching driver ride', async () => {
+    const home = setupOffer();
+    home.accept.mockImplementationOnce(async () => {
+      home.activeRide.getState().applyRide(driverRide, 'driver');
+    });
+    await home.render();
+    await act(() =>
+      home.activeRide
+        .getState()
+        .applyRide({ ...driverRide, id: 'other' }, 'driver'),
+    );
+    await fireEvent.press(button('Accept'));
+
+    expect(home.accept).toHaveBeenCalledWith(pendingOffer.id);
+    expect(home.activeRide.getState().driver?.id).toBe(pendingOffer.rideId);
+    expect(queryOfferHeading('New ride offer')).toBeNull();
+    expect(queryOfferHeading('Ride no longer available')).toBeNull();
+  });
+
+  test('hides the offer after declining when core applies the declined response', async () => {
+    const home = setupOffer();
+    home.decline.mockImplementationOnce(async () => {
+      home.activeRide
+        .getState()
+        .applyOffer({ ...pendingOffer, status: 'declined' });
+    });
+    await home.render();
+    await fireEvent.press(button('Decline'));
+
+    expect(home.decline).toHaveBeenCalledWith(pendingOffer.id);
+    expect(home.activeRide.getState().offer?.status).toBe('declined');
+    expect(queryOfferHeading('New ride offer')).toBeNull();
+    expect(queryOfferHeading('Ride no longer available')).toBeNull();
+  });
+
+  test('announces the successful end of an offer once when its card disappears on iOS', async () => {
+    jest.replaceProperty(Platform, 'OS', 'ios');
+    const announce = jest
+      .spyOn(AccessibilityInfo, 'announceForAccessibility')
+      .mockClear()
+      .mockImplementation(() => undefined);
+    const home = setupOffer();
+    home.accept.mockImplementationOnce(async () => {
+      home.activeRide.getState().applyRide(driverRide, 'driver');
+    });
+    await home.render();
+    await fireEvent.press(button('Accept'));
+
+    expect(announce.mock.calls).toEqual([
+      ['New ride offer'],
+      ['Ride offer accepted'],
+    ]);
+    expect(queryOfferHeading('New ride offer')).toBeNull();
+  });
+
+  test('applies the validated 409 offer and shows its server status', async () => {
+    const home = setupOffer();
+    const expired = { ...pendingOffer, status: 'expired' };
+    home.accept.mockRejectedValueOnce(new ApiError(409, { offer: expired }));
+    await home.render();
+    await fireEvent.press(button('Accept'));
+
+    expect(home.activeRide.getState().offer).toEqual(expired);
+    expect(offerHeading('Offer expired')).toBeOnTheScreen();
+    expect(screen.queryByRole('button', { name: 'Accept' })).toBeNull();
+  });
+
+  test('shows unavailable when a 409 returns the same pending offer', async () => {
+    const home = setupOffer();
+    home.accept.mockRejectedValueOnce(
+      new ApiError(409, { offer: pendingOffer }),
+    );
+    await home.render();
+    await fireEvent.press(button('Accept'));
+
+    expect(offerHeading('Ride no longer available')).toBeOnTheScreen();
+    expect(screen.queryByRole('button', { name: 'Accept' })).toBeNull();
+  });
+
+  test('keeps a newer offer when an older request returns a 409', async () => {
+    const home = setupOffer();
+    let reject!: (cause: ApiError) => void;
+    home.accept.mockReturnValueOnce(
+      new Promise((_resolve, fail) => {
+        reject = fail;
+      }),
+    );
+    await home.render();
+    await fireEvent.press(button('Accept'));
+    const next = {
+      ...pendingOffer,
+      id: '00000000-0000-4000-8000-000000000003',
+    };
+    await act(() => {
+      home.activeRide.getState().applyOffer(next);
+      home.activeRide.getState().applyOffer({ ...next, status: 'cancelled' });
+    });
+    await act(() =>
+      reject(
+        new ApiError(409, {
+          offer: { ...pendingOffer, status: 'expired' },
+        }),
+      ),
+    );
+
+    expect(home.activeRide.getState().offer?.id).toBe(next.id);
+    expect(offerHeading('Ride no longer available')).toBeOnTheScreen();
+  });
+
+  test('shows unavailable after 404 and dismisses only the current offer', async () => {
+    const home = setupOffer();
+    home.decline.mockRejectedValueOnce(new ApiError(404, {}));
+    await home.render();
+    await fireEvent.press(button('Decline'));
+
+    expect(offerHeading('Ride no longer available')).toBeOnTheScreen();
+    expect(screen.queryByRole('button', { name: /Accept|Decline/ })).toBeNull();
+    await fireEvent.press(button('Dismiss'));
+    expect(queryOfferHeading('Ride no longer available')).toBeNull();
+    await act(() =>
+      home.activeRide.getState().applyOffer({
+        ...pendingOffer,
+        id: '00000000-0000-4000-8000-000000000003',
+      }),
+    );
+    expect(button('Accept')).toBeEnabled();
+  });
+
+  test.each([
+    [0, 'No connection, try again'],
+    [500, 'Something went wrong, try again'],
+    [409, 'Something went wrong, try again'],
+  ])(
+    'shows a retryable inline offer error for status %i',
+    async (status, message) => {
+      const home = setupOffer();
+      home.accept.mockRejectedValueOnce(
+        new ApiError(status, { offer: { status: 'expired' } }),
+      );
+      await home.render();
+      await fireEvent.press(button('Accept'));
+
+      expect(screen.getByText(message).props.accessibilityLiveRegion).toBe(
+        'polite',
+      );
+      expect(home.activeRide.getState().offer).toEqual(pendingOffer);
+      expect(button('Accept')).toBeEnabled();
+      expect(button('Decline')).toBeEnabled();
+    },
+  );
+
+  test('ignores rapid taps and marks only the running offer action busy', async () => {
+    const home = setupOffer();
+    let finish!: () => void;
+    home.decline.mockReturnValueOnce(
+      new Promise(resolve => {
+        finish = resolve;
+      }),
+    );
+    await home.render();
+    const accept = button('Accept');
+    const decline = button('Decline');
+    await act(async () => {
+      await fireEvent.press(decline);
+      expect(accept).toBeEnabled();
+      await fireEvent.press(accept);
+      await fireEvent.press(decline);
+    });
+
+    expect(home.decline).toHaveBeenCalledTimes(1);
+    expect(home.accept).not.toHaveBeenCalled();
+    expect(button('Accept')).toBeDisabled();
+    expect(button('Accept')).not.toBeBusy();
+    expect(button('Decline')).toBeDisabled();
+    expect(button('Decline')).toBeBusy();
+    await act(() => {
+      home.activeRide
+        .getState()
+        .applyOffer({ ...pendingOffer, status: 'declined' });
+      finish();
+    });
+  });
+
+  test('disables both offer actions while reconnecting and restores them on reconnect', async () => {
+    const home = setupOffer();
+    home.connection.getState().setConnected(false);
+    await home.render();
+
+    expect(screen.getByRole('alert')).toHaveTextContent('Reconnecting…');
+    expect(button('Accept')).toBeDisabled();
+    expect(button('Decline')).toBeDisabled();
+    await fireEvent.press(button('Accept'));
+    await fireEvent.press(button('Decline'));
+    expect(home.accept).not.toHaveBeenCalled();
+    expect(home.decline).not.toHaveBeenCalled();
+    await act(() => home.connection.getState().setConnected(true));
+    expect(button('Accept')).toBeEnabled();
+    expect(button('Decline')).toBeEnabled();
+  });
+
+  test('ignores a tap on the old offer card when the socket disconnects', async () => {
+    const home = setupOffer();
+    let tap: Promise<unknown> | undefined;
+    // Deliver the queued tap after the store changes, before Home observes it.
+    const unsubscribe = home.connection.subscribe(() => {
+      const accept = button('Accept');
+      expect(accept).toBeEnabled();
+      tap = fireEvent.press(accept);
+    });
+
+    try {
+      await home.render();
+      await act(async () => {
+        home.connection.getState().setConnected(false);
+        expect(tap).toBeDefined();
+        await tap;
+      });
+
+      expect(home.accept).not.toHaveBeenCalled();
+      expect(button('Accept')).toBeDisabled();
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  test.each<[string, (home: ReturnType<typeof setupOffer>) => void]>([
+    [
+      'the driver is suspended',
+      ({ driverMode }) => driverMode.setState({ verification: 'suspended' }),
+    ],
+    [
+      'a replacement offer arrives',
+      ({ activeRide }) =>
+        activeRide.getState().applyOffer({ ...pendingOffer, id: 'new-offer' }),
+    ],
+    [
+      'the server cancels the offer',
+      ({ activeRide }) =>
+        activeRide
+          .getState()
+          .applyOffer({ ...pendingOffer, status: 'cancelled' }),
+    ],
+    [
+      'the matching driver ride arrives',
+      ({ activeRide }) => activeRide.getState().applyRide(driverRide, 'driver'),
+    ],
+  ])('ignores a tap on the old offer card when %s', async (_case, update) => {
+    const home = setupOffer();
+    await home.render();
+    const accept = button('Accept');
+
+    await act(async () => {
+      update(home);
+      expect(accept).toBeEnabled();
+      await fireEvent.press(accept);
+    });
+
+    expect(home.accept).not.toHaveBeenCalled();
+  });
+
+  test('ignores Accept after expiry before the next countdown tick', async () => {
+    jest.useFakeTimers();
+    try {
+      const home = setupOffer();
+      let now = Date.parse(pendingOffer.expiresAt) - 1;
+      await render(<DriverStatusContainer {...home.props} now={() => now} />);
+      expect(screen.getByText('1 s remaining')).toBeOnTheScreen();
+
+      now += 1;
+      const accept = button('Accept');
+      expect(accept).toBeEnabled();
+      await fireEvent.press(accept);
+
+      expect(home.accept).not.toHaveBeenCalled();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  test.each([
+    ['expired', 'Offer expired'],
+    ['accepted', 'Ride no longer available'],
+    ['cancelled', 'Ride no longer available'],
+  ] as const)(
+    'shows a dismissible %s offer in dark mode',
+    async (status, title) => {
+      jest.mocked(useColorScheme).mockReturnValue('dark');
+      const home = setupOffer({ ...pendingOffer, status });
+      await home.render();
+
+      expect(offerHeading(title)).toHaveStyle({ color: themes.dark.text });
+      expect(
+        screen.queryByRole('button', { name: /Accept|Decline/ }),
+      ).toBeNull();
+      await fireEvent.press(button('Dismiss'));
+      expect(queryOfferHeading(title)).toBeNull();
+    },
+  );
+
+  test('does not show the card for an offer already declined or matched to a driver ride', async () => {
+    const home = setupOffer({ ...pendingOffer, status: 'declined' });
+    await home.render();
+    expect(queryOfferHeading('New ride offer')).toBeNull();
+    expect(queryOfferHeading('Ride no longer available')).toBeNull();
+
+    await act(() =>
+      home.activeRide
+        .getState()
+        .applyOffer({ ...pendingOffer, id: 'new-offer' }),
+    );
+    expect(offerHeading('New ride offer')).toBeOnTheScreen();
+    await act(() => home.activeRide.getState().applyRide(driverRide, 'driver'));
+    expect(queryOfferHeading('New ride offer')).toBeNull();
+    expect(queryOfferHeading('Ride no longer available')).toBeNull();
+  });
+});
 
 test('shows loading, keeps Debug available and updates when the store receives a status', async () => {
   const { driverMode, props } = setup(null);

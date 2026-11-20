@@ -6,6 +6,7 @@ import { createStore } from 'zustand/vanilla';
 import { themes } from '@theme';
 import { InteractionContext } from '../hooks/use-interaction';
 import type { NotificationTarget } from '../boot/core';
+import { createActiveRideStore } from '../stores/active-ride.store';
 import { createAppConfigStore } from '../stores/app-config.store';
 import { createConnectionStore } from '../stores/connection.store';
 import { createDriverModeStore } from '../stores/driver-mode.store';
@@ -70,10 +71,13 @@ function setup(
       notification,
       driverMode,
       connection,
+      activeRide: createActiveRideStore(),
     },
     api: { requestOtp },
     setOnline: jest.fn(),
     refreshAvailability: jest.fn(),
+    accept: jest.fn(),
+    decline: jest.fn(),
     signIn,
     becomeDriver: jest.fn(async () => {
       session.getState().signedIn(me('rider', 'driver'));
@@ -125,6 +129,34 @@ test('wires the driver Home toggle to the injected permission and core action', 
 
   expect(requestLocationPermission).toHaveBeenCalledTimes(1);
   expect(core.setOnline).toHaveBeenCalledWith(true);
+});
+
+test('wires the driver Home offer and its actions to core', async () => {
+  const { core, session, appConfig, navigator } = setup();
+  session.getState().signedIn(me('driver'));
+  appConfig.getState().setGate({ status: 'ok' });
+  core.stores.driverMode.setState({
+    availability: 'reserved',
+    verification: 'verified',
+  });
+  core.stores.connection.getState().setConnected(true);
+  core.stores.activeRide.getState().applyOffer({
+    id: 'offer-1',
+    rideId: 'ride-1',
+    status: 'pending',
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    distanceM: 850,
+    vehicleType: 'remork',
+    pickup: { lat: 11.55, lng: 104.92 },
+    dropoff: { lat: 11.54, lng: 104.92 },
+    fare: { amountMinor: 12_000, currency: 'KHR' },
+  });
+  await render(navigator);
+  await fireEvent.press(screen.getByRole('button', { name: 'Accept' }));
+  await fireEvent.press(screen.getByRole('button', { name: 'Decline' }));
+
+  expect(core.accept).toHaveBeenCalledWith('offer-1');
+  expect(core.decline).toHaveBeenCalledWith('offer-1');
 });
 
 test('shows the Rider Home reconnecting banner only while disconnected', async () => {
