@@ -1,4 +1,12 @@
-import { type ActiveRides, type CancelReason, type Ride, type RideAction, rideTransition } from '@lern/contracts';
+import {
+  type ActiveRides,
+  type CancelReason,
+  type CreateRating,
+  type Rating,
+  type Ride,
+  type RideAction,
+  rideTransition,
+} from '@lern/contracts';
 import { ConflictException, GoneException, HttpStatus, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { DataSource, type EntityManager, QueryFailedError } from 'typeorm';
 import { OutboxService } from '../outbox/outbox.service';
@@ -12,6 +20,11 @@ const CONFLICTS: Record<string, string> = {
   rides_one_active_per_rider: 'Rider already has an active ride',
   rides_one_active_per_driver: 'Driver already has an active ride',
 };
+
+// Same shape as the INVALID_TRANSITION 409 in move(): clients branch on `code`
+function ratingRefused(code: string, message: string): ConflictException {
+  return new ConflictException({ statusCode: HttpStatus.CONFLICT, code, message });
+}
 
 // Maps a unique violation the schema uses to decide a race onto a 409; anything else is rethrown
 function conflict(err: unknown): unknown {
@@ -69,6 +82,18 @@ export class RidesService {
     const ride = await this.move(userId, rideId, ['rider', 'driver'], 'cancel', reason);
     this.match(rideId); // ends its pending offer
     return ride;
+  }
+
+  // The insert decides the common case; on a miss the reads say why. Ratings are final: a repeat is a 409, not an update.
+  async rate(userId: string, rideId: string, body: CreateRating): Promise<Rating> {
+    const rated = await this.rides.insertRating(userId, rideId, body);
+    if (rated) return rated;
+    // Only a participant gets a reason; anyone else can't tell the ride exists
+    const mine = await this.rides.findForParticipant(rideId, userId);
+    if (!mine) throw new NotFoundException('Ride not found');
+    if (await this.rides.hasRating(rideId, userId)) throw ratingRefused('ALREADY_RATED', 'You already rated this ride');
+    if (mine.status !== 'completed') throw ratingRefused('RIDE_NOT_COMPLETED', 'Only a completed ride can be rated');
+    throw ratingRefused('RATING_WINDOW_CLOSED', 'Ratings close 7 days after the ride completes');
   }
 
   // Matching's read of a ride, locked for the rest of its transaction

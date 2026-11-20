@@ -1,10 +1,12 @@
-import type { Ride } from '@lern/contracts';
+import type { Rating, Ride } from '@lern/contracts';
 import { Body, Controller, Get, HttpCode, HttpStatus, Param, ParseEnumPipe, ParseUUIDPipe, Post } from '@nestjs/common';
 import { ZodSerializerDto } from 'nestjs-zod';
 import { type AuthUser, CurrentUser, Roles } from '../auth/auth.decorators';
 import { Idempotent } from '../shared/idempotency/idempotency.interceptor';
 import { CancelRideDto } from './dto/cancel-ride.dto';
+import { CreateRatingDto } from './dto/create-rating.dto';
 import { CreateRideDto } from './dto/create-ride.dto';
+import { RatingDto } from './dto/rating.dto';
 import { RideDto } from './dto/ride.dto';
 import { RidesService } from './rides.service';
 
@@ -43,7 +45,19 @@ export class RidesController {
     return this.rides.cancel(user.id, id, body.reason);
   }
 
-  // Declared after cancel: Express matches routes in order, so it never reaches this one
+  // Rider or driver of a completed ride, within 7 days; the query decides, like cancel. Declared before the step route.
+  @Post(':id/rating')
+  @Idempotent()
+  @ZodSerializerDto(RatingDto)
+  rate(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: CreateRatingDto,
+  ): Promise<Rating> {
+    return this.rides.rate(user.id, id, body);
+  }
+
+  // Declared after cancel and rating: Express matches routes in order, so it never reaches this one
   @Post(':id/:action')
   @HttpCode(HttpStatus.OK)
   @Roles('driver')

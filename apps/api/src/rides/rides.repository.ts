@@ -1,7 +1,9 @@
 import {
   type CancelReason,
+  type CreateRating,
   type Money,
   type Point,
+  type Rating,
   RIDE_UPDATED_EVENT,
   type Ride,
   type RideAction,
@@ -119,6 +121,27 @@ export class RidesRepository {
       [rideId, userId],
     );
     return row;
+  }
+
+  // One statement, matching nothing unless the caller is the ride's rider or driver, it completed within 7 days (by the
+  // completed event's time, on the DB clock) and this side hasn't rated it yet. The rated side is the other participant.
+  async insertRating(userId: string, rideId: string, body: CreateRating): Promise<Rating | undefined> {
+    const [row] = await this.db.query<Rating[]>(
+      `INSERT INTO ratings (ride_id, from_user, to_user, stars, comment)
+       SELECT r.id, $2, CASE WHEN r.rider_id = $2 THEN r.driver_id ELSE r.rider_id END, $3, $4
+       FROM rides r
+       WHERE r.id = $1 AND $2 IN (r.rider_id, r.driver_id) AND r.status = 'completed'
+         AND EXISTS (SELECT 1 FROM ride_events e WHERE e.ride_id = r.id AND e.status = 'completed' AND e.created_at > now() - interval '7 days')
+       ON CONFLICT (ride_id, from_user) DO NOTHING
+       RETURNING ride_id AS "rideId", stars, comment`,
+      [rideId, userId, body.stars, body.comment ?? null],
+    );
+    return row;
+  }
+
+  async hasRating(rideId: string, userId: string): Promise<boolean> {
+    const rows = await this.db.query<unknown[]>('SELECT 1 FROM ratings WHERE ride_id = $1 AND from_user = $2', [rideId, userId]);
+    return rows.length > 0;
   }
 
   // The caller's ride on one side that hasn't ended; the partial uniques allow at most one per side
