@@ -6,7 +6,13 @@ import type { StaffSessionContext } from './admin.decorators';
 // Postgres UPDATE through TypeORM's query() resolves to [rows, rowCount]
 type Updated<T> = [T[], number];
 
-export type StaffAccount = StaffSummary & { status: 'active' | 'disabled'; passwordHash: string; isLocked: boolean };
+// passwordUpdatedAt stays Postgres text: it round-trips through Redis to the microsecond, which a JS Date would not
+export type StaffAccount = StaffSummary & {
+  status: 'active' | 'disabled';
+  passwordHash: string;
+  isLocked: boolean;
+  passwordUpdatedAt: string;
+};
 
 const MAX_FAILED = 5;
 
@@ -18,7 +24,8 @@ export class StaffAuthRepository {
   async findAccountByEmail(email: string): Promise<StaffAccount | undefined> {
     const rows = await this.db.query<StaffAccount[]>(
       `SELECT u.id, u.email, u.display_name AS "displayName", u.is_super_admin AS "isSuperAdmin", u.status,
-              c.password_hash AS "passwordHash", (c.locked_until IS NOT NULL AND c.locked_until > now()) AS "isLocked"
+              c.password_hash AS "passwordHash", (c.locked_until IS NOT NULL AND c.locked_until > now()) AS "isLocked",
+              c.password_updated_at::text AS "passwordUpdatedAt"
        FROM staff_users u JOIN staff_credentials c ON c.staff_user_id = u.id
        WHERE lower(u.email) = $1`,
       [email],
@@ -41,12 +48,14 @@ export class StaffAuthRepository {
     );
   }
 
-  // True while the account may still sign in: re-read after the slow steps (scrypt, MFA), before acting on them
-  async isEligible(staffUserId: string): Promise<boolean> {
+  // True while the account may still sign in with the password just checked: re-read after the slow steps (scrypt,
+  // MFA), before acting on them
+  async isEligible(staffUserId: string, expectedPasswordUpdatedAt: string): Promise<boolean> {
     const rows = await this.db.query<unknown[]>(
       `SELECT 1 FROM staff_users u JOIN staff_credentials c ON c.staff_user_id = u.id
-       WHERE u.id = $1 AND u.status = 'active' AND (c.locked_until IS NULL OR c.locked_until <= now())`,
-      [staffUserId],
+       WHERE u.id = $1 AND u.status = 'active' AND (c.locked_until IS NULL OR c.locked_until <= now())
+         AND c.password_updated_at = $2::timestamptz`,
+      [staffUserId, expectedPasswordUpdatedAt],
     );
     return rows.length > 0;
   }
@@ -54,24 +63,29 @@ export class StaffAuthRepository {
   // Null means refuse. FOR SHARE conflicts with a disable's row lock: an uncommitted disable makes this wait, and once
   // it commits the row is re-checked and no longer matches. A plain EXISTS (and the FK check's FOR KEY SHARE) would
   // not wait. The reset is guarded on unlocked (re-checked on the latest row if a failure locked it during scrypt or
-  // MFA), and the session exists only if the reset happened.
+  // MFA), and the session exists only if the reset happened. The email and password must still be the ones the login
+  // checked: a password reset or email change during Duo ends that login.
   async createSessionIfEligible(params: {
     staffUserId: string;
+    expectedEmail: string;
+    expectedPasswordUpdatedAt: string;
     tokenHash: string;
     csrfToken: string;
     ip: string | undefined;
     userAgent: string | undefined;
-  }): Promise<string | null> {
+  }): Promise<{ sessionId: string; staff: StaffSummary } | null> {
     return this.db.transaction(async (tx) => {
-      const active = await tx.query<unknown[]>(`SELECT 1 FROM staff_users WHERE id = $1 AND status = 'active' FOR SHARE`, [
-        params.staffUserId,
-      ]);
-      if (!active.length) return null;
+      const [staff] = await tx.query<StaffSummary[]>(
+        `SELECT id, email, display_name AS "displayName", is_super_admin AS "isSuperAdmin" FROM staff_users
+         WHERE id = $1 AND status = 'active' AND email = $2 FOR SHARE`,
+        [params.staffUserId, params.expectedEmail],
+      );
+      if (!staff) return null;
       const [reset] = await tx.query<Updated<unknown>>(
         `UPDATE staff_credentials SET failed_attempts = 0, locked_until = NULL, updated_at = now()
-         WHERE staff_user_id = $1 AND (locked_until IS NULL OR locked_until <= now())
+         WHERE staff_user_id = $1 AND (locked_until IS NULL OR locked_until <= now()) AND password_updated_at = $2::timestamptz
          RETURNING staff_user_id`,
-        [params.staffUserId],
+        [params.staffUserId, params.expectedPasswordUpdatedAt],
       );
       if (!reset.length) return null;
       const rows = await tx.query<{ id: string }[]>(
@@ -80,7 +94,7 @@ export class StaffAuthRepository {
          RETURNING id`,
         [params.staffUserId, params.tokenHash, params.csrfToken, params.ip ?? null, params.userAgent ?? null],
       );
-      return rows[0].id;
+      return { sessionId: rows[0].id, staff };
     });
   }
 

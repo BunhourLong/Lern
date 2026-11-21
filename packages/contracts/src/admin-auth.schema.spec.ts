@@ -1,4 +1,4 @@
-import { staffEmailSchema, staffLoginResponseSchema, staffLoginSchema } from './admin-auth.schema';
+import { staffEmailSchema, staffLoginResponseSchema, staffLoginSchema, staffMfaCallbackSchema } from './admin-auth.schema';
 import { roleSchema } from './user.schema';
 
 it('trims and lowercases a staff email', () => {
@@ -30,4 +30,17 @@ it('answers a login with either a session or an MFA redirect, never both shapes 
 it('has no admin role for app users: staff are a separate identity', () => {
   expect(roleSchema.safeParse('admin').success).toBe(false);
   expect(roleSchema.options).toEqual(['rider', 'driver']);
+});
+
+it('takes an MFA callback with a 22–1024 character state and a 1–2048 character code, without NUL bytes', () => {
+  const ok = (state: string, code: string) => staffMfaCallbackSchema.safeParse({ state, code }).success;
+  expect(ok('s'.repeat(22), 'c')).toBe(true);
+  expect(ok('s'.repeat(1024), 'c'.repeat(2048))).toBe(true);
+  expect(ok('s'.repeat(21), 'c')).toBe(false);
+  expect(ok('s'.repeat(1025), 'c')).toBe(false);
+  expect(ok('s'.repeat(22), '')).toBe(false);
+  expect(ok('s'.repeat(22), 'c'.repeat(2049))).toBe(false);
+  expect(ok(`${'s'.repeat(22)}\u0000`, 'c')).toBe(false);
+  expect(ok('s'.repeat(22), 'c\u0000')).toBe(false);
+  expect(staffMfaCallbackSchema.safeParse({ state: 's'.repeat(22) }).success).toBe(false);
 });

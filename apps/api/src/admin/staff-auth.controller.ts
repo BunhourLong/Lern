@@ -3,11 +3,9 @@ import { Body, Controller, Get, Headers, HttpCode, HttpStatus, Inject, Ip, Post,
 import type { ServerResponse as Response } from 'node:http';
 import { ZodSerializerDto } from 'nestjs-zod';
 import { AdminRoute, CurrentStaff, StaffPublic, type StaffSessionContext } from './admin.decorators';
-import { formatClearStaffCookie, formatStaffCookie } from './domain/cookie';
-import { StaffLoginDto, StaffMeResponseDto } from './dto/staff-auth.dto';
-import { StaffAuthService } from './staff-auth.service';
-
-export const ADMIN_COOKIE_SECURE = 'admin:cookie-secure';
+import { formatClearStaffCookie, formatClearStaffMfaCookie, formatStaffCookie, formatStaffMfaCookie } from './domain/cookie';
+import { StaffLoginDto, StaffMeResponseDto, StaffMfaCallbackDto } from './dto/staff-auth.dto';
+import { ADMIN_COOKIE_SECURE, StaffAuthService } from './staff-auth.service';
 
 // Every answer here carries a credential or a CSRF token: never cached
 @AdminRoute()
@@ -30,15 +28,41 @@ export class StaffAuthController {
     @Headers('content-type') contentType: string | undefined,
     @Res({ passthrough: true }) res: Response,
   ): Promise<StaffLoginResponse> {
-    res.setHeader('Cache-Control', 'no-store');
-    // Login CSRF: a cross-site <form> can post form or text bodies but not JSON without a CORS preflight
-    if ((contentType ?? '').split(';')[0].trim().toLowerCase() !== 'application/json') {
-      throw new UnsupportedMediaTypeException('Content-Type must be application/json');
-    }
+    requireJson(res, contentType);
     const result = await this.auth.login(body, ip, userAgent);
-    if (result.status === 'mfa_required') return result;
+    if (result.status === 'mfa_required') {
+      // The binding token travels only in its HttpOnly cookie, never in the body
+      res.setHeader('Set-Cookie', formatStaffMfaCookie(result.mfaBindingToken, this.secure));
+      return { status: 'mfa_required', redirectUrl: result.redirectUrl };
+    }
     res.setHeader('Set-Cookie', formatStaffCookie(result.rawToken, this.secure));
     return { status: 'authenticated', staff: result.staff, csrfToken: result.csrfToken };
+  }
+
+  // Duo sends the browser back to the admin page, which posts the state and code here with the binding cookie
+  @Post('mfa/callback')
+  @StaffPublic()
+  @HttpCode(HttpStatus.OK)
+  @ZodSerializerDto(StaffMeResponseDto)
+  async mfaCallback(
+    @Body() body: StaffMfaCallbackDto,
+    @Ip() ip: string,
+    @Headers('user-agent') userAgent: string | undefined,
+    @Headers('content-type') contentType: string | undefined,
+    @Headers('cookie') cookie: string | undefined,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<StaffMeResponse> {
+    requireJson(res, contentType);
+    let consumed = false;
+    try {
+      const result = await this.auth.completeMfa(body, cookie, ip, userAgent, () => (consumed = true));
+      res.setHeader('Set-Cookie', [formatStaffCookie(result.rawToken, this.secure), formatClearStaffMfaCookie(this.secure)]);
+      return { staff: result.staff, csrfToken: result.csrfToken };
+    } catch (err) {
+      // The pending login is gone: its cookie is dead weight
+      if (consumed) res.setHeader('Set-Cookie', formatClearStaffMfaCookie(this.secure));
+      throw err;
+    }
   }
 
   @Get('me')
@@ -66,5 +90,13 @@ export class StaffAuthController {
   private clearCookie(res: Response): void {
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('Set-Cookie', formatClearStaffCookie(this.secure));
+  }
+}
+
+// Login CSRF: a cross-site <form> can post form or text bodies but not JSON without a CORS preflight
+function requireJson(res: Response, contentType: string | undefined): void {
+  res.setHeader('Cache-Control', 'no-store');
+  if ((contentType ?? '').split(';')[0].trim().toLowerCase() !== 'application/json') {
+    throw new UnsupportedMediaTypeException('Content-Type must be application/json');
   }
 }

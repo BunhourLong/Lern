@@ -34,3 +34,10 @@ export type StaffLoginResponse = z.infer<typeof staffLoginResponseSchema>;
 
 export const staffMeResponseSchema = z.object({ staff: staffSummarySchema, csrfToken: z.string().min(1) });
 export type StaffMeResponse = z.infer<typeof staffMeResponseSchema>;
+
+// The admin page posts what Duo appended to its redirect back (state, duo_code); Duo bounds state to 22–1024 characters
+export const staffMfaCallbackSchema = z.object({
+  state: z.string().min(22).max(1024).refine(noNul, 'Must not contain a NUL byte'),
+  code: z.string().min(1).max(2048).refine(noNul, 'Must not contain a NUL byte'),
+});
+export type StaffMfaCallback = z.infer<typeof staffMfaCallbackSchema>;

@@ -164,4 +164,49 @@ describe('admin (staff) auth', () => {
     expect(insecure).toThrow(/ADMIN_COOKIE_SECURE/);
     expect(parseEnv({ ...admin, ADMIN_COOKIE_SECURE: 'false' }).ADMIN_COOKIE_SECURE).toBe(false);
   });
+
+  describe('duo', () => {
+    const duoKeys = {
+      DUO_CLIENT_ID: 'DIXXXXXXXXXXXXXXXXXX',
+      DUO_CLIENT_SECRET: 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef',
+      DUO_API_HOST: 'api-12345678.duosecurity.com',
+      DUO_REDIRECT_URL: 'https://admin.lern.example/admin/mfa/callback',
+    };
+    const duo = { ...admin, STAFF_MFA_PROVIDER: 'duo', ...duoKeys };
+
+    it('accepts duo with its four keys, in dev and production', () => {
+      expect(parseEnv(duo)).toMatchObject({ STAFF_MFA_PROVIDER: 'duo', ...duoKeys });
+      expect(parseEnv({ ...duo, NODE_ENV: 'production' })).toMatchObject({ STAFF_MFA_PROVIDER: 'duo' });
+    });
+
+    it('requires each of the four keys, naming only the missing one', () => {
+      for (const key of Object.keys(duoKeys)) {
+        const run = () => parseEnv({ ...duo, [key]: undefined });
+        expect(run).toThrow(new RegExp(key));
+        for (const other of Object.keys(duoKeys).filter((k) => k !== key)) expect(run).not.toThrow(new RegExp(other));
+      }
+      // Not needed while admin is off
+      expect(parseEnv({ ...valid, STAFF_MFA_PROVIDER: 'duo' }).STAFF_MFA_PROVIDER).toBe('duo');
+    });
+
+    it('checks the client id and secret lengths, never echoing the secret', () => {
+      expect(() => parseEnv({ ...duo, DUO_CLIENT_ID: 'DI-too-short' })).toThrow(/DUO_CLIENT_ID/);
+      const run = () => parseEnv({ ...duo, DUO_CLIENT_SECRET: 'sh0rt-duo-s3cret' });
+      expect(run).toThrow(/DUO_CLIENT_SECRET/);
+      expect(run).not.toThrow(/sh0rt-duo-s3cret/);
+    });
+
+    it('takes a bare API hostname: no scheme, path, port or userinfo', () => {
+      for (const host of ['https://api-1.duosecurity.com', 'api-1.duosecurity.com/x', 'api-1.duosecurity.com:443', 'u@api-1.duosecurity.com', '', 'localhost']) {
+        expect(() => parseEnv({ ...duo, DUO_API_HOST: host })).toThrow(/DUO_API_HOST/);
+      }
+    });
+
+    it('needs an https redirect URL in production; http only for local dev', () => {
+      const http = { ...duo, DUO_REDIRECT_URL: 'http://localhost:5173/admin/mfa/callback' };
+      expect(parseEnv(http).DUO_REDIRECT_URL).toBe(http.DUO_REDIRECT_URL);
+      expect(() => parseEnv({ ...http, NODE_ENV: 'production' })).toThrow(/DUO_REDIRECT_URL/);
+      expect(() => parseEnv({ ...duo, DUO_REDIRECT_URL: 'ftp://lern.example/cb' })).toThrow(/DUO_REDIRECT_URL/);
+    });
+  });
 });

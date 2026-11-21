@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { Client, DuoException } from '@duosecurity/duo_universal';
 import { Controller, Get, HttpStatus, type INestApplication } from '@nestjs/common';
 import { Redis } from 'ioredis';
 import request from 'supertest';
@@ -6,8 +7,10 @@ import type { App } from 'supertest/types';
 import { DataSource } from 'typeorm';
 import { AdminRoute } from '../src/admin/admin.decorators';
 import { createSuperAdmin } from '../src/admin/create-super-admin';
+import { verifyMfaState } from '../src/admin/domain/mfa-state';
+import { DUO_CLIENT } from '../src/admin/duo-staff-mfa.provider';
 import { StaffAuthRepository } from '../src/admin/staff-auth.repository';
-import { StaffAuthService } from '../src/admin/staff-auth.service';
+import { MFA_STATE_KEY, StaffAuthService } from '../src/admin/staff-auth.service';
 import { StaffMfaProvider } from '../src/admin/staff-mfa.provider';
 import { bootApp, signIn } from './support/actors';
 
@@ -18,6 +21,7 @@ const ROUTES = [
   ['get', '/admin/auth/me'],
   ['post', '/admin/auth/logout'],
   ['post', '/admin/auth/logout-all'],
+  ['post', '/admin/auth/mfa/callback'],
 ] as const;
 
 // An admin route mounted in an app with admin off: the app guard must still refuse it
@@ -42,7 +46,8 @@ async function staff(password = PASSWORD): Promise<{ id: string; email: string }
   return { id, email: address };
 }
 const login = (address: string, password = PASSWORD) => http().post('/admin/auth/login').send({ email: address, password });
-const cookieOf = (res: request.Response) => (res.headers['set-cookie'] as unknown as string[] | undefined)?.[0];
+const cookiesOf = (res: request.Response) => (res.headers['set-cookie'] as unknown as string[] | undefined) ?? [];
+const cookieOf = (res: request.Response) => cookiesOf(res).at(0);
 // A signed-in browser: its cookie pair and CSRF token
 async function session(address: string) {
   const res = await login(address);
@@ -58,18 +63,20 @@ const credentials = (id: string) =>
 const sessionCount = (id: string) =>
   sql<{ n: number }[]>(`SELECT count(*)::int AS n FROM staff_sessions WHERE staff_user_id = $1`, [id]).then((r) => r[0].n);
 
+const pendingMfaKeys = () => app.get(Redis).keys('mfa:pending:*');
+
 // Every request here comes from loopback, so the per-IP window would fill across tests: each test starts with clean
-// admin windows. Only this suite uses rl:admin:*.
-async function clearAdminRateLimits(): Promise<void> {
+// admin windows and no pending MFA logins. Only this suite uses rl:admin:* and mfa:pending:*.
+async function clearAdminRedis(): Promise<void> {
   const redis = app.get(Redis);
-  const keys = await redis.keys('rl:admin:*');
+  const keys = [...(await redis.keys('rl:admin:*')), ...(await pendingMfaKeys())];
   if (keys.length) await redis.del(...keys);
 }
 
 beforeAll(async () => {
   app = await (await bootApp({}, { ADMIN_ENABLED: true, STAFF_MFA_PROVIDER: 'dev', ADMIN_COOKIE_SECURE: true })).init();
 });
-beforeEach(clearAdminRateLimits);
+beforeEach(clearAdminRedis);
 afterEach(() => jest.restoreAllMocks());
 afterAll(() => app.close());
 
@@ -275,12 +282,13 @@ describe('lockout and disable racing a login', () => {
       const { id, email: address } = await staff();
       jest.spyOn(app.get(StaffMfaProvider), 'begin').mockImplementationOnce(async () => {
         await sql(change, [id]);
-        return { status: 'redirect', redirectUrl: 'https://duo.example/auth', state: 'st1' };
+        return { status: 'redirect', redirectUrl: 'https://duo.example/auth' };
       });
       const res = await login(address);
       expect(res.status).toBe(HttpStatus.UNAUTHORIZED);
       expect(res.body).toEqual(INVALID);
       expect(cookieOf(res)).toBeUndefined();
+      expect(await pendingMfaKeys()).toEqual([]);
       expect(await sessionCount(id)).toBe(0);
     }
   });
@@ -289,7 +297,8 @@ describe('lockout and disable racing a login', () => {
   it('creates no session when a disable commits while the session is being created (5 rounds)', async () => {
     const repo = app.get(StaffAuthRepository);
     for (let round = 0; round < 5; round++) {
-      const { id } = await staff();
+      const { id, email: address } = await staff();
+      const account = (await repo.findAccountByEmail(address))!;
       await sql(`UPDATE staff_credentials SET failed_attempts = 3 WHERE staff_user_id = $1`, [id]);
       const disabler = db().createQueryRunner();
       await disabler.connect();
@@ -300,7 +309,15 @@ describe('lockout and disable racing a login', () => {
 
         let settled = false;
         const creating = repo
-          .createSessionIfEligible({ staffUserId: id, tokenHash: randomUUID(), csrfToken: 'c', ip: undefined, userAgent: undefined })
+          .createSessionIfEligible({
+            staffUserId: id,
+            expectedEmail: address,
+            expectedPasswordUpdatedAt: account.passwordUpdatedAt,
+            tokenHash: randomUUID(),
+            csrfToken: 'c',
+            ip: undefined,
+            userAgent: undefined,
+          })
           .finally(() => (settled = true));
         // Proof of overlap from the database's side: some backend is waiting on the disabler's lock
         let blocked = false;
@@ -447,18 +464,26 @@ describe('CSRF and logout', () => {
 });
 
 describe('StaffMfaProvider seam', () => {
-  it('sends the browser to the provider with no session and no cookie when MFA asks for a redirect', async () => {
+  it('sends the browser to the provider with only a binding cookie, no session, when MFA asks for a redirect', async () => {
     const { id, email: address } = await staff();
     const begin = jest
       .spyOn(app.get(StaffMfaProvider), 'begin')
-      .mockResolvedValue({ status: 'redirect', redirectUrl: 'https://duo.example/auth', state: 'st1' });
+      .mockResolvedValue({ status: 'redirect', redirectUrl: 'https://duo.example/auth' });
 
     const res = await login(address);
     expect(res.status).toBe(HttpStatus.OK);
     expect(res.body).toEqual({ status: 'mfa_required', redirectUrl: 'https://duo.example/auth' });
-    expect(cookieOf(res)).toBeUndefined();
-    expect(begin).toHaveBeenCalledWith({ id, email: address });
+    expect(cookiesOf(res)).toEqual([expect.stringMatching(/^__Host-lern_staff_mfa=[\w-]{43}; Path=\/; HttpOnly; SameSite=Lax; Max-Age=300; Secure$/)]);
+    expect(begin).toHaveBeenCalledWith({ id, email: address }, expect.stringMatching(/^[\w-]+\.[\w-]{43}$/));
     expect(await sessionCount(id)).toBe(0);
+    // The binding cookie is no session
+    expect((await me(cookieOf(res)!.split(';')[0])).status).toBe(HttpStatus.UNAUTHORIZED);
+  });
+
+  it('refuses the MFA callback while the dev provider is on: it never redirects, so nothing is pending', async () => {
+    const res = await http().post('/admin/auth/mfa/callback').send({ state: 'x'.repeat(40), code: 'c' });
+    expect(res.status).toBe(HttpStatus.UNAUTHORIZED);
+    expect(res.body).toEqual(INVALID);
   });
 
   it('fails closed when the provider throws', async () => {
@@ -469,5 +494,306 @@ describe('StaffMfaProvider seam', () => {
     expect(res.status).toBe(HttpStatus.INTERNAL_SERVER_ERROR);
     expect(cookieOf(res)).toBeUndefined();
     expect(await sessionCount(id)).toBe(0);
+  });
+});
+
+// The real Duo SDK builds the authorize URL; only its two network calls are stubbed
+describe('Duo MFA (STAFF_MFA_PROVIDER=duo)', () => {
+  const DUO = {
+    STAFF_MFA_PROVIDER: 'duo',
+    DUO_CLIENT_ID: 'DIXXXXXXXXXXXXXXXXXX',
+    DUO_CLIENT_SECRET: 'deadbeef'.repeat(5),
+    DUO_API_HOST: 'api-12345678.duosecurity.com',
+    DUO_REDIRECT_URL: 'https://admin.lern.example/admin/mfa/callback',
+  } as const;
+  type DuoResult = Awaited<ReturnType<Client['exchangeAuthorizationCodeFor2FAResult']>>;
+  const ALLOW = { result: 'allow', status: 'allow', status_msg: 'Login Successful' };
+  const duoResult = (username: string, authResult: object | undefined) =>
+    ({ preferred_username: username, auth_result: authResult }) as unknown as DuoResult;
+  const duoFailure = (response?: { status: number }) =>
+    new DuoException('Request failed', Object.assign(new Error('Request failed'), { isAxiosError: true, code: 'ECONNREFUSED', response }));
+
+  let duoApp: INestApplication<App>;
+  let client: Client;
+  let exchange: jest.SpiedFunction<Client['exchangeAuthorizationCodeFor2FAResult']>;
+  const duoHttp = () => request(duoApp.getHttpServer());
+  beforeAll(async () => {
+    duoApp = await (await bootApp({}, { ADMIN_ENABLED: true, ADMIN_COOKIE_SECURE: true, ...DUO })).init();
+    client = duoApp.get<Client>(DUO_CLIENT);
+  });
+  afterAll(() => duoApp.close());
+  beforeEach(() => {
+    jest.spyOn(client, 'healthCheck').mockResolvedValue({ stat: 'OK', response: { timestamp: 1 } });
+    exchange = jest.spyOn(client, 'exchangeAuthorizationCodeFor2FAResult').mockImplementation((_code, username) => Promise.resolve(duoResult(username, ALLOW)));
+  });
+
+  const duoLoginRaw = (address: string, password = PASSWORD) => duoHttp().post('/admin/auth/login').send({ email: address, password });
+  // Password accepted: the redirect URL's signed request carries the state Duo will hand back to the browser
+  async function duoLogin(address: string) {
+    const res = await duoLoginRaw(address);
+    expect(res.status).toBe(HttpStatus.OK);
+    const url = new URL((res.body as { redirectUrl: string }).redirectUrl);
+    const claims = JSON.parse(Buffer.from(url.searchParams.get('request')!.split('.')[1], 'base64url').toString()) as {
+      state: string;
+      duo_uname: string;
+    };
+    return { res, url, claims, state: claims.state, binding: cookieOf(res)!.split(';')[0] };
+  }
+  const callback = (body: object, cookie?: string) => {
+    const req = duoHttp().post('/admin/auth/mfa/callback');
+    return (cookie === undefined ? req : req.set('cookie', cookie)).send(body);
+  };
+  const pendingKey = (state: string) => `mfa:pending:${verifyMfaState(state, duoApp.get<Buffer>(MFA_STATE_KEY), 0)!.pendingId}`;
+  const CLEAR_MFA = '__Host-lern_staff_mfa=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0; Secure';
+
+  it('signs in: password → mfa_required with only a binding cookie → callback → session; then clears the lock count and email window', async () => {
+    const { id, email: address } = await staff();
+    for (let i = 0; i < 2; i++) expect((await duoLoginRaw(address, 'wrong password')).status).toBe(HttpStatus.UNAUTHORIZED);
+
+    const { res, url, claims, state, binding } = await duoLogin(address);
+    expect(res.headers['cache-control']).toBe('no-store');
+    expect(res.body).toEqual({ status: 'mfa_required', redirectUrl: expect.any(String) as string });
+    expect(`${url.origin}${url.pathname}`).toBe(`https://${DUO.DUO_API_HOST}/oauth/v1/authorize`);
+    expect(claims).toMatchObject({ duo_uname: address, use_duo_code_attribute: true });
+    expect(cookiesOf(res)).toEqual([expect.stringMatching(/^__Host-lern_staff_mfa=[\w-]{43}; Path=\/; HttpOnly; SameSite=Lax; Max-Age=300; Secure$/)]);
+    // Nothing is granted yet: no session, the lock count and email window stand, the binding cookie is no session
+    expect(await sessionCount(id)).toBe(0);
+    expect(await credentials(id)).toEqual({ failed_attempts: 2, locked: null });
+    expect(await app.get(Redis).exists(`rl:admin:login:email:${address}`)).toBe(1);
+    expect((await duoHttp().get('/admin/auth/me').set('cookie', binding)).status).toBe(HttpStatus.UNAUTHORIZED);
+    const ttl = await app.get(Redis).ttl(pendingKey(state));
+    expect(ttl).toBeGreaterThan(0);
+    expect(ttl).toBeLessThanOrEqual(300);
+
+    const done = await callback({ state, code: 'duo-code' }, binding);
+    expect(done.status).toBe(HttpStatus.OK);
+    expect(done.headers['cache-control']).toBe('no-store');
+    const summary = { id, email: address, displayName: 'Ops Person', isSuperAdmin: true };
+    expect(done.body).toEqual({ staff: summary, csrfToken: expect.stringMatching(/^[\w-]{43}$/) as string });
+    expect(cookiesOf(done)).toEqual([
+      expect.stringMatching(/^lern_staff=[\w-]{43}; Path=\/; HttpOnly; SameSite=Lax; Max-Age=28800; Secure$/),
+      CLEAR_MFA,
+    ]);
+    expect(exchange).toHaveBeenCalledWith('duo-code', address);
+    expect(await sessionCount(id)).toBe(1);
+    expect(await credentials(id)).toEqual({ failed_attempts: 0, locked: null });
+    expect(await app.get(Redis).exists(`rl:admin:login:email:${address}`)).toBe(0);
+    expect(await pendingMfaKeys()).toEqual([]);
+
+    const ok = await duoHttp().get('/admin/auth/me').set('cookie', cookieOf(done)!.split(';')[0]);
+    expect(ok.status).toBe(HttpStatus.OK);
+    expect(ok.body).toEqual({ staff: summary, csrfToken: (done.body as { csrfToken: string }).csrfToken });
+  });
+
+  describe('fails closed', () => {
+    it.each([
+      ['Duo is down', () => jest.spyOn(client, 'healthCheck').mockRejectedValue(duoFailure())],
+      ['Duo answers 503', () => jest.spyOn(client, 'healthCheck').mockRejectedValue(duoFailure({ status: 503 }))],
+    ])('login answers 503 with no cookie, nothing pending and no session when %s', async (_, arrange) => {
+      const { id, email: address } = await staff();
+      arrange();
+      const res = await duoLoginRaw(address);
+      expect(res.status).toBe(HttpStatus.SERVICE_UNAVAILABLE);
+      expect(cookiesOf(res)).toEqual([]);
+      expect(await pendingMfaKeys()).toEqual([]);
+      expect(await sessionCount(id)).toBe(0);
+    });
+
+    it.each([
+      ['the network to Duo fails', duoFailure()],
+      ['Duo answers 502', duoFailure({ status: 502 })],
+    ])('the callback answers 503, clears the binding cookie and starts no session when %s', async (_, failure) => {
+      const { id, email: address } = await staff();
+      const { state, binding } = await duoLogin(address);
+      exchange.mockRejectedValueOnce(failure);
+      const res = await callback({ state, code: 'duo-code' }, binding);
+      expect(res.status).toBe(HttpStatus.SERVICE_UNAVAILABLE);
+      expect(cookiesOf(res)).toEqual([CLEAR_MFA]);
+      expect(await sessionCount(id)).toBe(0);
+    });
+
+    it.each([
+      ['a deny', { result: 'deny', status: 'deny', status_msg: 'Login denied' }],
+      ['a non-allow status', { ...ALLOW, status: 'fraud' }],
+      ['a non-allow result', { ...ALLOW, result: 'deny' }],
+      ['no auth_result', undefined],
+    ])('refuses %s from Duo with 401 and no session', async (_, authResult) => {
+      const { id, email: address } = await staff();
+      const { state, binding } = await duoLogin(address);
+      exchange.mockResolvedValueOnce(duoResult(address, authResult));
+      const res = await callback({ state, code: 'duo-code' }, binding);
+      expect(res.status).toBe(HttpStatus.UNAUTHORIZED);
+      expect(res.body).toEqual(INVALID);
+      expect(cookiesOf(res)).toEqual([CLEAR_MFA]);
+      expect(await sessionCount(id)).toBe(0);
+    });
+
+    it('refuses an allow for another Duo user', async () => {
+      const { id, email: address } = await staff();
+      const { state, binding } = await duoLogin(address);
+      exchange.mockResolvedValueOnce(duoResult('someone-else@lern.example', ALLOW));
+      const res = await callback({ state, code: 'duo-code' }, binding);
+      expect(res.status).toBe(HttpStatus.UNAUTHORIZED);
+      expect(await sessionCount(id)).toBe(0);
+    });
+  });
+
+  describe('replay and race', () => {
+    it('redeems a callback once: a replay is 401 and never reaches Duo', async () => {
+      const { id, email: address } = await staff();
+      const { state, binding } = await duoLogin(address);
+      expect((await callback({ state, code: 'duo-code' }, binding)).status).toBe(HttpStatus.OK);
+      const replay = await callback({ state, code: 'duo-code' }, binding);
+      expect(replay.status).toBe(HttpStatus.UNAUTHORIZED);
+      expect(cookiesOf(replay)).toEqual([]);
+      expect(exchange).toHaveBeenCalledTimes(1);
+      expect(await sessionCount(id)).toBe(1);
+    });
+
+    // Decided by the Lua HMGET+DEL in StaffAuthService.consumePending; Redis has no gate, so overlap is shown by the
+    // mutation check (a GET-then-DEL lets several win)
+    it('of 5 identical callbacks at once, exactly one signs in (5 rounds)', async () => {
+      for (let round = 0; round < 5; round++) {
+        await clearAdminRedis(); // 25 callbacks from one IP would pass its window of 20
+        const { id, email: address } = await staff();
+        const { state, binding } = await duoLogin(address);
+        exchange.mockClear();
+        const results = await Promise.all(Array.from({ length: 5 }, () => callback({ state, code: 'duo-code' }, binding)));
+        expect(results.map((r) => r.status).sort()).toEqual([200, 401, 401, 401, 401]);
+        expect(exchange).toHaveBeenCalledTimes(1);
+        expect(await sessionCount(id)).toBe(1);
+      }
+    });
+  });
+
+  describe('binding to the browser and the login', () => {
+    it('refuses a tampered state before Redis and Duo; the real one still works', async () => {
+      const { state, binding } = await duoLogin((await staff()).email);
+      const [payload, sig] = state.split('.');
+      const tampered = `${payload.slice(0, -2)}${payload.endsWith('AA') ? 'BB' : 'AA'}.${sig}`;
+      expect((await callback({ state: tampered, code: 'duo-code' }, binding)).status).toBe(HttpStatus.UNAUTHORIZED);
+      expect(exchange).not.toHaveBeenCalled();
+      expect((await callback({ state, code: 'duo-code' }, binding)).status).toBe(HttpStatus.OK);
+    });
+
+    it('refuses a missing, wrong, duplicated or other login’s binding cookie (login CSRF), leaving the real login redeemable', async () => {
+      const a = await staff();
+      const mine = await duoLogin(a.email);
+      const theirs = await duoLogin((await staff()).email);
+      for (const cookie of [
+        undefined,
+        `__Host-lern_staff_mfa=${'A'.repeat(43)}`,
+        `${mine.binding}; ${mine.binding}`,
+        `${mine.binding}; __Host-lern_staff_mfa=${'A'.repeat(43)}`,
+        // The real token under the name without __Host-: a sibling subdomain could have set that one
+        mine.binding.replace('__Host-', ''),
+        theirs.binding,
+      ]) {
+        const res = await callback({ state: mine.state, code: 'duo-code' }, cookie);
+        expect(res.status).toBe(HttpStatus.UNAUTHORIZED);
+        expect(res.body).toEqual(INVALID);
+        expect(cookiesOf(res)).toEqual([]);
+      }
+      expect(exchange).not.toHaveBeenCalled();
+      expect(await sessionCount(a.id)).toBe(0);
+      expect((await callback({ state: mine.state, code: 'duo-code' }, mine.binding)).status).toBe(HttpStatus.OK);
+    });
+
+    it('refuses an expired state (server clock) even while the login is still pending, without calling Duo', async () => {
+      const { state, binding } = await duoLogin((await staff()).email);
+      const now = Date.now();
+      const clock = jest.spyOn(Date, 'now').mockReturnValue(now + 301_000);
+      const res = await callback({ state, code: 'duo-code' }, binding);
+      clock.mockRestore();
+      expect(res.status).toBe(HttpStatus.UNAUTHORIZED);
+      expect(exchange).not.toHaveBeenCalled();
+      expect(await app.get(Redis).exists(pendingKey(state))).toBe(1);
+    });
+
+    it('refuses a valid state whose pending login is gone (expired from Redis), without calling Duo', async () => {
+      const { state, binding } = await duoLogin((await staff()).email);
+      await app.get(Redis).del(pendingKey(state));
+      expect((await callback({ state, code: 'duo-code' }, binding)).status).toBe(HttpStatus.UNAUTHORIZED);
+      expect(exchange).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['disabled', `UPDATE staff_users SET status = 'disabled', disabled_at = now() WHERE id = $1`],
+      ['locked', `UPDATE staff_credentials SET locked_until = now() + interval '15 minutes' WHERE staff_user_id = $1`],
+      ['given a new password', `UPDATE staff_credentials SET password_updated_at = password_updated_at + interval '1 microsecond' WHERE staff_user_id = $1`],
+      ['given a new email', `UPDATE staff_users SET email = 'renamed-' || id || '@lern.example' WHERE id = $1`],
+    ])('starts no session when the account is %s between login and callback', async (_, change) => {
+      const { id, email: address } = await staff();
+      const { state, binding } = await duoLogin(address);
+      await sql(change, [id]);
+      const res = await callback({ state, code: 'duo-code' }, binding);
+      expect(res.status).toBe(HttpStatus.UNAUTHORIZED);
+      expect(res.body).toEqual(INVALID);
+      expect(cookiesOf(res)).toEqual([CLEAR_MFA]);
+      expect(await sessionCount(id)).toBe(0);
+    });
+  });
+
+  describe('pending login in Redis', () => {
+    it('refuses a callback whose state no longer matches the pending login, leaving it untouched', async () => {
+      const { state, binding } = await duoLogin((await staff()).email);
+      const redis = app.get(Redis);
+      const stateHash = await redis.hget(pendingKey(state), 'stateHash');
+      await redis.hset(pendingKey(state), 'stateHash', 'deadbeef');
+      const res = await callback({ state, code: 'duo-code' }, binding);
+      expect(res.status).toBe(HttpStatus.UNAUTHORIZED);
+      expect(cookiesOf(res)).toEqual([]);
+      expect(exchange).not.toHaveBeenCalled();
+      await redis.hset(pendingKey(state), 'stateHash', stateHash!);
+      expect((await callback({ state, code: 'duo-code' }, binding)).status).toBe(HttpStatus.OK);
+    });
+
+    it('refuses a pending login for another staff member than the state names, before Duo', async () => {
+      const { id, email: address } = await staff();
+      const { state, binding } = await duoLogin(address);
+      await app.get(Redis).hset(pendingKey(state), 'staffUserId', randomUUID());
+      const res = await callback({ state, code: 'duo-code' }, binding);
+      expect(res.status).toBe(HttpStatus.UNAUTHORIZED);
+      expect(cookiesOf(res)).toEqual([CLEAR_MFA]);
+      expect(exchange).not.toHaveBeenCalled();
+      expect(await sessionCount(id)).toBe(0);
+    });
+
+    it('still signs in when clearing the email window fails after the session is created', async () => {
+      const { id, email: address } = await staff();
+      const { state, binding } = await duoLogin(address);
+      jest.spyOn(duoApp.get(Redis), 'del').mockRejectedValueOnce(new Error('redis down'));
+      const res = await callback({ state, code: 'duo-code' }, binding);
+      expect(res.status).toBe(HttpStatus.OK);
+      expect(cookiesOf(res)).toEqual([expect.stringMatching(/^lern_staff=[\w-]{43};/), CLEAR_MFA]);
+      expect(await sessionCount(id)).toBe(1);
+    });
+  });
+
+  describe('callback guards', () => {
+    it('refuses a form-encoded callback with 415 before touching the pending login', async () => {
+      const { id, email: address } = await staff();
+      const { state, binding } = await duoLogin(address);
+      const form = await duoHttp().post('/admin/auth/mfa/callback').set('cookie', binding).type('form').send({ state, code: 'duo-code' });
+      expect(form.status).toBe(HttpStatus.UNSUPPORTED_MEDIA_TYPE);
+      expect(form.headers['cache-control']).toBe('no-store');
+      expect(cookiesOf(form)).toEqual([]);
+      expect(exchange).not.toHaveBeenCalled();
+      expect(await sessionCount(id)).toBe(0);
+      expect((await callback({ state, code: 'duo-code' }, binding)).status).toBe(HttpStatus.OK);
+    });
+
+    it('rejects a malformed body with 400', async () => {
+      expect((await callback({ state: 'short', code: 'c' })).status).toBe(HttpStatus.BAD_REQUEST);
+      expect((await callback({ state: 'x'.repeat(40) })).status).toBe(HttpStatus.BAD_REQUEST);
+      expect((await callback({ state: 'x'.repeat(40), code: '' })).status).toBe(HttpStatus.BAD_REQUEST);
+    });
+
+    it('allows 20 callbacks per IP per 15 minutes, then 429 with retryAfter', async () => {
+      for (let i = 0; i < 20; i++) expect((await callback({ state: 'x'.repeat(40), code: 'c' })).status).toBe(HttpStatus.UNAUTHORIZED);
+      const res = await callback({ state: 'x'.repeat(40), code: 'c' });
+      expect(res.status).toBe(HttpStatus.TOO_MANY_REQUESTS);
+      expect((res.body as { retryAfter: number }).retryAfter).toBeGreaterThan(0);
+    });
   });
 });
