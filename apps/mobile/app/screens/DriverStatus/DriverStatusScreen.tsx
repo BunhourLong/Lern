@@ -19,7 +19,7 @@ export type OfferAction = 'accept' | 'decline';
 export type DriverHomeOffer = { id: string } & (
   | {
       status: 'pending';
-      details: Pick<Offer, 'distanceM' | 'fare' | 'vehicleType'>;
+      details: Pick<Offer, 'distanceM' | 'fare' | 'vehicleType' | 'pickup'>;
       seconds: number;
       disabled: boolean;
       busy?: OfferAction;
@@ -123,6 +123,10 @@ export default function DriverStatusScreen({
             <OfferCard
               title={offerTitle}
               pending={{
+                pickup: offer.details.pickup,
+                mapLabel: t('driverOffer.pickupMap'),
+                mapUnavailable: t('map.unavailable'),
+                pickupPinLabel: t('driverOffer.pickupPin'),
                 distance: t('driverOffer.pickupDistance', {
                   distance: formatOfferDistance(offer.details.distanceM, t),
                 }),

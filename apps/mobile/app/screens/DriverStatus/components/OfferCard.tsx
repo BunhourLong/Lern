@@ -1,5 +1,7 @@
 import { View } from 'react-native';
+import type { Point } from '@lern/contracts';
 import { makeStyles, spacing } from '@theme';
+import { AppMap } from '../../../components/AppMap';
 import { Button } from '../../../components/Button';
 import { GlassSurface } from '../../../components/GlassSurface';
 import { Text } from '../../../components/Text';
@@ -9,6 +11,10 @@ type Action = { label: string; onPress: () => void };
 type Props = { title: string } & (
   | {
       pending: {
+        pickup: Point;
+        mapLabel: string;
+        mapUnavailable: string;
+        pickupPinLabel: string;
         distance: string;
         fare: string;
         vehicle: string;
@@ -30,6 +36,18 @@ export function OfferCard(props: Props) {
       <Text role="title">{props.title}</Text>
       {'pending' in props ? (
         <>
+          <AppMap
+            center={props.pending.pickup}
+            pins={[
+              {
+                id: 'pickup',
+                point: props.pending.pickup,
+                title: props.pending.pickupPinLabel,
+              },
+            ]}
+            accessibilityLabel={props.pending.mapLabel}
+            unavailableLabel={props.pending.mapUnavailable}
+          />
           <View style={styles.summary}>
             <Text>{props.pending.distance}</Text>
             <Text role="bodyStrong">{props.pending.fare}</Text>

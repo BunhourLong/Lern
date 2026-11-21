@@ -27,5 +27,14 @@ class MainActivity : ReactActivity() {
    * which allows you to enable New Architecture with a single boolean flags [fabricEnabled]
    */
   override fun createReactActivityDelegate(): ReactActivityDelegate =
-      ReactActivityDelegateWrapper(this, BuildConfig.IS_NEW_ARCHITECTURE_ENABLED, DefaultReactActivityDelegate(this, mainComponentName, fabricEnabled))
+      ReactActivityDelegateWrapper(
+          this,
+          BuildConfig.IS_NEW_ARCHITECTURE_ENABLED,
+          object : DefaultReactActivityDelegate(this, mainComponentName, fabricEnabled) {
+            override fun getLaunchOptions(): Bundle =
+                Bundle().apply {
+                  putBoolean("androidMapsConfigured", BuildConfig.HAS_GOOGLE_MAPS_API_KEY)
+                }
+          },
+      )
 }

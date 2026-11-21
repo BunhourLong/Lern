@@ -98,6 +98,53 @@ const queryOfferHeading = (name: string) =>
   screen.queryByRole('header', { name });
 
 describe('driver Home offer', () => {
+  test.each(['light', 'dark'] as const)(
+    'shows the pickup mini-map in %s mode',
+    async scheme => {
+      jest.replaceProperty(Platform, 'OS', 'ios');
+      jest.mocked(useColorScheme).mockReturnValue(scheme);
+      const home = setupOffer();
+      await home.render();
+
+      const coordinate = {
+        latitude: pendingOffer.pickup.lat,
+        longitude: pendingOffer.pickup.lng,
+      };
+      expect(
+        screen.getByRole('image', { name: 'Pickup location map' }),
+      ).toBeOnTheScreen();
+      expect(screen.getByTestId('map-view').props).toMatchObject({
+        region: coordinate,
+        userInterfaceStyle: scheme,
+      });
+      expect(screen.getByTestId('map-marker').props).toMatchObject({
+        coordinate,
+        title: 'Pickup',
+        pinColor: themes[scheme].primary,
+      });
+    },
+  );
+
+  test('re-centers the pickup mini-map when a replacement offer arrives', async () => {
+    jest.replaceProperty(Platform, 'OS', 'ios');
+    const home = setupOffer();
+    await home.render();
+    const pickup = { lat: 11.59, lng: 104.88 };
+    await act(() =>
+      home.activeRide.getState().applyOffer({
+        ...pendingOffer,
+        id: '00000000-0000-4000-8000-000000000003',
+        pickup,
+      }),
+    );
+
+    const coordinate = { latitude: pickup.lat, longitude: pickup.lng };
+    expect(screen.getByTestId('map-view').props.region).toMatchObject(
+      coordinate,
+    );
+    expect(screen.getByTestId('map-marker').props.coordinate).toEqual(coordinate);
+  });
+
   test.each([
     [850, { amountMinor: 12_000, currency: 'KHR' }, '850 m', '12,000 ៛'],
     [1200, { amountMinor: 375, currency: 'USD' }, '1.2 km', '$3.75'],
@@ -161,6 +208,8 @@ describe('driver Home offer', () => {
       await act(() => jest.advanceTimersByTime(9000));
 
       expect(offerHeading('Offer expired')).toBeOnTheScreen();
+      expect(screen.queryByTestId('map-view')).toBeNull();
+      expect(screen.queryByLabelText('Pickup location map')).toBeNull();
       expect(button('Dismiss')).toBeEnabled();
       expect(
         screen.queryByRole('button', { name: /Accept|Decline/ }),
@@ -250,6 +299,7 @@ describe('driver Home offer', () => {
   });
 
   test('shows unavailable when a 409 returns the same pending offer', async () => {
+    jest.replaceProperty(Platform, 'OS', 'ios');
     const home = setupOffer();
     home.accept.mockRejectedValueOnce(
       new ApiError(409, { offer: pendingOffer }),
@@ -258,6 +308,8 @@ describe('driver Home offer', () => {
     await fireEvent.press(button('Accept'));
 
     expect(offerHeading('Ride no longer available')).toBeOnTheScreen();
+    expect(screen.queryByTestId('map-view')).toBeNull();
+    expect(screen.queryByLabelText('Pickup location map')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Accept' })).toBeNull();
   });
 

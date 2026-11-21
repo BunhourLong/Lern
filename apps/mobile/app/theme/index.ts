@@ -2,6 +2,7 @@ import { StyleSheet, useColorScheme } from 'react-native';
 import { fonts } from './fonts';
 
 export { fonts } from './fonts';
+export { darkMapStyle, type MapStyleRule } from './map-style';
 
 export type Colors = {
   background: string;
@@ -61,6 +62,7 @@ export const opacity = { pressed: 0.92, disabled: 0.5 } as const;
 export const outlineWidth = 1;
 export const bannerEdgeWidth = 4;
 export const syncStatusMaxWidth = 320;
+export const mapHeight = { mini: 160 } as const;
 
 export const type = {
   title: { fontSize: 24, lineHeight: 36, fontFamily: fonts.bold },
