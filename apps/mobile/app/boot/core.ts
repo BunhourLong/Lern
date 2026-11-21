@@ -146,6 +146,7 @@ export function createCore({
       availability: null,
       verification: null,
       locationPermission: null,
+      position: null,
     });
     rawEvents.getState().reset(); // the next user on this phone must not see the last one's rides
     session.getState().signedOut();
@@ -547,7 +548,10 @@ export function createCore({
     // shortcut: points queued while the socket is up but its acks fail wait for the next connect or step to be
     // flushed (bounded by the queue's 2000-point cap); flush on a timer if that shows up in practice
     async reportPosition(point: LocationPoint): Promise<void> {
-      if (!(await socket?.sendLocation(point))) queue.enqueuePoint(point);
+      const current = live();
+      driverMode.getState().applyPosition(point);
+      if (!(await socket?.sendLocation(point)) && current())
+        queue.enqueuePoint(point);
     },
   };
 }

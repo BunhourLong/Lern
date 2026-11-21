@@ -543,14 +543,51 @@ it('queues a position the socket could not deliver and uploads it over HTTP late
   const f = fakeIo();
   const core = createCore(deps(s, f, 'r'.repeat(43)));
   await core.boot();
-  await core.reportPosition({
+  const point = {
     lat: 11.55,
     lng: 104.92,
     recordedAt: '2026-11-01T10:00:00.000Z',
-  }); // socket not connected
+  };
+  await core.reportPosition(point); // socket not connected
+  expect(core.stores.driverMode.getState().position).toEqual(point);
   expect(core.queue.pending().points).toBe(1);
   await core.queue.flush();
   expect(s.calls).toContain('POST /drivers/me/locations');
+  expect(core.queue.pending().points).toBe(0);
+});
+
+it('updates the driver position when the socket delivers it', async () => {
+  const f = fakeIo();
+  const core = createCore(deps(server(routes()), f, 'r'.repeat(43)));
+  await core.boot();
+  f.socket.connected = true;
+  const point = { lat: 11.55, lng: 104.92, recordedAt: '2026-11-21T10:00:00Z' };
+  await core.reportPosition(point);
+  expect(core.stores.driverMode.getState().position).toEqual(point);
+  expect(core.queue.pending().points).toBe(0);
+});
+
+it('drops a pending location acknowledgement after sign-out', async () => {
+  const f = fakeIo();
+  const core = createCore(deps(server(routes()), f, 'r'.repeat(43)));
+  await core.boot();
+  f.socket.connected = true;
+  let refuse!: (cause: Error) => void;
+  jest.spyOn(f.socket, 'timeout').mockReturnValueOnce({
+    emitWithAck: () =>
+      new Promise((_resolve, reject) => {
+        refuse = reject;
+      }),
+  });
+  const report = core.reportPosition({
+    lat: 11.55,
+    lng: 104.92,
+    recordedAt: '2026-11-21T10:00:00Z',
+  });
+  await core.signOut();
+  refuse(new Error('disconnected while sending location'));
+  await report;
+  expect(core.stores.driverMode.getState().position).toBeNull();
   expect(core.queue.pending().points).toBe(0);
 });
 
@@ -562,13 +599,14 @@ it('signs out completely: secret, stores, queue and socket', async () => {
   await core.boot();
   f.fire('connect');
   await settle();
-  core.queue.enqueuePoint({
+  await core.reportPosition({
     lat: 11.55,
     lng: 104.92,
     recordedAt: '2026-11-01T10:00:00.000Z',
   });
   core.stores.driverMode.setState({ locationPermission: 'foreground' });
 
+  expect(core.stores.driverMode.getState().position).not.toBeNull();
   const callsAtSignOut = s.calls.length;
   await core.signOut();
 
@@ -580,6 +618,7 @@ it('signs out completely: secret, stores, queue and socket', async () => {
   expect(core.stores.driverMode.getState().availability).toBeNull();
   expect(core.stores.driverMode.getState().verification).toBeNull();
   expect(core.stores.driverMode.getState().locationPermission).toBeNull();
+  expect(core.stores.driverMode.getState().position).toBeNull();
   expect(core.queue.pending().points).toBe(0);
   expect(f.socket.disconnect).toHaveBeenCalled();
 });

@@ -62,7 +62,10 @@ export const opacity = { pressed: 0.92, disabled: 0.5 } as const;
 export const outlineWidth = 1;
 export const bannerEdgeWidth = 4;
 export const syncStatusMaxWidth = 320;
-export const mapHeight = { mini: 160 } as const;
+export const mapHeight = { mini: 160, active: 240 } as const;
+export const mapPinSize = 36;
+export const mapPinIconSize = 20;
+export const mapPinBorderWidth = 2;
 
 export const type = {
   title: { fontSize: 24, lineHeight: 36, fontFamily: fonts.bold },

@@ -130,3 +130,18 @@ test.each(Object.entries(themes))(
     expect(contrast(text, surfaceGlass, primary)).toBeGreaterThanOrEqual(4.5);
   },
 );
+
+test.each(Object.entries(themes))(
+  '%s map pin icons and outlines contrast with their badge backgrounds',
+  (_scheme, colors) => {
+    const badges = [
+      [colors.primary, colors.onPrimary, colors.surface],
+      [colors.surface, colors.primary, colors.primary],
+      [colors.danger, colors.onStatus, colors.surface],
+    ];
+    for (const [background, icon, border] of badges) {
+      expect(contrast(icon, background)).toBeGreaterThanOrEqual(3);
+      expect(contrast(border, background)).toBeGreaterThanOrEqual(3);
+    }
+  },
+);

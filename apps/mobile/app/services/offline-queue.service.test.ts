@@ -217,3 +217,19 @@ it('reports nothing for a step answered after the queue was cleared (signed out 
   await flushing;
   expect(onStepDone).not.toHaveBeenCalled();
 });
+
+it('notifies observers when steps are queued, dropped, or cleared', async () => {
+  const { q } = queue(memory(), scripted(new ApiError(403, null)).api);
+  const observed = jest.fn(() => q.pending().steps.length);
+  const unsubscribe = q.subscribeSteps(observed);
+  q.enqueuePoint(point(1));
+  q.enqueueStep(rideId, 'arrive');
+  await q.flush();
+  q.enqueueStep(rideId, 'arrive');
+  q.clear();
+  unsubscribe();
+  q.enqueueStep(rideId, 'arrive');
+  expect(observed.mock.results.map(result => result.value)).toEqual([
+    1, 0, 1, 0,
+  ]);
+});

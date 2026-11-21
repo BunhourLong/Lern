@@ -2,15 +2,26 @@ import type {
   DriverAvailability,
   DriverVerification,
   Offer,
+  Point,
+  Ride,
 } from '@lern/contracts';
 import { useEffect, useRef } from 'react';
 import { AccessibilityInfo, Platform } from 'react-native';
 import type { Edge } from 'react-native-safe-area-context';
+import type { MapPin } from '../../components/AppMap';
 import { Banner } from '../../components/Banner';
+import { frameMapRegion } from '../../components/map-region';
 import { Button } from '../../components/Button';
 import { Text } from '../../components/Text';
 import { useT, type StringKey } from '../../i18n';
 import RouteMessageScreen from '../RouteMessage/RouteMessageScreen';
+import { DriverRideCard } from './components/DriverRideCard';
+import {
+  type ActiveDriverRideStatus,
+  DRIVER_CANCEL_REASONS,
+  type DriverCancelReason,
+  type DriverStepAction,
+} from './driver-ride';
 import { OfferCard } from './components/OfferCard';
 import { formatOfferDistance, formatOfferFare } from './offer-format';
 
@@ -28,6 +39,39 @@ export type DriverHomeOffer = { id: string } & (
   | { status: 'expired' | 'unavailable' | 'accepted' | 'declined' }
 );
 
+export type DriverHomeRide = Pick<Ride, 'id' | 'fare' | 'vehicleType'> &
+  (
+    | (Pick<Ride, 'pickup' | 'dropoff'> & {
+        variant: 'active';
+        status: ActiveDriverRideStatus;
+        driverPosition: Point | null;
+        step: {
+          action: DriverStepAction;
+          disabled: boolean;
+          loading: boolean;
+          error?: StringKey;
+          onPress: () => void;
+        };
+        queuedNotice: boolean;
+        cancel?: {
+          open: boolean;
+          disabled: boolean;
+          loading: boolean;
+          selected?: DriverCancelReason;
+          error?: StringKey;
+          onOpen: () => void;
+          onKeep: () => void;
+          onSelect: (value: DriverCancelReason) => void;
+          onConfirm: () => void;
+        };
+      })
+    | {
+        variant: 'ended';
+        status: 'completed' | 'cancelled';
+        onDismiss: () => void;
+      }
+  );
+
 export default function DriverStatusScreen({
   verification,
   availability,
@@ -40,6 +84,7 @@ export default function DriverStatusScreen({
   onDebug,
   edges,
   offer,
+  ride,
   onOfferAction,
   onDismissOffer,
 }: {
@@ -54,6 +99,7 @@ export default function DriverStatusScreen({
   onDebug?: () => void;
   edges?: Edge[];
   offer?: DriverHomeOffer;
+  ride?: DriverHomeRide;
   onOfferAction: (id: string, action: OfferAction) => void;
   onDismissOffer: (id: string) => void;
 }) {
@@ -93,6 +139,27 @@ export default function DriverStatusScreen({
     lastAnnouncedOffer.current = { id: offerId, ended };
   }, [offerId, offerStatus, offerTitle]);
 
+  const rideId = ride?.id;
+  const rideStatus = ride?.status;
+  const rideTitle = rideStatus && t(`driverRide.status.${rideStatus}`);
+  const previousRide = useRef<
+    { id: string; status: DriverHomeRide['status'] } | undefined
+  >(undefined);
+  useEffect(() => {
+    const previous = previousRide.current;
+    if (
+      Platform.OS === 'ios' &&
+      rideTitle &&
+      previous &&
+      previous.id === rideId &&
+      previous.status !== rideStatus
+    ) {
+      AccessibilityInfo.announceForAccessibility(rideTitle);
+    }
+    previousRide.current =
+      rideId && rideStatus ? { id: rideId, status: rideStatus } : undefined;
+  }, [rideId, rideStatus, rideTitle]);
+
   if (verification === null) {
     return (
       <RouteMessageScreen
@@ -115,10 +182,13 @@ export default function DriverStatusScreen({
       edges={edges}
     >
       {verified && (
+        <Text role="bodyStrong" accessibilityLiveRegion="polite">
+          {availabilityLabel}
+        </Text>
+      )}
+      {ride && rideTitle && <DriverRideContent ride={ride} title={rideTitle} />}
+      {verified && (
         <>
-          <Text role="bodyStrong" accessibilityLiveRegion="polite">
-            {availabilityLabel}
-          </Text>
           {offerTitle && offer?.status === 'pending' && (
             <OfferCard
               title={offerTitle}
@@ -193,5 +263,84 @@ export default function DriverStatusScreen({
         </>
       )}
     </RouteMessageScreen>
+  );
+}
+
+function DriverRideContent({
+  ride,
+  title,
+}: {
+  ride: DriverHomeRide;
+  title: string;
+}) {
+  const t = useT();
+  const summary = {
+    title,
+    fare: t('driverOffer.fare', { fare: formatOfferFare(ride.fare, t) }),
+    vehicle: t('driverOffer.vehicle', {
+      vehicle: t(`driverApply.${ride.vehicleType}`),
+    }),
+  };
+  if (ride.variant === 'ended') {
+    return (
+      <DriverRideCard
+        {...summary}
+        variant="ended"
+        dismiss={{ label: t('driverRide.dismiss'), onPress: ride.onDismiss }}
+      />
+    );
+  }
+
+  const target = ride.status === 'in_progress' ? 'dropoff' : 'pickup';
+  const pins: MapPin[] = [
+    {
+      id: target,
+      point: ride[target],
+      kind: target === 'pickup' ? 'rider' : 'dropoff',
+      title: t(`driverRide.pin.${target}`),
+    },
+  ];
+  if (ride.driverPosition) {
+    pins.push({
+      id: 'driver',
+      kind: 'driver',
+      point: ride.driverPosition,
+      title: t('driverRide.pin.driver'),
+    });
+  }
+  const { step, cancel } = ride;
+  return (
+    <DriverRideCard
+      {...summary}
+      variant="active"
+      map={{
+        ...frameMapRegion(ride[target], ride.driverPosition),
+        pins,
+        label: t(`driverRide.map.${target}`),
+        unavailableLabel: t('map.unavailable'),
+      }}
+      step={{
+        label: t(`driverRide.step.${step.action}`),
+        disabled: step.disabled,
+        loading: step.loading,
+        onPress: step.onPress,
+      }}
+      queuedNotice={ride.queuedNotice ? t('driverRide.stepQueued') : undefined}
+      stepError={step.error && t(step.error)}
+      cancel={
+        cancel && {
+          ...cancel,
+          openLabel: t('driverRide.cancel.open'),
+          prompt: t('driverRide.cancel.prompt'),
+          reasons: DRIVER_CANCEL_REASONS.map(value => ({
+            value,
+            label: t(`driverRide.cancel.reason.${value}`),
+          })),
+          confirmLabel: t('driverRide.cancel.confirm'),
+          keepLabel: t('driverRide.cancel.keep'),
+          error: cancel.error && t(cancel.error),
+        }
+      }
+    />
   );
 }

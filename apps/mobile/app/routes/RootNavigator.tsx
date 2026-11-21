@@ -30,7 +30,17 @@ type Props = Pick<
   'requestLocationPermission' | 'refreshLocationPermission'
 > & {
   core: PinActions &
-    Pick<Core, 'setOnline' | 'refreshAvailability' | 'accept' | 'decline'> & {
+    Pick<
+      Core,
+      | 'setOnline'
+      | 'refreshAvailability'
+      | 'accept'
+      | 'decline'
+      | 'step'
+      | 'cancel'
+    > & {
+      queue: Pick<Core['queue'], 'pending'> &
+        Partial<Pick<Core['queue'], 'subscribeSteps'>>;
       stores: Pick<
         Core['stores'],
         | 'session'
@@ -187,6 +197,10 @@ export function RootNavigator({
                     refreshAvailability: core.refreshAvailability,
                     accept: core.accept,
                     decline: core.decline,
+                    step: core.step,
+                    cancel: core.cancel,
+                    pendingSteps: () => core.queue.pending().steps,
+                    subscribePendingSteps: core.queue.subscribeSteps,
                     requestLocationPermission,
                     refreshLocationPermission,
                   }}

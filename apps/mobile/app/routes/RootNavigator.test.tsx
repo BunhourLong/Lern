@@ -78,6 +78,12 @@ function setup(
     refreshAvailability: jest.fn(),
     accept: jest.fn(),
     decline: jest.fn(),
+    step: jest.fn(),
+    cancel: jest.fn(),
+    queue: {
+      pending: () => ({ steps: [], points: 0 }),
+      subscribeSteps: () => () => {},
+    },
     signIn,
     becomeDriver: jest.fn(async () => {
       session.getState().signedIn(me('rider', 'driver'));
@@ -863,4 +869,51 @@ test('denies the button and text callbacks when the interaction expires', async 
   interact.mockReturnValue(false);
   await fireEvent.press(screen.getByRole('button', { name: 'Save PIN' }));
   expect(core.enableLock).not.toHaveBeenCalled();
+});
+
+test('wires driver ride step and cancellation to core', async () => {
+  const { core, session, appConfig, navigator } = setup();
+  session.getState().signedIn(me('driver'));
+  appConfig.getState().setGate({ status: 'ok' });
+  core.stores.driverMode.setState({
+    availability: 'on_trip',
+    verification: 'verified',
+  });
+  core.stores.connection.getState().setConnected(true);
+  const activeRide = core.stores.activeRide;
+  const ride = {
+    id: 'ride-1',
+    status: 'driver_assigned',
+    version: 1,
+    vehicleType: 'remork',
+    pickup: { lat: 11.55, lng: 104.92 },
+    dropoff: { lat: 11.54, lng: 104.92 },
+    fare: { amountMinor: 12_000, currency: 'KHR' },
+  } as const;
+  activeRide.getState().applyRide(ride, 'driver');
+  core.step.mockImplementationOnce(async () => {
+    activeRide
+      .getState()
+      .applyRide({ ...ride, status: 'driver_arrived', version: 2 }, 'driver');
+  });
+  core.cancel.mockImplementationOnce(async () => {
+    activeRide
+      .getState()
+      .applyRide({ ...ride, status: 'cancelled', version: 3 }, 'driver');
+  });
+  await render(navigator);
+
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Arrived at pickup' }),
+  );
+  expect(core.step).toHaveBeenCalledWith(ride.id, 'arrive');
+  await fireEvent.press(screen.getByRole('button', { name: 'Cancel ride' }));
+  await fireEvent.press(screen.getByRole('radio', { name: 'Other' }));
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Confirm cancellation' }),
+  );
+  expect(core.cancel).toHaveBeenCalledWith(ride.id, 'other');
+  expect(
+    screen.getByRole('header', { name: 'Ride cancelled' }),
+  ).toBeOnTheScreen();
 });

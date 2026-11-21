@@ -1,4 +1,4 @@
-import type { Offer, Ride } from '@lern/contracts';
+import type { CancelReason, Offer, Ride } from '@lern/contracts';
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
 import {
   AccessibilityInfo,
@@ -10,6 +10,7 @@ import {
 import type { AppStateStatus } from 'react-native';
 import { themes } from '@theme';
 import { ApiError } from '../../services/api.service';
+import type { QueuedStep } from '../../services/offline-queue.service';
 import type { Permission } from '../../services/location.service';
 import { createActiveRideStore } from '../../stores/active-ride.store';
 import { createConnectionStore } from '../../stores/connection.store';
@@ -43,6 +44,12 @@ function setup(verification: 'verified' | null = 'verified') {
     activeRide: createActiveRideStore(),
     accept: jest.fn<Promise<void>, [string]>().mockResolvedValue(undefined),
     decline: jest.fn<Promise<void>, [string]>().mockResolvedValue(undefined),
+    step: jest
+      .fn<Promise<void>, [string, QueuedStep['action']]>()
+      .mockResolvedValue(undefined),
+    cancel: jest.fn<Promise<void>, [string, CancelReason]>().mockResolvedValue(undefined),
+    pendingSteps: jest.fn<readonly QueuedStep[], []>(() => []),
+    subscribePendingSteps: jest.fn((_listener: () => void) => () => {}),
     requestLocationPermission: jest.fn(
       async (): Promise<Permission> => 'always',
     ),
@@ -238,9 +245,10 @@ describe('driver Home offer', () => {
     });
     await home.render();
     await act(() =>
-      home.activeRide
-        .getState()
-        .applyRide({ ...driverRide, id: 'other' }, 'driver'),
+      home.activeRide.getState().applyRide(
+        { ...driverRide, id: 'other', status: 'completed' },
+        'driver',
+      ),
     );
     await fireEvent.press(button('Accept'));
 
@@ -943,4 +951,349 @@ test('makes a single request across repeated taps and re-enables on completion',
   expect(button('Go online')).toBeBusy();
   await act(() => finish());
   expect(button('Go online')).toBeEnabled();
+});
+
+describe('driver Home ride', () => {
+  function setupRide(status: Ride['status'] = 'driver_assigned') {
+    const home = setup();
+    home.driverMode.setState({ availability: 'on_trip' });
+    home.activeRide.getState().applyRide({ ...driverRide, status }, 'driver');
+    return home;
+  }
+
+  test.each(['ios', 'android'] as const)(
+    'announces only later ride status changes on iOS (%s)',
+    async platform => {
+      jest.replaceProperty(Platform, 'OS', platform);
+      const announce = jest
+        .spyOn(AccessibilityInfo, 'announceForAccessibility')
+        .mockClear()
+        .mockImplementation(() => undefined);
+      const home = setupRide();
+      home.step.mockImplementation(async (_id, action) => {
+        const status = {
+          arrive: 'driver_arrived',
+          start: 'in_progress',
+          complete: 'completed',
+        } as const;
+        const current = home.activeRide.getState().driver!;
+        home.activeRide
+          .getState()
+          .applyRide(
+            {
+              ...current,
+              version: current.version + 1,
+              status: status[action],
+            },
+            'driver',
+          );
+      });
+      await home.render();
+      expect(
+        screen.getByRole('header', { name: 'Heading to pickup' }),
+      ).toBeOnTheScreen();
+      expect(announce).not.toHaveBeenCalled();
+      for (const name of ['Arrived at pickup', 'Start ride', 'Complete ride']) {
+        await fireEvent.press(button(name));
+      }
+      expect(home.step.mock.calls).toEqual([
+        [driverRide.id, 'arrive'],
+        [driverRide.id, 'start'],
+        [driverRide.id, 'complete'],
+      ]);
+      expect(announce.mock.calls).toEqual(
+        platform === 'ios'
+          ? [['Arrived at pickup'], ['Ride in progress'], ['Ride completed']]
+          : [],
+      );
+      expect(
+        screen.getByRole('header', { name: 'Ride completed' }),
+      ).toBeOnTheScreen();
+      expect(screen.getByText('Fare: 12,000 ៛')).toBeOnTheScreen();
+      expect(screen.getByText('Vehicle type: Remork')).toBeOnTheScreen();
+      expect(screen.queryByRole('image')).toBeNull();
+      await fireEvent.press(button('Dismiss'));
+      expect(
+        screen.queryByRole('header', { name: 'Ride completed' }),
+      ).toBeNull();
+      expect(home.activeRide.getState().driver?.status).toBe('completed');
+    },
+  );
+
+  test('moves the driver pin and switches the target from pickup to dropoff', async () => {
+    jest.replaceProperty(Platform, 'OS', 'ios');
+    jest.mocked(useColorScheme).mockReturnValue('dark');
+    const home = setupRide();
+    await home.render();
+    const markers = () =>
+      screen.getAllByTestId('map-marker').map(marker => marker.props.title);
+    expect(markers()).toEqual(['Pickup']);
+    expect(
+      screen.getByRole('image', { name: 'Route to pickup location map' }),
+    ).toBeOnTheScreen();
+    const point = {
+      lat: 11.57,
+      lng: 104.98,
+      recordedAt: '2026-11-21T10:00:00Z',
+    };
+    await act(() => home.driverMode.getState().applyPosition(point));
+    expect(markers()).toEqual(['Pickup', 'Your location']);
+    expect(screen.getAllByTestId('map-marker')[1].props.coordinate).toEqual({
+      latitude: point.lat,
+      longitude: point.lng,
+    });
+    expect(screen.getByTestId('map-view').props.region.latitude).toBeCloseTo(
+      (point.lat + driverRide.pickup.lat) / 2,
+    );
+    const nextPoint = {
+      ...point,
+      lng: 104.95,
+      recordedAt: '2026-11-21T10:00:04Z',
+    };
+    await act(() => home.driverMode.getState().applyPosition(nextPoint));
+    expect(
+      screen.getAllByTestId('map-marker')[1].props.coordinate.longitude,
+    ).toBe(nextPoint.lng);
+    await act(() =>
+      home.activeRide
+        .getState()
+        .applyRide(
+          { ...driverRide, status: 'in_progress', version: 3 },
+          'driver',
+        ),
+    );
+    expect(markers()).toEqual(['Dropoff', 'Your location']);
+    expect(
+      screen.getByRole('image', { name: 'Route to dropoff location map' }),
+    ).toBeOnTheScreen();
+    expect(screen.queryByRole('button', { name: 'Cancel ride' })).toBeNull();
+  });
+
+  test('queues one offline step, blocks duplicate taps, and reads the existing queue on remount', async () => {
+    const home = setupRide();
+    home.connection.getState().setConnected(false);
+    let finish!: () => void;
+    home.step.mockReturnValueOnce(
+      new Promise(resolve => {
+        finish = resolve;
+      }),
+    );
+    const { unmount } = await home.render();
+    const arrive = button('Arrived at pickup');
+    expect(arrive).toBeEnabled();
+    await act(async () => {
+      await fireEvent.press(arrive);
+      expect(arrive).toBeEnabled();
+      await fireEvent.press(arrive);
+    });
+    expect(home.step).toHaveBeenCalledTimes(1);
+    expect(button('Arrived at pickup')).toBeBusy();
+    home.pendingSteps.mockReturnValue([
+      { rideId: driverRide.id, action: 'arrive', key: 'queued' },
+    ]);
+    await act(() => finish());
+    expect(
+      screen.getByText('Saved offline. Will send when connected.'),
+    ).toBeOnTheScreen();
+    await act(() => home.connection.getState().setConnected(true));
+    expect(button('Arrived at pickup')).toBeDisabled();
+    expect(button('Cancel ride')).toBeDisabled();
+    await fireEvent.press(button('Arrived at pickup'));
+    expect(home.step).toHaveBeenCalledTimes(1);
+    await unmount();
+    await home.render();
+    expect(button('Arrived at pickup')).toBeDisabled();
+  });
+
+  test('ignores a stale arrival press after the arrival is queued', async () => {
+    const home = setupRide();
+    await home.render();
+    const arrive = button('Arrived at pickup');
+
+    home.pendingSteps.mockReturnValue([
+      { rideId: driverRide.id, action: 'arrive', key: 'queued' },
+    ]);
+    expect(arrive).toBeEnabled();
+    await fireEvent.press(arrive);
+
+    expect(home.step).not.toHaveBeenCalled();
+  });
+
+  test('unblocks the ride when reconnect drains a refused step without a new ride status', async () => {
+    const home = setupRide();
+    home.pendingSteps.mockReturnValue([
+      { rideId: driverRide.id, action: 'arrive', key: 'queued' },
+    ]);
+    await home.render();
+    expect(button('Arrived at pickup')).toBeDisabled();
+    expect(button('Cancel ride')).toBeDisabled();
+
+    await act(() => {
+      home.pendingSteps.mockReturnValue([]);
+      home.subscribePendingSteps.mock.calls[0][0]();
+    });
+    expect(button('Arrived at pickup')).toBeEnabled();
+    expect(button('Cancel ride')).toBeEnabled();
+    expect(
+      screen.queryByText('Saved offline. Will send when connected.'),
+    ).toBeNull();
+  });
+
+  test.each([
+    [undefined, 'Something went wrong, try again'],
+    [new ApiError(0, null), 'No connection, try again'],
+  ] as const)(
+    'allows a step retry after an inline error (%p)',
+    async (error, message) => {
+      const home = setupRide();
+      if (error) home.step.mockRejectedValueOnce(error);
+      await home.render();
+      await fireEvent.press(button('Arrived at pickup'));
+      expect(screen.getByText(message).props.accessibilityLiveRegion).toBe(
+        'polite',
+      );
+      expect(button('Arrived at pickup')).toBeEnabled();
+      await act(() =>
+        home.activeRide
+          .getState()
+          .applyRide(
+            { ...driverRide, status: 'driver_arrived', version: 2 },
+            'driver',
+          ),
+      );
+      expect(screen.queryByText(message)).toBeNull();
+    },
+  );
+
+  test('lets a suspended driver continue or cancel their active ride and hides unrelated offers', async () => {
+    const home = setupRide();
+    home.activeRide.getState().applyOffer({ ...pendingOffer, rideId: 'other' });
+    await home.render(() => offerStart);
+    expect(screen.getByText('On a trip')).toBeOnTheScreen();
+    expect(queryOfferHeading('New ride offer')).toBeNull();
+    await act(() => home.driverMode.setState({ verification: 'suspended' }));
+    await fireEvent.press(button('Arrived at pickup'));
+    expect(home.step).toHaveBeenCalledWith(driverRide.id, 'arrive');
+    home.cancel.mockImplementationOnce(async () => {
+      home.activeRide
+        .getState()
+        .applyRide(
+          { ...driverRide, status: 'cancelled', version: 2 },
+          'driver',
+        );
+    });
+    await fireEvent.press(button('Cancel ride'));
+    expect(button('Confirm cancellation')).toBeDisabled();
+    const reason = () => screen.getByRole('radio', { name: 'Vehicle problem' });
+    await fireEvent.press(reason());
+    expect(reason()).toBeChecked();
+    await fireEvent.press(button('Keep ride'));
+    await fireEvent.press(button('Cancel ride'));
+    expect(reason()).not.toBeChecked();
+    await fireEvent.press(reason());
+    await fireEvent.press(button('Confirm cancellation'));
+    expect(home.cancel).toHaveBeenCalledWith(driverRide.id, 'vehicle_problem');
+    expect(
+      screen.getByRole('header', { name: 'Ride cancelled' }),
+    ).toBeOnTheScreen();
+  });
+
+  test('ignores a stale cancellation confirmation after disconnecting', async () => {
+    const home = setupRide();
+    await home.render();
+    await fireEvent.press(button('Cancel ride'));
+    await fireEvent.press(screen.getByRole('radio', { name: 'Vehicle problem' }));
+    const confirm = button('Confirm cancellation');
+
+    await act(async () => {
+      home.connection.getState().setConnected(false);
+      expect(confirm).toBeEnabled();
+      await fireEvent.press(confirm);
+    });
+
+    expect(home.cancel).not.toHaveBeenCalled();
+    expect(button('Confirm cancellation')).toBeDisabled();
+  });
+
+  test('ignores a stale cancellation confirmation after a step is queued', async () => {
+    const home = setupRide();
+    await home.render();
+    await fireEvent.press(button('Cancel ride'));
+    await fireEvent.press(screen.getByRole('radio', { name: 'Vehicle problem' }));
+    const confirm = button('Confirm cancellation');
+
+    home.pendingSteps.mockReturnValue([
+      { rideId: driverRide.id, action: 'arrive', key: 'queued' },
+    ]);
+    expect(confirm).toBeEnabled();
+    await fireEvent.press(confirm);
+
+    expect(home.cancel).not.toHaveBeenCalled();
+  });
+
+  test('blocks offline cancellation and duplicate confirmations, then applies a 409 snapshot', async () => {
+    const home = setupRide('driver_arrived');
+    home.connection.getState().setConnected(false);
+    let reject!: (cause: unknown) => void;
+    home.cancel.mockReturnValueOnce(
+      new Promise((_resolve, fail) => {
+        reject = fail;
+      }),
+    );
+    await home.render();
+    expect(button('Cancel ride')).toBeDisabled();
+    await act(() => home.connection.getState().setConnected(true));
+    await fireEvent.press(button('Cancel ride'));
+    await fireEvent.press(
+      screen.getByRole('radio', { name: 'Rider unreachable' }),
+    );
+    await act(() => home.connection.getState().setConnected(false));
+    expect(button('Confirm cancellation')).toBeDisabled();
+    await act(() => home.connection.getState().setConnected(true));
+    const confirm = button('Confirm cancellation');
+    await act(async () => {
+      await fireEvent.press(confirm);
+      expect(confirm).toBeEnabled();
+      await fireEvent.press(confirm);
+    });
+    expect(home.cancel).toHaveBeenCalledTimes(1);
+    expect(home.cancel).toHaveBeenCalledWith(
+      driverRide.id,
+      'rider_unreachable',
+    );
+    expect(button('Confirm cancellation')).toBeBusy();
+    expect(button('Start ride')).toBeDisabled();
+    const updated = { ...driverRide, status: 'in_progress', version: 3 };
+    await act(() => reject(new ApiError(409, { ride: updated })));
+    expect(home.activeRide.getState().driver).toEqual(updated);
+    expect(screen.queryByRole('radio')).toBeNull();
+    expect(button('Complete ride')).toBeEnabled();
+  });
+
+  test('shows inline cancel failure and clears selection when the ride status changes', async () => {
+    const home = setupRide();
+    home.cancel.mockRejectedValueOnce(new ApiError(404, null));
+    await home.render();
+    await fireEvent.press(button('Cancel ride'));
+    await fireEvent.press(screen.getByRole('radio', { name: 'Changed mind' }));
+    await fireEvent.press(button('Confirm cancellation'));
+    expect(
+      screen.getByText('Ride no longer available').props
+        .accessibilityLiveRegion,
+    ).toBe('polite');
+    await act(() =>
+      home.activeRide
+        .getState()
+        .applyRide(
+          { ...driverRide, status: 'driver_arrived', version: 2 },
+          'driver',
+        ),
+    );
+    expect(screen.queryByText('Ride no longer available')).toBeNull();
+    expect(button('Cancel ride')).toBeEnabled();
+    await fireEvent.press(button('Cancel ride'));
+    expect(
+      screen.getByRole('radio', { name: 'Changed mind' }),
+    ).not.toBeChecked();
+  });
 });

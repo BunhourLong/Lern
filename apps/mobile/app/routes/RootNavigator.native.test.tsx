@@ -51,6 +51,12 @@ function renderRiderTabs(debug: ReactNode = null) {
         refreshAvailability: jest.fn(),
         accept: jest.fn(),
         decline: jest.fn(),
+        step: jest.fn(),
+        cancel: jest.fn(),
+        queue: {
+          pending: () => ({ steps: [], points: 0 }),
+          subscribeSteps: () => () => {},
+        },
         becomeDriver: jest.fn(),
         enableLock: jest.fn(),
         unlock: jest.fn(),

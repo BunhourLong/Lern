@@ -40,6 +40,12 @@ jest.mock('../app/boot/app-core', () => {
       setOnline: jest.fn(),
       accept: jest.fn(),
       decline: jest.fn(),
+      step: jest.fn(),
+      cancel: jest.fn(),
+      queue: {
+        pending: () => ({ steps: [], points: 0 }),
+        subscribeSteps: () => () => {},
+      },
       pinWaitMs: () => 0,
       stores: {
         language,

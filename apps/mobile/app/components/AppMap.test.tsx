@@ -98,6 +98,9 @@ test.each(['light', 'dark'] as const)(
     await render(<AppMap {...props} />);
 
     expect(screen.queryByTestId('map-view')).toBeNull();
+    expect(
+      screen.getByLabelText(props.accessibilityLabel).props.accessible,
+    ).toBe(true);
     expect(screen.getByLabelText(props.accessibilityLabel)).toHaveStyle({
       backgroundColor: themes[scheme].surface,
       borderColor: themes[scheme].border,
@@ -132,3 +135,57 @@ test.each(['light', 'dark'] as const)(
     });
   },
 );
+
+const pins = (['rider', 'driver', 'dropoff'] as const).map(kind => ({
+  id: kind,
+  title: kind,
+  kind,
+  point: center,
+}));
+
+test('renders active badges, retints them on theme changes and keeps the default pin', async () => {
+  jest.replaceProperty(Platform, 'OS', 'ios');
+  const map = (
+    <AppMap {...props} size="active" pins={[...props.pins, ...pins]} />
+  );
+  const { rerender } = await render(map);
+  for (const scheme of ['light', 'dark'] as const) {
+    jest.mocked(useColorScheme).mockReturnValue(scheme);
+    await rerender(
+      <AppMap {...props} size="active" pins={[...props.pins, ...pins]} />,
+    );
+    expect(screen.getByTestId('map-view')).toHaveStyle({ height: 240 });
+    const [legacy, rider, driver, dropoff] =
+      screen.getAllByTestId('map-marker');
+    const { primary, surface, onPrimary, danger, onStatus } = themes[scheme];
+    expect(legacy.props.pinColor).toBe(primary);
+    expect(legacy.children).toHaveLength(0);
+    for (const [marker, backgroundColor, borderColor, tintColor] of [
+      [rider, primary, surface, onPrimary],
+      [driver, surface, primary, primary],
+      [dropoff, danger, surface, onStatus],
+    ] as const) {
+      expect(marker.props.anchor).toEqual({ x: 0.5, y: 0.5 });
+      expect(marker.children[0]).toHaveStyle({
+        backgroundColor,
+        borderColor,
+        width: 36,
+        height: 36,
+        borderWidth: 2,
+      });
+      const [icon] = marker.queryAll(node => node.props.source !== undefined);
+      expect(icon).toHaveStyle({ tintColor, width: 20, height: 20 });
+      expect(icon.props.accessible).toBe(false);
+      expect(icon.props.source).toBeDefined();
+    }
+  }
+});
+
+test('shows an accessible full-height fallback on unconfigured Android', async () => {
+  jest.replaceProperty(Platform, 'OS', 'android');
+  await render(<AppMap {...props} size="active" pins={pins} />);
+  const fallback = screen.getByLabelText(props.accessibilityLabel);
+  expect(fallback.props.accessible).toBe(true);
+  expect(fallback).toHaveStyle({ minHeight: 240 });
+  expect(screen.queryByTestId('map-marker')).toBeNull();
+});

@@ -1,4 +1,4 @@
-import { offerSchema } from '@lern/contracts';
+import { offerSchema, type Ride, rideSchema } from '@lern/contracts';
 import { useEffect, useReducer, useRef, useState } from 'react';
 import { AppState, Linking } from 'react-native';
 import type { Edge } from 'react-native-safe-area-context';
@@ -7,21 +7,32 @@ import type { Core } from '../../boot/core';
 import type { StringKey } from '../../i18n';
 import { ApiError } from '../../services/api.service';
 import type { Permission } from '../../services/location.service';
+import type { QueuedStep } from '../../services/offline-queue.service';
 import type { createActiveRideStore } from '../../stores/active-ride.store';
 import type { createConnectionStore } from '../../stores/connection.store';
 import type { createDriverModeStore } from '../../stores/driver-mode.store';
 import DriverStatusScreen, {
   type DriverHomeOffer,
+  type DriverHomeRide,
   type OfferAction,
 } from './DriverStatusScreen';
+import {
+  canDriverCancel,
+  type DriverCancelReason,
+  type DriverStepAction,
+  isActiveDriverRide,
+  nextDriverStep,
+} from './driver-ride';
 
 export type DriverStatusActions = Pick<
   Core,
-  'setOnline' | 'refreshAvailability' | 'accept' | 'decline'
+  'setOnline' | 'refreshAvailability' | 'accept' | 'decline' | 'step' | 'cancel'
 > & {
   driverMode: ReturnType<typeof createDriverModeStore>;
   connection: ReturnType<typeof createConnectionStore>;
   activeRide: ReturnType<typeof createActiveRideStore>;
+  pendingSteps: () => readonly QueuedStep[];
+  subscribePendingSteps?: Core['queue']['subscribeSteps'];
   requestLocationPermission: () => Promise<Permission>;
   refreshLocationPermission: () => void;
 };
@@ -31,12 +42,20 @@ function remainingOfferSeconds(expiresAt: string, now: number) {
   return Math.max(0, Math.ceil((Date.parse(expiresAt) - now) / 1000));
 }
 
+function rideScope(ride: Ride | null) {
+  return ride ? `${ride.id}:${ride.status}` : undefined;
+}
+
 export default function DriverStatusContainer({
   driverMode,
   connection,
   activeRide,
   accept,
   decline,
+  step,
+  cancel,
+  pendingSteps,
+  subscribePendingSteps,
   now = Date.now,
   requestLocationPermission,
   refreshLocationPermission,
@@ -58,7 +77,43 @@ export default function DriverStatusContainer({
   const [error, setError] = useState<StringKey>();
 
   const offer = useStore(activeRide, state => state.offer);
-  const driverRideId = useStore(activeRide, state => state.driver?.id);
+  const driverRide = useStore(activeRide, state => state.driver);
+  const driverPosition = useStore(driverMode, state => state.position);
+  const currentRideScope = rideScope(driverRide);
+  const activeDriverRide = driverRide && isActiveDriverRide(driverRide.status);
+  const rideInFlight = useRef(false);
+  const [rideBusy, setRideBusy] = useState<{
+    scope: string;
+    command: 'step' | 'cancel';
+  }>();
+  const [stepError, setStepError] = useState<{
+    scope: string;
+    key: StringKey;
+  }>();
+  const [cancelPanel, setCancelPanel] = useState<{
+    scope: string;
+    reason?: DriverCancelReason;
+    error?: StringKey;
+  }>();
+  const [dismissedRideIds, setDismissedRideIds] = useState(
+    () => new Set<string>(),
+  );
+  const [, tickQueue] = useReducer(revision => revision + 1, 0);
+  useEffect(() => {
+    const unsubscribe = subscribePendingSteps?.(tickQueue);
+    if (unsubscribe) tickQueue();
+    return unsubscribe;
+  }, [subscribePendingSteps, tickQueue]);
+
+  useEffect(() => {
+    setStepError(issue =>
+      issue?.scope === currentRideScope ? issue : undefined,
+    );
+    setCancelPanel(panel =>
+      panel?.scope === currentRideScope ? panel : undefined,
+    );
+  }, [currentRideScope]);
+
   const offerInFlight = useRef(false);
   const [offerBusy, setOfferBusy] = useState<{
     id: string;
@@ -78,10 +133,11 @@ export default function DriverStatusContainer({
   if (
     verification === 'verified' &&
     offer &&
-    !dismissedOfferIds.has(offer.id)
+    !dismissedOfferIds.has(offer.id) &&
+    (!activeDriverRide || driverRide?.id === offer.rideId)
   ) {
     const { id, status } = offer;
-    if (driverRideId === offer.rideId) {
+    if (driverRide?.id === offer.rideId) {
       homeOffer = { id, status: 'accepted' };
     } else if (status === 'declined' || status === 'expired') {
       homeOffer = { id, status };
@@ -182,7 +238,8 @@ export default function DriverStatusContainer({
       driverMode.getState().verification !== 'verified' ||
       latest?.id !== id ||
       latest.status !== 'pending' ||
-      driver?.id === latest.rideId ||
+      (driver &&
+        (driver.id === latest.rideId || isActiveDriverRide(driver.status))) ||
       remainingOfferSeconds(latest.expiresAt, now()) === 0
     )
       return;
@@ -227,6 +284,161 @@ export default function DriverStatusContainer({
     }
   };
 
+  const runStep = async (id: string, action: DriverStepAction) => {
+    const latest = activeRide.getState().driver;
+    const scope = rideScope(latest);
+    const alreadyQueued = () =>
+      pendingSteps().some(item => item.rideId === id && item.action === action);
+    if (
+      rideInFlight.current ||
+      !scope ||
+      latest?.id !== id ||
+      driverMode.getState().verification === null ||
+      nextDriverStep(latest.status) !== action ||
+      alreadyQueued()
+    )
+      return;
+
+    rideInFlight.current = true;
+    setRideBusy({ scope, command: 'step' });
+    setStepError(undefined);
+    try {
+      await step(id, action);
+      if (rideScope(activeRide.getState().driver) === scope && !alreadyQueued())
+        setStepError({ scope, key: 'driverStatus.error.generic' });
+    } catch (cause) {
+      if (rideScope(activeRide.getState().driver) === scope) {
+        setStepError({
+          scope,
+          key:
+            cause instanceof ApiError && cause.status === 0
+              ? 'driverStatus.error.connection'
+              : 'driverStatus.error.generic',
+        });
+      }
+    } finally {
+      rideInFlight.current = false;
+      setRideBusy(undefined);
+      tickQueue();
+    }
+  };
+
+  const confirmCancel = async (
+    id: string,
+    scope: string,
+    reason?: DriverCancelReason,
+  ) => {
+    const latest = activeRide.getState().driver;
+    if (
+      rideInFlight.current ||
+      !connection.getState().connected ||
+      !reason ||
+      latest?.id !== id ||
+      rideScope(latest) !== scope ||
+      driverMode.getState().verification === null ||
+      !canDriverCancel(latest.status) ||
+      pendingSteps().some(item => item.rideId === id)
+    )
+      return;
+
+    rideInFlight.current = true;
+    setRideBusy({ scope, command: 'cancel' });
+    setCancelPanel({ scope, reason });
+    try {
+      await cancel(id, reason);
+      setCancelPanel(undefined);
+    } catch (cause) {
+      const state = activeRide.getState();
+      if (state.driver?.id !== id) return;
+      const status = cause instanceof ApiError ? cause.status : undefined;
+      const body = cause instanceof ApiError ? cause.body : undefined;
+      if (
+        status === 409 &&
+        body &&
+        typeof body === 'object' &&
+        'ride' in body
+      ) {
+        const parsed = rideSchema.safeParse(body.ride);
+        if (parsed.success && parsed.data.id === id) {
+          state.applyRide(parsed.data, 'driver');
+          setCancelPanel(undefined);
+          return;
+        }
+      }
+      if (rideScope(state.driver) === scope) {
+        const cancelError =
+          status === 404
+            ? 'driverRide.error.unavailable'
+            : status === 0
+            ? 'driverStatus.error.connection'
+            : 'driverStatus.error.generic';
+        setCancelPanel({ scope, reason, error: cancelError });
+      }
+    } finally {
+      rideInFlight.current = false;
+      setRideBusy(undefined);
+    }
+  };
+
+  let homeRide: DriverHomeRide | undefined;
+  if (
+    verification !== null &&
+    driverRide &&
+    currentRideScope &&
+    !dismissedRideIds.has(driverRide.id)
+  ) {
+    const { id, status, fare, vehicleType, pickup, dropoff } = driverRide;
+    const summary = { id, fare, vehicleType };
+    const action = nextDriverStep(status);
+    if (isActiveDriverRide(status) && action) {
+      const pending = pendingSteps().filter(item => item.rideId === id);
+      const queued = pending.some(item => item.action === action);
+      const currentCommand =
+        rideBusy?.scope === currentRideScope ? rideBusy.command : undefined;
+      const panel =
+        cancelPanel?.scope === currentRideScope ? cancelPanel : undefined;
+      homeRide = {
+        ...summary,
+        variant: 'active',
+        status,
+        pickup,
+        dropoff,
+        driverPosition,
+        queuedNotice: queued && currentCommand !== 'step',
+        step: {
+          action,
+          disabled: queued || Boolean(rideBusy),
+          loading: currentCommand === 'step',
+          error:
+            stepError?.scope === currentRideScope ? stepError.key : undefined,
+          onPress: () => runStep(id, action),
+        },
+        cancel: canDriverCancel(status)
+          ? {
+              open: Boolean(panel),
+              disabled: !connected || Boolean(rideBusy) || pending.length > 0,
+              loading: currentCommand === 'cancel',
+              selected: panel?.reason,
+              error: panel?.error,
+              onOpen: () => setCancelPanel({ scope: currentRideScope }),
+              onKeep: () => setCancelPanel(undefined),
+              onSelect: reason =>
+                setCancelPanel({ scope: currentRideScope, reason }),
+              onConfirm: () =>
+                confirmCancel(id, currentRideScope, panel?.reason),
+            }
+          : undefined,
+      };
+    } else if (status === 'completed' || status === 'cancelled') {
+      homeRide = {
+        ...summary,
+        variant: 'ended',
+        status,
+        onDismiss: () => setDismissedRideIds(ids => new Set(ids).add(id)),
+      };
+    }
+  }
+
   const locationNotice =
     permission === 'foreground'
       ? 'warning'
@@ -248,6 +460,7 @@ export default function DriverStatusContainer({
       onDebug={onDebug}
       edges={edges}
       offer={homeOffer}
+      ride={homeRide}
       onOfferAction={respondToOffer}
       onDismissOffer={id => setDismissedOfferIds(ids => new Set(ids).add(id))}
     />
