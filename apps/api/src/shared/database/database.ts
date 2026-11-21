@@ -29,6 +29,7 @@ import { CreateDriverLedgerEntries1795334400000 } from './migrations/17953344000
 import { DriverLedgerDriverIndex1795420800000 } from './migrations/1795420800000-driver-ledger-driver-index';
 import { CreateRatings1795507200000 } from './migrations/1795507200000-create-ratings';
 import { RidesHistoryIndexes1795593600000 } from './migrations/1795593600000-rides-history-indexes';
+import { StaffAuthAndDropAdminRole1795680000000 } from './migrations/1795680000000-staff-auth-and-drop-admin-role';
 
 // Migrations are listed, not globbed, so the same list works from ts (tests) and dist (CLI)
 export const migrations = [
@@ -62,6 +63,7 @@ export const migrations = [
   DriverLedgerDriverIndex1795420800000,
   CreateRatings1795507200000,
   RidesHistoryIndexes1795593600000,
+  StaffAuthAndDropAdminRole1795680000000,
 ];
 
 export function dataSourceOptions(url: string): DataSourceOptions {

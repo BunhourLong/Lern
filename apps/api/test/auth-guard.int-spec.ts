@@ -8,7 +8,7 @@ import { bootApp, signIn, uniquePhone } from './support/actors';
 
 type Tokens = { accessToken: string; refreshToken: string };
 
-// Probe routes: no real driver/admin endpoint exists yet, and the guard is global, so it applies here too
+// Probe routes: the guard is global, so it applies here too
 @Controller('probe')
 class ProbeController {
   @Get('driver')
@@ -17,9 +17,9 @@ class ProbeController {
     return 'ok';
   }
 
-  @Get('admin')
-  @Roles('admin')
-  admin(): string {
+  @Get('rider')
+  @Roles('rider')
+  rider(): string {
     return 'ok';
   }
 }
@@ -52,7 +52,7 @@ describe('GET /me', () => {
     const { sub } = app.get(JwtService).decode<{ sub: string }>(accessToken);
     const [header, payload] = accessToken.split('.');
     const unsigned = `${Buffer.from('{"alg":"none","typ":"JWT"}').toString('base64url')}.${payload}.`;
-    const forged = new JwtService({ secret: 'x'.repeat(32) }).sign({ sub, roles: ['admin'] });
+    const forged = new JwtService({ secret: 'x'.repeat(32) }).sign({ sub, roles: ['driver'] });
     const expired = app.get(JwtService).sign({ sub, roles: ['rider'] }, { expiresIn: -10 });
 
     expect((await me()).status).toBe(HttpStatus.UNAUTHORIZED);
@@ -76,14 +76,15 @@ describe('@Roles', () => {
 
     expect((await asDriver(refreshed)).status).toBe(HttpStatus.OK);
     expect((await me(refreshed.accessToken)).body).toMatchObject({ roles: ['driver', 'rider'] });
-    const asAdmin = await http().get('/probe/admin').set('authorization', `Bearer ${refreshed.accessToken}`);
-    expect(asAdmin.status).toBe(HttpStatus.FORBIDDEN);
   });
 
   it('does not give back a removed rider role on the next login', async () => {
     const to = await uniquePhone(app);
-    await login(to);
+    const asRider = (t: Tokens) => http().get('/probe/rider').set('authorization', `Bearer ${t.accessToken}`);
+    expect((await asRider(await login(to))).status).toBe(HttpStatus.OK);
     await sql(`DELETE FROM user_roles WHERE role = 'rider' AND user_id = (SELECT id FROM users WHERE phone = $1)`, [to]);
-    expect((await me((await login(to)).accessToken)).body).toMatchObject({ roles: [] });
+    const again = await login(to);
+    expect((await me(again.accessToken)).body).toMatchObject({ roles: [] });
+    expect((await asRider(again)).status).toBe(HttpStatus.FORBIDDEN);
   });
 });

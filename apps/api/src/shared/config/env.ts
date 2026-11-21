@@ -56,6 +56,13 @@ const Env = z.object({
   MAINTENANCE: z.stringbool().default(false),
   // Riel per US dollar for the app's approximate `≈ $` display only, never in money maths
   KHR_PER_USD: z.coerce.number().int().min(1).default(4000),
+  NODE_ENV: z.string().min(1).optional(),
+  // Staff web admin (PLAN.md M7): off unless asked, so a deploy never exposes /admin by accident
+  ADMIN_ENABLED: z.stringbool().default(false),
+  // No default: dev approves every login without a second factor, so each deploy must choose it
+  STAFF_MFA_PROVIDER: z.enum(['dev']).optional(),
+  // false only for local http; browsers drop Secure cookies there
+  ADMIN_COOKIE_SECURE: z.stringbool().default(true),
 }).refine((env) => env.OTP_PROVIDER !== 'telegram' || env.TELEGRAM_GATEWAY_TOKEN, {
   message: 'Required when OTP_PROVIDER is telegram',
   path: ['TELEGRAM_GATEWAY_TOKEN'],
@@ -74,6 +81,15 @@ const Env = z.object({
 }).refine((env) => env.APP_STORE_URL_ANDROID === undefined || env.APP_MIN_VERSION_ANDROID !== undefined, {
   message: 'Required with its store URL',
   path: ['APP_MIN_VERSION_ANDROID'],
+}).refine((env) => !env.ADMIN_ENABLED || env.STAFF_MFA_PROVIDER !== undefined, {
+  message: 'Required when ADMIN_ENABLED is true',
+  path: ['STAFF_MFA_PROVIDER'],
+}).refine((env) => !env.ADMIN_ENABLED || env.NODE_ENV !== 'production' || env.STAFF_MFA_PROVIDER !== 'dev', {
+  message: 'dev skips the second factor: not allowed in production',
+  path: ['STAFF_MFA_PROVIDER'],
+}).refine((env) => !env.ADMIN_ENABLED || env.NODE_ENV !== 'production' || env.ADMIN_COOKIE_SECURE, {
+  message: 'Must be true in production',
+  path: ['ADMIN_COOKIE_SECURE'],
 });
 
 export type Config = z.infer<typeof Env>;

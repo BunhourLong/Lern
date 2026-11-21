@@ -37,6 +37,8 @@ it('returns typed config with defaults for a valid env', () => {
     DRIVER_DEBT_LIMIT_MINOR: 40000,
     MAINTENANCE: false,
     KHR_PER_USD: 4000,
+    ADMIN_ENABLED: false,
+    ADMIN_COOKIE_SECURE: true,
   });
 });
 
@@ -140,4 +142,26 @@ it('requires the service account path when PUSH_PROVIDER is fcm', () => {
   );
   const config = parseEnv({ ...valid, PUSH_PROVIDER: 'fcm', FIREBASE_SERVICE_ACCOUNT_PATH: '/secrets/firebase.json' });
   expect(config.FIREBASE_SERVICE_ACCOUNT_PATH).toBe('/secrets/firebase.json');
+});
+
+describe('admin (staff) auth', () => {
+  const admin = { ...valid, ADMIN_ENABLED: 'true', STAFF_MFA_PROVIDER: 'dev' };
+
+  it('is off by default, and off it needs no MFA provider even in production', () => {
+    expect(parseEnv({ ...valid, NODE_ENV: 'production' })).toMatchObject({ ADMIN_ENABLED: false, NODE_ENV: 'production' });
+    expect(parseEnv({ ...valid, ADMIN_ENABLED: 'false' }).ADMIN_ENABLED).toBe(false);
+  });
+
+  it('needs an MFA provider chosen when on, with no default', () => {
+    expect(() => parseEnv({ ...admin, STAFF_MFA_PROVIDER: undefined })).toThrow(/STAFF_MFA_PROVIDER/);
+    expect(() => parseEnv({ ...admin, STAFF_MFA_PROVIDER: 'sms' })).toThrow(/STAFF_MFA_PROVIDER/);
+    expect(parseEnv(admin)).toMatchObject({ ADMIN_ENABLED: true, STAFF_MFA_PROVIDER: 'dev', ADMIN_COOKIE_SECURE: true });
+  });
+
+  it('refuses the dev MFA provider and a non-Secure cookie in production', () => {
+    expect(() => parseEnv({ ...admin, NODE_ENV: 'production' })).toThrow(/STAFF_MFA_PROVIDER/);
+    const insecure = () => parseEnv({ ...admin, NODE_ENV: 'production', ADMIN_COOKIE_SECURE: 'false' });
+    expect(insecure).toThrow(/ADMIN_COOKIE_SECURE/);
+    expect(parseEnv({ ...admin, ADMIN_COOKIE_SECURE: 'false' }).ADMIN_COOKIE_SECURE).toBe(false);
+  });
 });

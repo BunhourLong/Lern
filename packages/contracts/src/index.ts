@@ -15,3 +15,4 @@ export * from './offer.schema';
 export * from './push.schema';
 export * from './app-config.schema';
 export * from './rating.schema';
+export * from './admin-auth.schema';
