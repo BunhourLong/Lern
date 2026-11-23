@@ -1,11 +1,15 @@
 import {
   type CancelReason,
+  type CreateRating,
   type Money,
   type Point,
+  type Rating,
+  type Receipt,
   RIDE_UPDATED_EVENT,
   type Ride,
   type RideAction,
   type RideActor,
+  type RideHistoryItem,
   type RideStatus,
   type VehicleType,
 } from '@lern/contracts';
@@ -46,6 +50,10 @@ export type NewRide = {
 // driverId never reaches a client: @ZodSerializerDto(RideDto) strips unknown keys, and the outbox payload is the RIDE projection
 export type MovedRide = Ride & { driverId: string | null };
 export type MatchableRide = { status: RideStatus; riderId: string; vehicleType: VehicleType; pickup: Point; elapsedS: number };
+
+// The ride's side for history: a fixed map, so the column is never taken from input
+const HISTORY_SIDE = { rider: 'rider_id', driver: 'driver_id' } as const;
+export type RideHistoryRow = RideHistoryItem & { cursorAt: string };
 
 @Injectable()
 export class RidesRepository {
@@ -119,6 +127,76 @@ export class RidesRepository {
       [rideId, userId],
     );
     return row;
+  }
+
+  // One statement, matching nothing unless the caller is the ride's rider or driver, it completed within 7 days (by the
+  // completed event's time, on the DB clock) and this side hasn't rated it yet. The rated side is the other participant.
+  async insertRating(userId: string, rideId: string, body: CreateRating): Promise<Rating | undefined> {
+    const [row] = await this.db.query<Rating[]>(
+      `INSERT INTO ratings (ride_id, from_user, to_user, stars, comment)
+       SELECT r.id, $2, CASE WHEN r.rider_id = $2 THEN r.driver_id ELSE r.rider_id END, $3, $4
+       FROM rides r
+       WHERE r.id = $1 AND $2 IN (r.rider_id, r.driver_id) AND r.status = 'completed'
+         AND EXISTS (SELECT 1 FROM ride_events e WHERE e.ride_id = r.id AND e.status = 'completed' AND e.created_at > now() - interval '7 days')
+       ON CONFLICT (ride_id, from_user) DO NOTHING
+       RETURNING ride_id AS "rideId", stars, comment`,
+      [rideId, userId, body.stars, body.comment ?? null],
+    );
+    return row;
+  }
+
+  async hasRating(rideId: string, userId: string): Promise<boolean> {
+    const rows = await this.db.query<unknown[]>('SELECT 1 FROM ratings WHERE ride_id = $1 AND from_user = $2', [rideId, userId]);
+    return rows.length > 0;
+  }
+
+  // Only the stored snapshots (quote breakdown, ride commission), never a rate card: a receipt never changes after completion.
+  // The WHERE decides ownership and status, so anyone else or an unfinished ride matches nothing.
+  async receipt(rideId: string, userId: string): Promise<Receipt | undefined> {
+    const [row] = await this.db.query<Receipt[]>(
+      `SELECT r.id AS "rideId", r.vehicle_type AS "vehicleType",
+         json_build_object('lat', ST_Y(r.pickup::geometry), 'lng', ST_X(r.pickup::geometry)) AS pickup,
+         json_build_object('lat', ST_Y(r.dropoff::geometry), 'lng', ST_X(r.dropoff::geometry)) AS dropoff,
+         to_char(e.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS "completedAt",
+         q.distance_m AS "distanceM", q.duration_s AS "durationS", q.surge_bp AS "surgeBp",
+         json_build_object(
+           'trip', json_build_object('amountMinor', (q.breakdown->>'tripMinor')::bigint, 'currency', r.currency),
+           'surge', json_build_object('amountMinor', (q.breakdown->>'surgeMinor')::bigint, 'currency', r.currency),
+           'bookingFee', json_build_object('amountMinor', (q.breakdown->>'bookingFeeMinor')::bigint, 'currency', r.currency)
+         ) AS lines,
+         json_build_object('amountMinor', r.fare_minor, 'currency', r.currency) AS total,
+         CASE WHEN r.driver_id = $2 THEN json_build_object(
+           'commission', json_build_object('amountMinor', r.commission_minor, 'currency', r.currency),
+           'earnings', json_build_object('amountMinor', r.fare_minor - r.commission_minor, 'currency', r.currency)
+         ) END AS driver
+       FROM rides r
+       JOIN quotes q ON q.id = r.quote_id
+       JOIN ride_events e ON e.ride_id = r.id AND e.status = 'completed'
+       WHERE r.id = $1 AND $2 IN (r.rider_id, r.driver_id) AND r.status = 'completed'`,
+      [rideId, userId],
+    );
+    return row;
+  }
+
+  // Finished rides of one side, newest first. The row comparison picks up after the cursor (null: the first page), and
+  // matches the partial history indexes. cursorAt keeps microseconds (a JS Date would skip or repeat rows).
+  async history(
+    userId: string,
+    side: keyof typeof HISTORY_SIDE,
+    after: { at: string; id: string } | null,
+    limit: number,
+  ): Promise<RideHistoryRow[]> {
+    return this.db.query<RideHistoryRow[]>(
+      `SELECT ${RIDE},
+         to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS "createdAt",
+         to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS "cursorAt"
+       FROM rides
+       WHERE ${HISTORY_SIDE[side]} = $1 AND status IN ('completed', 'cancelled', 'no_driver_found')
+         AND ($2::timestamptz IS NULL OR (created_at, id) < ($2::timestamptz, $3::uuid))
+       ORDER BY created_at DESC, id DESC
+       LIMIT $4`,
+      [userId, after?.at ?? null, after?.id ?? null, limit],
+    );
   }
 
   // The caller's ride on one side that hasn't ended; the partial uniques allow at most one per side

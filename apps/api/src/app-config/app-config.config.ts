@@ -9,6 +9,7 @@ export function toAppConfig(config: Config): AppConfig {
     maintenance: config.MAINTENANCE,
     ios: platform(config.APP_MIN_VERSION_IOS, config.APP_STORE_URL_IOS),
     android: platform(config.APP_MIN_VERSION_ANDROID, config.APP_STORE_URL_ANDROID),
+    khrPerUsd: config.KHR_PER_USD,
   };
 }
 

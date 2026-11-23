@@ -176,7 +176,7 @@ describe('PUT /drivers/me/availability', () => {
     for (let round = 0; round < 3; round++) {
       const t = await driver();
       if (!online) await put(t, { online: true }).expect(HttpStatus.OK);
-      const gate = await lockTable(app.get(DataSource), 'driver_availability_events');
+      await using gate = await lockTable(app.get(DataSource), 'driver_availability_events');
       const racing = [put(t, { online }), put(t, { online })].map((r) => r.then((res) => res));
       await gate.arrived(2);
       await gate.release();

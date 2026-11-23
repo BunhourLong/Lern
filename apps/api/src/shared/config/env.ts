@@ -54,6 +54,8 @@ const Env = z.object({
   APP_MIN_VERSION_ANDROID: appVersionSchema.optional(),
   APP_STORE_URL_ANDROID: storeUrlSchema.optional(),
   MAINTENANCE: z.stringbool().default(false),
+  // Riel per US dollar for the app's approximate `≈ $` display only, never in money maths
+  KHR_PER_USD: z.coerce.number().int().min(1).default(4000),
 }).refine((env) => env.OTP_PROVIDER !== 'telegram' || env.TELEGRAM_GATEWAY_TOKEN, {
   message: 'Required when OTP_PROVIDER is telegram',
   path: ['TELEGRAM_GATEWAY_TOKEN'],

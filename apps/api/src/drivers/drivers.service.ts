@@ -1,4 +1,12 @@
-import type { ApplyDriver, Availability, DriverAvailabilityAction, DriverProfile, DriverVerification } from '@lern/contracts';
+import type {
+  ApplyDriver,
+  Availability,
+  DriverAvailabilityAction,
+  DriverProfile,
+  DriverVerification,
+  Earnings,
+  EarningsQuery,
+} from '@lern/contracts';
 import { ConflictException, ForbiddenException, HttpStatus, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { DataSource, type EntityManager } from 'typeorm';
 import { UsersService } from '../users/users.service';
@@ -31,6 +39,11 @@ export class DriversService {
     return profile;
   }
 
+  async earnings(userId: string, query: EarningsQuery): Promise<Earnings> {
+    if (!(await this.drivers.verification(userId))) throw new NotFoundException('Not a driver');
+    return { buckets: await this.drivers.earnings(userId, query) };
+  }
+
   verification(userId: string): Promise<DriverVerification | undefined> {
     return this.drivers.verification(userId);
   }
@@ -51,6 +64,12 @@ export class DriversService {
     if (state.availability === target) return { availability: target };
     // Going offline never checks: a driver in debt must be able to stop
     const limitMinor = this.config.DRIVER_DEBT_LIMIT_MINOR;
+    if (await this.drivers.move(this.db.manager, userId, online ? 'go_online' : 'go_offline', online ? limitMinor : undefined)) {
+      return { availability: target };
+    }
+    // The move missed: a simultaneous identical request (a double tap) may have made it first
+    const availability = (await this.drivers.state(userId))?.availability;
+    if (availability === target) return { availability: target };
     if (online && !(await this.drivers.withinDebtLimit(userId, limitMinor))) {
       throw new ForbiddenException({
         statusCode: HttpStatus.FORBIDDEN,
@@ -60,10 +79,6 @@ export class DriversService {
         currency: 'KHR',
       });
     }
-    if (await this.drivers.move(this.db.manager, userId, online ? 'go_online' : 'go_offline')) return { availability: target };
-    // The move missed: a simultaneous identical request (a double tap) may have made it first
-    const availability = (await this.drivers.state(userId))?.availability;
-    if (availability === target) return { availability: target };
     throw new ConflictException({
       statusCode: HttpStatus.CONFLICT,
       message: "Can't change availability while holding an offer or on a trip",

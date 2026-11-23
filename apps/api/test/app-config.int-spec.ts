@@ -14,6 +14,7 @@ const unset: Partial<Config> = {
   APP_MIN_VERSION_ANDROID: undefined,
   APP_STORE_URL_ANDROID: undefined,
   MAINTENANCE: false,
+  KHR_PER_USD: 4000,
 };
 
 async function boot(overrides: Partial<Config>): Promise<INestApplication<App>> {
@@ -25,7 +26,18 @@ it('is public and reports no minimum versions when none are configured', async (
   try {
     const res = await request(app.getHttpServer()).get('/app-config');
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ maintenance: false, ios: null, android: null });
+    expect(res.body).toEqual({ maintenance: false, ios: null, android: null, khrPerUsd: 4000 });
+  } finally {
+    await app.close();
+  }
+});
+
+it('reports the riel-per-dollar display rate from config', async () => {
+  const app = await boot({ ...unset, KHR_PER_USD: 4100 });
+  try {
+    const res = await request(app.getHttpServer()).get('/app-config');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ maintenance: false, ios: null, android: null, khrPerUsd: 4100 });
   } finally {
     await app.close();
   }
@@ -43,7 +55,7 @@ it('reports both platforms and maintenance mode', async () => {
   try {
     const res = await request(app.getHttpServer()).get('/app-config');
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ maintenance: true, ios, android });
+    expect(res.body).toEqual({ maintenance: true, ios, android, khrPerUsd: 4000 });
   } finally {
     await app.close();
   }
@@ -58,7 +70,7 @@ it('reports only the platform that has a minimum version', async () => {
   try {
     const res = await request(app.getHttpServer()).get('/app-config');
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ maintenance: false, ios: null, android });
+    expect(res.body).toEqual({ maintenance: false, ios: null, android, khrPerUsd: 4000 });
   } finally {
     await app.close();
   }
