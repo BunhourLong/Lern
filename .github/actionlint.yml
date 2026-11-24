@@ -1,0 +1,3 @@
+# shortcut: actionlint predates this GitHub-hosted label, remove when it supports Ubuntu 26.04.
+self-hosted-runner:
+  labels: [ubuntu-26.04]
