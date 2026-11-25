@@ -13,6 +13,7 @@ const config = (over: Partial<AppConfig> = {}): AppConfig => ({
   maintenance: false,
   ios,
   android,
+  khrPerUsd: 4000,
   ...over,
 });
 
@@ -96,4 +97,11 @@ it('holds the gate once checked, null until then', () => {
   expect(store.getState().gate).toBeNull();
   store.getState().setGate({ status: 'maintenance' });
   expect(store.getState().gate).toEqual({ status: 'maintenance' });
+});
+
+it('holds the display rate once known, null until then', () => {
+  const store = createAppConfigStore();
+  expect(store.getState().khrPerUsd).toBeNull();
+  store.getState().setKhrPerUsd(4100);
+  expect(store.getState().khrPerUsd).toBe(4100);
 });

@@ -1,14 +1,22 @@
-import { Module } from '@nestjs/common';
+import { DynamicModule, Module } from '@nestjs/common';
 import { UsersModule } from '../users/users.module';
+import { DRIVERS_CONFIG, type DriversConfig } from './drivers.config';
 import { DriversController } from './drivers.controller';
 import { DriversRepository } from './drivers.repository';
 import { DriversService } from './drivers.service';
 
-// Modules using @VerifiedDriver() import this one; Nest builds the guard there from the exported DriversService
-@Module({
-  imports: [UsersModule],
-  controllers: [DriversController],
-  providers: [DriversRepository, DriversService],
-  exports: [DriversService],
-})
-export class DriversModule {}
+@Module({})
+export class DriversModule {
+  static forRoot(config: DriversConfig): DynamicModule {
+    return {
+      module: DriversModule,
+      // Global, like PricingModule: rides, matching, location and @VerifiedDriver() use DriversService without
+      // passing config on
+      global: true,
+      imports: [UsersModule],
+      controllers: [DriversController],
+      providers: [{ provide: DRIVERS_CONFIG, useValue: config }, DriversRepository, DriversService],
+      exports: [DriversService],
+    };
+  }
+}

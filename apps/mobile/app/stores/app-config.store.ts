@@ -9,6 +9,8 @@ export type AppGate =
 export type AppConfigState = {
   gate: AppGate | null; // null = not checked yet
   setGate(gate: AppGate): void;
+  khrPerUsd: number | null; // null = no config yet: screens show riel alone
+  setKhrPerUsd(rate: number): void;
 };
 
 // Part by part as numbers, missing parts as 0: 1.0 == 1 == 1.0.0, 1.9 < 1.10
@@ -41,4 +43,6 @@ export const createAppConfigStore = () =>
   createStore<AppConfigState>()(set => ({
     gate: null,
     setGate: gate => set({ gate }),
+    khrPerUsd: null,
+    setKhrPerUsd: khrPerUsd => set({ khrPerUsd }),
   }));

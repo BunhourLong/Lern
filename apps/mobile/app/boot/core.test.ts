@@ -1225,6 +1225,25 @@ describe('app config', () => {
     maintenance,
     ios: null,
     android: { minVersion: '9.0', storeUrl: androidStoreUrl },
+    khrPerUsd: 4000,
+  });
+
+  it('keeps the riel-per-dollar rate for the approximate USD display', async () => {
+    const s = server(
+      routes({ 'GET /app-config': () => ({ status: 200, body: config() }) }),
+    );
+    const core = createCore(deps(s, fakeIo(), 'r'.repeat(43)));
+    await core.boot();
+    await settle();
+    expect(core.stores.appConfig.getState().khrPerUsd).toBe(4000);
+  });
+
+  it('leaves the rate unknown when /app-config is unreachable', async () => {
+    const s = server(routes()); // no route: the request fails at the network
+    const core = createCore(deps(s, fakeIo(), 'r'.repeat(43)));
+    await core.boot();
+    await settle();
+    expect(core.stores.appConfig.getState().khrPerUsd).toBeNull();
   });
 
   it('asks for an update when the app is below the platform minimum', async () => {
@@ -1357,7 +1376,7 @@ describe('push', () => {
     expect(s.calls).not.toContain(active);
     config.resolve({
       status: 200,
-      body: { maintenance: false, ios: null, android: null },
+      body: { maintenance: false, khrPerUsd: 4000, ios: null, android: null },
     });
     await settle();
 

@@ -14,3 +14,4 @@ export * from './location.schema';
 export * from './offer.schema';
 export * from './push.schema';
 export * from './app-config.schema';
+export * from './rating.schema';

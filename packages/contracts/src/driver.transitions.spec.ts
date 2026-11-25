@@ -9,6 +9,7 @@ const LEGAL = new Set([
   'reserved release',
   'reserved assign',
   'on_trip finish',
+  'on_trip debt_stop',
   'available time_out',
 ]);
 
@@ -28,6 +29,7 @@ it('goes online, holds an offer, drives the trip and is free again', () => {
   }
   expect(state).toBe('offline');
   expect(driverTransition('release').to).toBe('available');
+  expect(driverTransition('debt_stop').to).toBe('offline');
 });
 
 it('times out a silent available driver to offline', () => {

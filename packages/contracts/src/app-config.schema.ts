@@ -5,5 +5,10 @@ export const appVersionSchema = z.string().regex(/^\d+(\.\d+){0,2}$/);
 export const storeUrlSchema = z.url({ protocol: /^https$/ });
 // null = no minimum on that platform
 const platformSchema = z.object({ minVersion: appVersionSchema, storeUrl: storeUrlSchema }).nullable();
-export const appConfigSchema = z.object({ maintenance: z.boolean(), ios: platformSchema, android: platformSchema });
+export const appConfigSchema = z.object({
+  maintenance: z.boolean(),
+  ios: platformSchema,
+  android: platformSchema,
+  khrPerUsd: z.number().int().positive(),
+});
 export type AppConfig = z.infer<typeof appConfigSchema>;

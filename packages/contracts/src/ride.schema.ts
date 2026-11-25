@@ -64,3 +64,38 @@ export const activeRidesSchema = z.object({
   offer: offerSchema.nullish(),
 });
 export type ActiveRides = z.infer<typeof activeRidesSchema>;
+
+// GET /rides: the caller's finished rides on one side (rider or driver), newest first. Query strings arrive as text;
+// cursor is an opaque token the server made, and limit defaults to 20 (one page, at most 50).
+export const rideHistoryQuerySchema = z.object({
+  as: z.enum(['rider', 'driver']),
+  cursor: z.string().max(200).optional(),
+  limit: z.coerce.number().int().min(1).max(50).default(20),
+});
+export type RideHistoryQuery = z.infer<typeof rideHistoryQuerySchema>;
+
+// createdAt is the ride's created_at as ISO-8601 UTC, in ms
+export const rideHistoryItemSchema = rideSchema.extend({ createdAt: z.iso.datetime() });
+export type RideHistoryItem = z.infer<typeof rideHistoryItemSchema>;
+
+export const rideHistoryPageSchema = z.object({
+  items: z.array(rideHistoryItemSchema),
+  nextCursor: z.string().nullable(),
+});
+export type RideHistoryPage = z.infer<typeof rideHistoryPageSchema>;
+
+// GET /rides/:id/receipt: built from the ride's stored quote and commission snapshots. driver is set only for the driver.
+export const receiptSchema = z.object({
+  rideId: z.uuid(),
+  vehicleType: vehicleTypeSchema,
+  pickup: pointSchema,
+  dropoff: pointSchema,
+  completedAt: z.iso.datetime(), // the ride's `completed` ride_events row, ISO-8601 UTC, ms
+  distanceM: z.number().int().nonnegative(), // the quote's route estimate (no measured trip exists)
+  durationS: z.number().int().nonnegative(),
+  surgeBp: z.number().int().min(10000),
+  lines: z.object({ trip: moneySchema, surge: moneySchema, bookingFee: moneySchema }),
+  total: moneySchema,
+  driver: z.object({ commission: moneySchema, earnings: moneySchema }).nullable(),
+});
+export type Receipt = z.infer<typeof receiptSchema>;
