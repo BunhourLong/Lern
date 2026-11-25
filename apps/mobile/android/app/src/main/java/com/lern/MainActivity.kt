@@ -1,6 +1,7 @@
 package com.lern
 import expo.modules.ReactActivityDelegateWrapper
 
+import android.os.Bundle
 import com.facebook.react.ReactActivity
 import com.facebook.react.ReactActivityDelegate
 import com.facebook.react.defaults.DefaultNewArchitectureEntryPoint.fabricEnabled
@@ -14,10 +15,26 @@ class MainActivity : ReactActivity() {
    */
   override fun getMainComponentName(): String = "Lern"
 
+  // react-native-screens can't restore its fragments after the activity is recreated (font size
+  // change, process death), so start without saved state; navigation state lives in JS.
+  override fun onCreate(savedInstanceState: Bundle?) {
+    setTheme(R.style.AppTheme)
+    super.onCreate(null)
+  }
+
   /**
    * Returns the instance of the [ReactActivityDelegate]. We use [DefaultReactActivityDelegate]
    * which allows you to enable New Architecture with a single boolean flags [fabricEnabled]
    */
   override fun createReactActivityDelegate(): ReactActivityDelegate =
-      ReactActivityDelegateWrapper(this, BuildConfig.IS_NEW_ARCHITECTURE_ENABLED, DefaultReactActivityDelegate(this, mainComponentName, fabricEnabled))
+      ReactActivityDelegateWrapper(
+          this,
+          BuildConfig.IS_NEW_ARCHITECTURE_ENABLED,
+          object : DefaultReactActivityDelegate(this, mainComponentName, fabricEnabled) {
+            override fun getLaunchOptions(): Bundle =
+                Bundle().apply {
+                  putBoolean("androidMapsConfigured", BuildConfig.HAS_GOOGLE_MAPS_API_KEY)
+                }
+          },
+      )
 }

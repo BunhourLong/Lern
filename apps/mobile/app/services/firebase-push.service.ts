@@ -1,9 +1,11 @@
 import {
   AuthorizationStatus,
   deleteToken,
+  getInitialNotification,
   getMessaging,
   getToken,
   onMessage,
+  onNotificationOpenedApp,
   onTokenRefresh,
   requestPermission,
 } from '@react-native-firebase/messaging';
@@ -33,6 +35,7 @@ async function askUser(): Promise<boolean> {
 // Importing React Native Firebase loads its native module, absent in Jest: everything else takes PushNative.
 // getMessaging() throws without the (gitignored) Firebase config, so it runs per call, inside createPush's handling.
 export function firebasePush(): PushNative {
+  let initialMessageId: string | undefined;
   return {
     platform: Platform.OS === 'ios' ? 'ios' : 'android',
     locale: () => languageOf(Intl.DateTimeFormat().resolvedOptions().locale),
@@ -41,5 +44,16 @@ export function firebasePush(): PushNative {
     deleteToken: async () => deleteToken(getMessaging()),
     onTokenRefresh: cb => onTokenRefresh(getMessaging(), cb),
     onMessage: cb => onMessage(getMessaging(), async () => cb()),
+    onNotificationOpenedApp: cb =>
+      onNotificationOpenedApp(getMessaging(), message => {
+        // Firebase can also emit the launch tap through the warm callback.
+        if (message.messageId && message.messageId === initialMessageId) return;
+        cb(message.data);
+      }),
+    getInitialNotification: async () => {
+      const message = await getInitialNotification(getMessaging());
+      initialMessageId = message?.messageId;
+      return message === null ? null : message.data;
+    },
   };
 }

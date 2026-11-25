@@ -15,6 +15,23 @@ import {
 export const LOCATION_TASK = 'lern.driver-location';
 export type Permission = 'always' | 'foreground' | 'denied';
 
+// Android needs only foreground permission for its foreground service. iOS needs Always to track in the background.
+export async function getLocationPermission(
+  mode: 'request' | 'check',
+): Promise<Permission> {
+  const foreground =
+    mode === 'request'
+      ? await Location.requestForegroundPermissionsAsync()
+      : await Location.getForegroundPermissionsAsync();
+  if (!foreground.granted) return 'denied';
+  if (Platform.OS === 'android') return 'always';
+  const background =
+    mode === 'request'
+      ? await Location.requestBackgroundPermissionsAsync()
+      : await Location.getBackgroundPermissionsAsync();
+  return background.granted ? 'always' : 'foreground';
+}
+
 type Fixes = (locations: Location.LocationObject[]) => Promise<void>;
 let receiver: Fixes | undefined;
 
@@ -128,24 +145,18 @@ export function createLocationService(
   };
 
   return {
-    // Driver went online. Android needs only foreground location: a foreground service started while the app is
-    // visible keeps it in the background (no ACCESS_BACKGROUND_LOCATION, no Play background-location review).
-    // iOS needs Always for that; 'foreground' = tracks only while the app is open
     start(): Promise<Permission> {
       session++;
       return enqueue(async () => {
-        if (!(await Location.requestForegroundPermissionsAsync()).granted)
-          return 'denied';
-        const always =
-          Platform.OS === 'android' ||
-          (await Location.requestBackgroundPermissionsAsync()).granted;
+        const permission = await getLocationPermission('request');
+        if (permission === 'denied') return permission;
         tracking = startTracking();
         lastSentAt = -Infinity;
         switchFailedAt = -Infinity;
         receiver = mine;
         await begin('moving');
         nativeMode = 'moving';
-        return always ? 'always' : 'foreground';
+        return permission;
       });
     },
     // Takes effect for anything already queued: a switch in flight finishes first, then the updates stop

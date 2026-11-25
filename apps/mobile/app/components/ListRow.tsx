@@ -1,5 +1,6 @@
 import { Pressable, StyleSheet, Text as NativeText, View } from 'react-native';
 import { makeStyles, opacity, spacing, touch, type } from '@theme';
+import { useInteraction } from '../hooks/use-interaction';
 import { Text } from './Text';
 
 export function ListRow({
@@ -14,6 +15,7 @@ export function ListRow({
   onPress?(): void;
 }) {
   const styles = useStyles();
+  const interact = useInteraction();
   const content = (
     <>
       <View style={styles.details}>
@@ -32,7 +34,9 @@ export function ListRow({
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={[title, subtitle, value].filter(Boolean).join(', ')}
-      onPress={onPress}
+      onPress={() => {
+        if (interact()) onPress();
+      }}
       style={({ pressed }) => [styles.row, pressed && styles.pressed]}
     >
       {content}

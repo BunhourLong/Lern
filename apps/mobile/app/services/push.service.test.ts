@@ -18,6 +18,8 @@ function fakeNative(overrides: Partial<PushNative> = {}) {
       message.push(cb);
       return () => unsubscribed.message++;
     },
+    onNotificationOpenedApp: () => () => undefined,
+    getInitialNotification: async () => null,
     ...overrides,
   };
   return { native, refresh, message, unsubscribed };
@@ -29,7 +31,8 @@ const setup = (overrides: Partial<PushNative> = {}) => {
   );
   const onWake = jest.fn();
   const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
-  return { ...fake, register, onWake, warn, push: createPush({ native: fake.native, register, onWake }) };
+  const onOpen = jest.fn();
+  return { ...fake, register, onWake, onOpen, warn, push: createPush({ native: fake.native, register, onWake, onOpen }) };
 };
 afterEach(() => jest.restoreAllMocks());
 
@@ -173,4 +176,37 @@ it('a sync still running at sign-out neither registers nor counts for the next u
   getToken.mockResolvedValue('token-new');
   await push.sync();
   expect(register.mock.calls).toEqual([['token-new', 'android', 'en']]);
+});
+
+it('delivers a pending initial tap once to the remounted app', async () => {
+  let resolve!: (data: unknown) => void;
+  const initial = new Promise(done => { resolve = done; });
+  const getInitialNotification = jest.fn(() => initial);
+  const { push, onOpen } = setup({ getInitialNotification });
+  const data = { type: 'ride', rideId: '00000000-0000-4000-8000-000000000001', seq: '4' };
+
+  push.listenForOpens();
+  push.removeListeners();
+  push.listenForOpens();
+  resolve(data);
+  await new Promise(setImmediate);
+  push.removeListeners();
+  push.listenForOpens();
+  await new Promise(setImmediate);
+
+  expect(getInitialNotification).toHaveBeenCalledTimes(1);
+  expect(onOpen.mock.calls).toEqual([[data]]);
+});
+
+it('discards the previous session’s unresolved launch tap across a remount', async () => {
+  let resolve!: (data: unknown) => void;
+  const initial = new Promise(done => { resolve = done; });
+  const { push, onOpen } = setup({ getInitialNotification: () => initial });
+  push.listenForOpens();
+  push.removeListeners();
+  await push.stop();
+  push.listenForOpens();
+  resolve({ type: 'ride', rideId: '00000000-0000-4000-8000-000000000001', seq: '4' });
+  await new Promise(setImmediate);
+  expect(onOpen).not.toHaveBeenCalled();
 });

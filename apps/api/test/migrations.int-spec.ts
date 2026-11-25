@@ -271,4 +271,6 @@ it('runs every migration up, down and up again', async () => {
   } finally {
     await ds.destroy();
   }
-});
+  // Builds and drops the whole schema (PostGIS included) several times, and every migration adds work: 2–5 s under
+  // full-suite load had reached Jest's 5 s default (user's call, 2026-11-18)
+}, 30_000);

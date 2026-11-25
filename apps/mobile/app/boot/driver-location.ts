@@ -3,6 +3,9 @@ import type { StoreApi } from 'zustand/vanilla';
 import type { LocationService, Permission } from '../services/location.service';
 import type { DriverModeState } from '../stores/driver-mode.store';
 
+export const isDriverOnline = (a: DriverAvailability | null) =>
+  a !== null && a !== 'offline';
+
 // Tracking runs exactly while the server says the driver is online (available, holding an offer, on a trip).
 // The server can end that on its own (presence time-out), so this follows the store, not the toggle.
 // onStart gets each start's outcome: 'denied' or 'failed' means not tracking (the caller can't keep the driver
@@ -10,10 +13,8 @@ import type { DriverModeState } from '../stores/driver-mode.store';
 export function followAvailability(
   driverMode: StoreApi<DriverModeState>,
   location: Pick<LocationService, 'start' | 'stop'>,
-  onStart: (result: Permission | 'failed') => void,
+  onStart: (result: Permission | 'failed', current: boolean) => void,
 ): () => void {
-  const online = (a: DriverAvailability | null) =>
-    a !== null && a !== 'offline';
   let tracking = false;
   let latest = 0; // the newest availability change; only its failed start may reset `tracking`
   let chain = Promise.resolve(); // start and stop run in the order the availability changed
@@ -24,7 +25,7 @@ export function followAvailability(
     );
   };
   const follow = (availability: DriverAvailability | null) => {
-    const want = online(availability);
+    const want = isDriverOnline(availability);
     if (want === tracking) return;
     tracking = want;
     const request = ++latest;
@@ -37,13 +38,20 @@ export function followAvailability(
         result = 'failed';
       }
       // A newer change already set `tracking` for itself: an older failure must not overwrite it
-      if ((result === 'denied' || result === 'failed') && request === latest)
+      const current = request === latest;
+      if ((result === 'denied' || result === 'failed') && current)
         tracking = false;
-      onStart(result);
+      onStart(result, current);
     });
   };
   // iOS restores location updates a previous run left on: stop them until the driver is online again
   run(() => location.stop());
   follow(driverMode.getState().availability);
-  return driverMode.subscribe(s => follow(s.availability));
+  const unsubscribe = driverMode.subscribe((s, previous) => {
+    if (s.availability !== previous.availability) follow(s.availability);
+  });
+  return () => {
+    latest++;
+    unsubscribe();
+  };
 }

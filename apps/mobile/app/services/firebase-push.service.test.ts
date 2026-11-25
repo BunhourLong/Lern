@@ -1,6 +1,9 @@
 import {
   AuthorizationStatus,
+  getInitialNotification,
   getMessaging,
+  onMessage,
+  onNotificationOpenedApp,
   requestPermission,
 } from '@react-native-firebase/messaging';
 import { PermissionsAndroid, Platform } from 'react-native';
@@ -14,6 +17,8 @@ jest.mock('@react-native-firebase/messaging', () => ({
   deleteToken: jest.fn(),
   onTokenRefresh: jest.fn(),
   onMessage: jest.fn(),
+  onNotificationOpenedApp: jest.fn(),
+  getInitialNotification: jest.fn(),
 }));
 
 const on = (os: 'android' | 'ios', version: number) => {
@@ -64,5 +69,35 @@ it('only touches Firebase when used, and turns its absence into a rejection', as
   await expect(native.requestPermission()).rejects.toThrow(/No Firebase App/);
   await expect(native.getToken()).rejects.toThrow(/No Firebase App/);
   await expect(native.deleteToken()).rejects.toThrow(/No Firebase App/);
+  await expect(native.getInitialNotification()).rejects.toThrow(/No Firebase App/);
+  expect(() => native.onNotificationOpenedApp(jest.fn())).toThrow(/No Firebase App/);
   (getMessaging as jest.Mock).mockImplementation(() => ({}));
+});
+
+it('forwards data from both Firebase tap APIs and keeps foreground messages separate', async () => {
+  const native = firebasePush();
+  const unsubscribe = jest.fn();
+  const warm = jest.mocked(onNotificationOpenedApp).mockReturnValue(unsubscribe);
+  const initial = jest.mocked(getInitialNotification);
+  const foreground = jest.mocked(onMessage);
+  const onOpen = jest.fn();
+  const onWake = jest.fn();
+  const message = {
+    messageId: 'message-1',
+    data: { type: 'ride', rideId: 'ride-1', seq: '4' },
+  };
+  initial.mockResolvedValueOnce(message).mockResolvedValueOnce(null);
+
+  expect(native.onNotificationOpenedApp(onOpen)).toBe(unsubscribe);
+  native.onMessage(onWake);
+  foreground.mock.calls[0][1](message);
+  expect(onWake).toHaveBeenCalledWith();
+  expect(onOpen).not.toHaveBeenCalled();
+  await expect(native.getInitialNotification()).resolves.toEqual(message.data);
+  const onWarm = warm.mock.calls[0][1];
+  onWarm(message);
+  expect(onOpen).not.toHaveBeenCalled();
+  onWarm({ ...message, messageId: 'message-2' });
+  expect(onOpen).toHaveBeenCalledWith(message.data);
+  await expect(native.getInitialNotification()).resolves.toBeNull();
 });
