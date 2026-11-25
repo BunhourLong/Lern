@@ -43,7 +43,7 @@ afterAll(() => app.close());
 it('refuses the handshake without a valid access token', async () => {
   const token = await login();
   const { sub } = app.get(JwtService).decode<{ sub: string }>(token);
-  const forged = new JwtService({ secret: 'x'.repeat(32) }).sign({ sub, roles: ['admin'] });
+  const forged = new JwtService({ secret: 'x'.repeat(32) }).sign({ sub, roles: ['driver'] });
   const expired = app.get(JwtService).sign({ sub, roles: ['rider'] }, { expiresIn: -10 });
 
   for (const bad of [undefined, 'garbage', forged, expired]) {

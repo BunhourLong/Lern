@@ -6,7 +6,7 @@ import type { Config } from '../shared/config/env';
 import { UsersModule } from '../users/users.module';
 import { AccessTokenService } from './access-token.service';
 import { AuthController } from './auth.controller';
-import { AuthGuard } from './auth.guard';
+import { ADMIN_ENABLED, AuthGuard } from './auth.guard';
 import { DevOtpProvider } from './dev-otp.provider';
 import { OtpProvider } from './otp.provider';
 import { OtpService } from './otp.service';
@@ -45,6 +45,7 @@ export class AuthModule {
               ? new TelegramGatewayOtpProvider(redis, config.TELEGRAM_GATEWAY_URL, config.TELEGRAM_GATEWAY_TOKEN!)
               : new DevOtpProvider(),
         },
+        { provide: ADMIN_ENABLED, useValue: config.ADMIN_ENABLED },
         // Global guard lives here because it needs this module's JwtService
         { provide: APP_GUARD, useClass: AuthGuard },
       ],

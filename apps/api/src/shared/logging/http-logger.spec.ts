@@ -44,3 +44,19 @@ it('logs the request but never credentials from headers, cookies or the body', a
   expect(logs).toContain('[Redacted]');
   expect(logs).not.toMatch(/s3cret/);
 });
+
+// The admin SPA's Duo return page has duo_code and state in its URL, so a same-origin POST from it carries them in
+// Referer; a GET could carry them in its own query string
+it('logs the path but never a query string or the Referer', async () => {
+  logs = '';
+  await request(app.getHttpServer())
+    .post('/echo?duo_code=qcode-s3cret&state=qstate-s3cret')
+    .set('referer', 'https://admin.lern.example/admin/mfa/callback?duo_code=code-s3cret&state=state-s3cret')
+    .send({})
+    .expect(201);
+
+  expect(logs).toContain('request completed');
+  expect(logs).toContain('"url":"/echo"');
+  expect(logs).toContain('[Redacted]');
+  expect(logs).not.toMatch(/s3cret/);
+});
