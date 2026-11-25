@@ -53,6 +53,7 @@ test('routes to maintenance when app config also requires an update', () => {
   const gate = appGate(
     {
       maintenance: true,
+      khrPerUsd: 4000,
       ios: { minVersion: '2.0', storeUrl: update.storeUrl },
       android: null,
     },

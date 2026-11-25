@@ -760,7 +760,7 @@ describe('push', () => {
     expect(s.calls).not.toContain(active);
     config.resolve({
       status: 200,
-      body: { maintenance: false, ios: null, android: null },
+      body: { maintenance: false, khrPerUsd: 4000, ios: null, android: null },
     });
     await settle();
 
