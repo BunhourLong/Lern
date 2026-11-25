@@ -11,6 +11,7 @@ import { createDriverModeStore } from '../../stores/driver-mode.store';
 import { createLanguageStore } from '../../stores/language.store';
 import { createRawEventsStore } from '../../stores/raw-events.store';
 import { createSessionStore } from '../../stores/session.store';
+import { InteractionContext } from '../../hooks/use-interaction';
 import DebugContainer from './DebugContainer';
 
 jest.mock('expo-glass-effect', () => ({
@@ -141,4 +142,17 @@ it('logs a rejected command as an error entry instead of throwing', async () => 
     event: 'error',
     payload: 'Error: nope',
   });
+});
+
+it('ignores an expired accessible action or keyboard edit in Debug', async () => {
+  const { core } = stub();
+  await renderScreen(
+    <InteractionContext.Provider value={() => false}>
+      <DebugContainer core={core as unknown as Props['core']} />
+    </InteractionContext.Provider>,
+  );
+  await fireEvent.changeText(screen.getByLabelText('Phone'), '+85598765432');
+  expect(screen.getByLabelText('Phone').props.value).toBe('+85512345678');
+  await fireEvent.press(screen.getByRole('button', { name: 'Go online' }));
+  expect(core.setOnline).not.toHaveBeenCalled();
 });

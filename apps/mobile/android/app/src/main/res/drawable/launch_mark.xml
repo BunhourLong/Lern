@@ -1,0 +1,12 @@
+<!-- Android's system splash uses a 288 dp canvas with a 192 dp safe circle.
+     Center the 120 dp tall mark inside it and share the drawable with the legacy starting window. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="288dp"
+    android:height="288dp"
+    android:viewportWidth="288"
+    android:viewportHeight="288">
+    <group android:translateX="87.75" android:translateY="84" android:scaleX="0.46875" android:scaleY="0.46875">
+        <path android:fillColor="@color/launch_mark"
+            android:pathData="M0 0h92v164H62v30h30v-30h98a50 50 0 0 1 50 50v42H92a92 92 0 0 1-92-92Z" />
+    </group>
+</vector>

@@ -1,10 +1,11 @@
-// shortcut: throwaway debug screen (PLAN.md M5.9), the only screen until the real UI replaces it
 import { useEffect } from 'react';
 import { StatusBar, useColorScheme } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { useStore } from 'zustand';
 import { core, startApp } from './app/boot/app-core';
 import { LanguageContext } from './app/i18n';
+import { SecurityProvider } from './app/boot/SecurityProvider';
+import { RootNavigator } from './app/routes/RootNavigator';
 import DebugContainer from './app/screens/Debug/DebugContainer';
 
 function App() {
@@ -16,7 +17,15 @@ function App() {
     <LanguageContext.Provider value={language}>
       <SafeAreaProvider>
         <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
-        <DebugContainer core={core} />
+        <SecurityProvider core={core}>
+          {foreground => (
+            <RootNavigator
+              foreground={foreground}
+              core={core}
+              debug={__DEV__ ? <DebugContainer core={core} /> : null}
+            />
+          )}
+        </SecurityProvider>
       </SafeAreaProvider>
     </LanguageContext.Provider>
   );

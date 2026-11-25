@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Written by design/brand/export-icons.sh from lern-mark.svg: the L at 44% of the 108dp canvas, its diagonal fits the 66dp safe circle. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+  android:width="108dp"
+  android:height="108dp"
+  android:viewportWidth="108"
+  android:viewportHeight="108">
+  <group
+    android:translateX="31.73"
+    android:translateY="30.24"
+    android:scaleX="0.1856"
+    android:scaleY="0.1856">
+    <path android:fillColor="#89F597" android:pathData="M0 0h92v164H62v30h30v-30h98a50 50 0 0 1 50 50v42H92a92 92 0 0 1-92-92Z" />
+  </group>
+</vector>

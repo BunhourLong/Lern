@@ -37,13 +37,14 @@ const pairs = [
     })),
   ),
   { foreground: 'onPrimary', background: 'primary', minimum: 4.5 },
-  ...(['primary', 'danger', 'success', 'warning', 'border'] as const).flatMap(
-    foreground =>
-      (['background', 'surface', 'surfaceGlass'] as const).map(background => ({
-        foreground,
-        background,
-        minimum: foreground === 'border' ? 3 : 4.5,
-      })),
+  ...(
+    ['primary', 'danger', 'success', 'warning', 'border', 'brand'] as const
+  ).flatMap(foreground =>
+    (['background', 'surface', 'surfaceGlass'] as const).map(background => ({
+      foreground,
+      background,
+      minimum: foreground === 'border' || foreground === 'brand' ? 3 : 4.5,
+    })),
   ),
 ] as const;
 

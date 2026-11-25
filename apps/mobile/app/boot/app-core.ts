@@ -43,6 +43,7 @@ export function startApp(): () => void {
   const unfollowDeviceLanguage = followDeviceLanguage(core.stores.language);
   core.boot().catch(err => log('boot.error', String(err)));
   return () => {
+    core.stopListeningForPush();
     unfollowDeviceLanguage();
     unfollowAvailability();
   };
