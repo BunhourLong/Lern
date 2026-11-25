@@ -2,6 +2,7 @@ import { StyleSheet, useColorScheme } from 'react-native';
 import { fonts } from './fonts';
 
 export { fonts } from './fonts';
+export { darkMapStyle, type MapStyleRule } from './map-style';
 
 export type Colors = {
   background: string;
@@ -15,6 +16,7 @@ export type Colors = {
   danger: string;
   success: string;
   warning: string;
+  onStatus: string;
   brand: string;
 };
 
@@ -31,6 +33,7 @@ export const themes = {
     danger: '#AB3030',
     success: '#276344',
     warning: '#80510A',
+    onStatus: '#FFFFFF',
     brand: '#191919',
   },
   dark: {
@@ -45,6 +48,7 @@ export const themes = {
     danger: '#FF9292',
     success: '#82D5A3',
     warning: '#F5C16C',
+    onStatus: '#171717',
     brand: '#89F597',
   },
 } satisfies Record<'light' | 'dark', Colors>;
@@ -57,6 +61,11 @@ export const logoSize = 120;
 export const opacity = { pressed: 0.92, disabled: 0.5 } as const;
 export const outlineWidth = 1;
 export const bannerEdgeWidth = 4;
+export const syncStatusMaxWidth = 320;
+export const mapHeight = { mini: 160, active: 240 } as const;
+export const mapPinSize = 36;
+export const mapPinIconSize = 20;
+export const mapPinBorderWidth = 2;
 
 export const type = {
   title: { fontSize: 24, lineHeight: 36, fontFamily: fonts.bold },

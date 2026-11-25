@@ -7,7 +7,7 @@ import type { RootRoute } from '../../routes/root-route';
 import RouteMessageScreen from './RouteMessageScreen';
 
 type MessageRoute =
-  | Exclude<RootRoute, 'login'>
+  | Exclude<RootRoute, 'login' | 'driver'>
   | 'activity'
   | 'earnings'
   | 'account';
@@ -25,7 +25,6 @@ const messages = {
     body: 'route.maintenance.body',
   },
   update: { title: 'route.update.title', body: 'route.update.body' },
-  driver: { title: 'route.driver.title' },
   rider: { title: 'route.rider.title' },
   activity: { title: 'tab.activity', body: 'tab.comingSoon' },
   earnings: { title: 'tab.earnings', body: 'tab.comingSoon' },

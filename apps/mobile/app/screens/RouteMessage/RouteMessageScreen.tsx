@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { ActivityIndicator, View } from 'react-native';
 import type { Edge } from 'react-native-safe-area-context';
 import { makeStyles, spacing, useTheme } from '@theme';
@@ -7,19 +8,28 @@ import { Text } from '../../components/Text';
 
 type Action = { label: string; onPress: () => void };
 
-type Props = { edges?: Edge[] } & (
+type Props = { edges?: Edge[]; secondaryAction?: Action } & (
   | { loadingLabel: string }
   | {
       title: string;
       body?: string;
+      children?: ReactNode;
       updateAction?: Action & { loading: boolean; error?: string };
-      secondaryAction?: Action;
+      primaryAction?: Action;
     }
 );
 
 export default function RouteMessageScreen(props: Props) {
   const { colors } = useTheme();
   const styles = useStyles();
+  const { secondaryAction } = props;
+  const secondaryButton = secondaryAction && (
+    <Button
+      label={secondaryAction.label}
+      onPress={secondaryAction.onPress}
+      variant="secondary"
+    />
+  );
 
   if ('loadingLabel' in props) {
     return (
@@ -32,12 +42,13 @@ export default function RouteMessageScreen(props: Props) {
             accessibilityState={{ busy: true }}
             color={colors.primary}
           />
+          {secondaryButton}
         </View>
       </Screen>
     );
   }
 
-  const { title, body, updateAction, secondaryAction } = props;
+  const { title, body, updateAction, primaryAction } = props;
   return (
     <Screen scroll edges={props.edges}>
       <View style={styles.message}>
@@ -57,19 +68,17 @@ export default function RouteMessageScreen(props: Props) {
             )}
           </>
         )}
-        {secondaryAction && (
-          <Button
-            label={secondaryAction.label}
-            onPress={secondaryAction.onPress}
-            variant="secondary"
-          />
+        {primaryAction && (
+          <Button label={primaryAction.label} onPress={primaryAction.onPress} />
         )}
+        {props.children}
+        {secondaryButton}
       </View>
     </Screen>
   );
 }
 
 const useStyles = makeStyles(() => ({
-  loading: { flex: 1, justifyContent: 'center' },
+  loading: { flex: 1, justifyContent: 'center', gap: spacing.md },
   message: { gap: spacing.md },
 }));

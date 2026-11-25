@@ -3,6 +3,7 @@ import {
   activeRidesSchema,
   type AppConfig,
   appConfigSchema,
+  type ApplyDriver,
   type Availability,
   availabilitySchema,
   type CancelReason,
@@ -227,6 +228,8 @@ export function createApi(deps: ApiDeps) {
       send('POST', `/offers/${offerId}/accept`, rideSchema, { key }),
     decline: (offerId: string, key = uuid()): Promise<Offer> =>
       send('POST', `/offers/${offerId}/decline`, offerSchema, { key }),
+    applyDriver: (input: ApplyDriver, key = uuid()): Promise<DriverProfile> =>
+      send('POST', '/drivers/me', driverProfileSchema, { body: input, key }),
     profile: (): Promise<DriverProfile> =>
       send('GET', '/drivers/me', driverProfileSchema),
     setAvailability: (online: boolean, key = uuid()): Promise<Availability> =>

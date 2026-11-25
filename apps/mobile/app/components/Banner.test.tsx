@@ -1,5 +1,10 @@
 import { render, screen } from '@testing-library/react-native';
-import { StyleSheet, useColorScheme } from 'react-native';
+import {
+  AccessibilityInfo,
+  Platform,
+  StyleSheet,
+  useColorScheme,
+} from 'react-native';
 import { themes, type } from '@theme';
 import { Banner } from './Banner';
 
@@ -10,11 +15,32 @@ jest.mock('react-native/Libraries/Utilities/useColorScheme', () => ({
 const mockColorScheme = jest.mocked(useColorScheme);
 const message = 'Connection lost · ដាច់ការតភ្ជាប់';
 
+afterEach(() => jest.restoreAllMocks());
+
 test('announces the message as a polite alert', async () => {
   await render(<Banner message={message} />);
   const alert = screen.getByRole('alert', { name: message });
   expect(alert).toHaveProp('accessibilityLiveRegion', 'polite');
 });
+
+test.each([
+  ['ios', [[message], ['Reconnecting…']]],
+  ['android', []],
+] as const)(
+  'uses the platform announcement behavior for banner messages on %s',
+  async (platform, expectedCalls) => {
+    jest.replaceProperty(Platform, 'OS', platform);
+    const announce = jest
+      .spyOn(AccessibilityInfo, 'announceForAccessibility')
+      .mockClear()
+      .mockImplementation(() => undefined);
+    const { rerender } = await render(<Banner message={message} />);
+    await rerender(<Banner message={message} tone="warning" />);
+    await rerender(<Banner message="Reconnecting…" tone="warning" />);
+
+    expect(announce.mock.calls).toEqual(expectedCalls);
+  },
+);
 
 test.each(['light', 'dark'] as const)(
   'uses the %s banner colors',

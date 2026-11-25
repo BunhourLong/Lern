@@ -3,7 +3,7 @@
  */
 
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
-import { AppState } from 'react-native';
+import { AppState, Platform } from 'react-native';
 import type { AppStateStatus } from 'react-native';
 import { requireNativeModule } from 'expo';
 import App from '../App';
@@ -37,12 +37,27 @@ jest.mock('../app/boot/app-core', () => {
     core: {
       interruptPinCheck: jest.fn(),
       refreshAvailability: jest.fn(),
+      setOnline: jest.fn(),
+      accept: jest.fn(),
+      decline: jest.fn(),
+      step: jest.fn(),
+      cancel: jest.fn(),
+      queue: {
+        pending: () => ({ steps: [], points: 0 }),
+        subscribeSteps: () => () => {},
+      },
       pinWaitMs: () => 0,
       stores: {
         language,
         driverMode: jest
           .requireActual('../app/stores/driver-mode.store')
           .createDriverModeStore(),
+        connection: jest
+          .requireActual('../app/stores/connection.store')
+          .createConnectionStore(),
+        activeRide: jest
+          .requireActual('../app/stores/active-ride.store')
+          .createActiveRideStore(),
         security: jest
           .requireActual('../app/stores/security.store')
           .createSecurityStore(),
@@ -51,6 +66,8 @@ jest.mock('../app/boot/app-core', () => {
         notification: createStore(() => null),
       },
     },
+    requestLocationPermission: jest.fn(),
+    refreshLocationPermission: jest.fn(),
     startApp: jest.fn(),
   };
 });
@@ -69,6 +86,83 @@ test('shows the loading gate in the device language and starts the app once', as
     screen.getByRole('progressbar', { name: 'កំពុងដំណើរការ' }),
   ).toBeOnTheScreen();
   expect(startApp).toHaveBeenCalledTimes(1);
+});
+
+test('enables the Android pickup map when the native launch prop is set', async () => {
+  const platform = jest.replaceProperty(Platform, 'OS', 'android');
+  const { activeRide, appConfig, driverMode, session } = core.stores;
+  try {
+    const { rerender } = await render(<App />);
+    await act(() => {
+      appConfig.getState().setGate({ status: 'ok' });
+      session.getState().signedIn({
+        id: 'driver',
+        phone: '+85512345678',
+        roles: ['driver'],
+      });
+      driverMode.setState({
+        verification: 'verified',
+        availability: 'reserved',
+      });
+      activeRide.getState().applyOffer({
+        id: '00000000-0000-4000-8000-000000000001',
+        rideId: '00000000-0000-4000-8000-000000000002',
+        status: 'pending',
+        expiresAt: new Date(Date.now() + 10_000).toISOString(),
+        distanceM: 850,
+        vehicleType: 'remork',
+        pickup: { lat: 11.55, lng: 104.92 },
+        dropoff: { lat: 11.54, lng: 104.92 },
+        fare: { amountMinor: 12_000, currency: 'KHR' },
+      });
+    });
+
+    expect(screen.queryByTestId('map-view')).toBeNull();
+    expect(screen.getByText('មិនអាចបង្ហាញផែនទីបានទេ')).toBeOnTheScreen();
+    await rerender(<App androidMapsConfigured />);
+    expect(screen.getByTestId('map-view').props.provider).toBe('google');
+  } finally {
+    await act(() => {
+      activeRide.setState(activeRide.getInitialState());
+      appConfig.setState(appConfig.getInitialState());
+      driverMode.setState(driverMode.getInitialState());
+      session.setState(session.getInitialState());
+    });
+    platform.restore();
+  }
+});
+
+test('shows one localized sync toast over the PIN lock', async () => {
+  jest.useFakeTimers();
+  const { appConfig, connection, security, session } = core.stores;
+  try {
+    await render(<App />);
+    await act(() => {
+      appConfig.getState().setGate({ status: 'ok' });
+      session.getState().signedIn({
+        id: 'locked-rider',
+        phone: '+85512345678',
+        roles: ['rider'],
+      });
+      security.getState().update({ enabled: true, locked: true });
+      connection.setState({ network: false });
+    });
+    expect(
+      screen.getByRole('header', { name: 'កម្មវិធីបានចាក់សោ' }),
+    ).toBeOnTheScreen();
+    await act(() => jest.advanceTimersByTime(1000));
+    expect(
+      screen.getAllByRole('alert', { name: 'គ្មានអ៊ីនធឺណិត' }),
+    ).toHaveLength(1);
+  } finally {
+    await act(() => {
+      connection.setState(connection.getInitialState());
+      security.setState(security.getInitialState());
+      session.setState(session.getInitialState());
+      appConfig.setState(appConfig.getInitialState());
+    });
+    jest.useRealTimers();
+  }
 });
 
 test('reveals only the most recently activated native cycle after layout', async () => {

@@ -1,5 +1,11 @@
-import { RIDE_UPDATED_EVENT } from '@lern/contracts';
+import {
+  type DriverProfile,
+  OFFER_UPDATED_EVENT,
+  RIDE_UPDATED_EVENT,
+} from '@lern/contracts';
 import type { io } from 'socket.io-client';
+import { rootRoute } from '../routes/root-route';
+import { ApiError } from '../services/api.service';
 import type { PushNative } from '../services/push.service';
 import type { KeyValueStore, SecretStore } from '../services/storage.service';
 import { createCore } from './core';
@@ -27,6 +33,13 @@ const ride = (status: string, version: number) => ({
   dropoff: { lat: 11.54, lng: 104.92 },
   fare: { amountMinor: 4000, currency: 'KHR' },
 });
+const offer = {
+  ...ride('pending', 1),
+  id: offerId,
+  rideId,
+  distanceM: 800,
+  expiresAt: '2099-01-01T00:00:00.000Z',
+};
 const pair = { accessToken: 'access-2', refreshToken: 'r'.repeat(43) };
 type Reply = { status: number; body?: unknown };
 type Routes = Record<string, () => Reply | Promise<Reply>>;
@@ -174,6 +187,117 @@ const routes = (extra: Routes = {}) => ({
   ...extra,
 });
 
+const driverApplication = { vehicleType: 'remork', plate: 'PP 1' } as const;
+const pendingProfile = {
+  ...driverApplication,
+  verification: 'pending',
+  availability: 'offline',
+};
+const rider = { ...me, roles: ['rider'] };
+
+it.each([201, 409])(
+  'reloads the session and driver profile after applying (HTTP %i)',
+  async status => {
+    let applied = false;
+    const s = server(
+      routes({
+        'GET /me': () => ({ status: 200, body: applied ? me : rider }),
+        'POST /drivers/me': () => {
+          applied = true;
+          return { status, body: status === 201 ? pendingProfile : undefined };
+        },
+        'GET /drivers/me': () => ({ status: 200, body: pendingProfile }),
+      }),
+    );
+    const core = createCore(deps(s, fakeIo(), 'r'.repeat(43)));
+    await core.boot();
+
+    await core.becomeDriver(driverApplication);
+
+    expect(s.calls.slice(-3)).toEqual([
+      'POST /drivers/me',
+      'GET /me',
+      'GET /drivers/me',
+    ]);
+    expect(core.stores.session.getState().me).toEqual(me);
+    expect(core.stores.driverMode.getState()).toMatchObject({
+      verification: 'pending',
+      availability: 'offline',
+    });
+  },
+);
+
+it('rethrows an application failure and keeps the rider session', async () => {
+  const s = server(
+    routes({
+      'GET /me': () => ({ status: 200, body: rider }),
+      'POST /drivers/me': () => ({ status: 500 }),
+    }),
+  );
+  const core = createCore(deps(s, fakeIo(), 'r'.repeat(43)));
+  await core.boot();
+  const previous = core.stores.session.getState();
+
+  await expect(core.becomeDriver(driverApplication)).rejects.toEqual(
+    new ApiError(500, null),
+  );
+
+  expect(core.stores.session.getState()).toBe(previous);
+  expect(s.calls.slice(-2)).toEqual(['GET /me', 'POST /drivers/me']);
+});
+
+it('skips the role lookup after sign-out during the driver application', async () => {
+  let finish!: () => void;
+  const s = server(
+    routes({
+      'GET /me': () => ({ status: 200, body: rider }),
+      'POST /drivers/me': () =>
+        new Promise(resolve => {
+          finish = () => resolve({ status: 201, body: pendingProfile });
+        }),
+      'POST /auth/logout': () => ({ status: 204 }),
+    }),
+  );
+  const core = createCore(deps(s, fakeIo(), 'r'.repeat(43)));
+  await core.boot();
+  const application = core.becomeDriver(driverApplication);
+  await settle();
+  await core.signOut();
+  const callsAtSignOut = s.calls.length;
+  finish();
+  await application;
+
+  expect(core.stores.session.getState().status).toBe('signed_out');
+  expect(s.calls.slice(callsAtSignOut)).not.toContain('GET /me');
+});
+
+it('does not restore a driver session after sign-out during the role lookup', async () => {
+  let reply = () => Promise.resolve({ status: 200, body: rider });
+  const s = server(
+    routes({
+      'GET /me': () => reply(),
+      'POST /drivers/me': () => ({ status: 201, body: pendingProfile }),
+      'POST /auth/logout': () => ({ status: 204 }),
+    }),
+  );
+  const core = createCore(deps(s, fakeIo(), 'r'.repeat(43)));
+  await core.boot();
+  let finish!: () => void;
+  reply = () =>
+    new Promise(resolve => {
+      finish = () => resolve({ status: 200, body: me });
+    });
+  const application = core.becomeDriver(driverApplication);
+  await settle();
+  await core.signOut();
+  finish();
+  await application;
+
+  expect(core.stores.session.getState().status).toBe('signed_out');
+  expect(core.stores.driverMode.getState().verification).toBeNull();
+  expect(s.calls).not.toContain('GET /drivers/me');
+});
+
 it('retries the profile load without verifying a consumed OTP again', async () => {
   let profileReady = false;
   const verify = jest
@@ -303,6 +427,7 @@ it('boots from a stored refresh token: session, driver availability, then the sn
     me,
   });
   expect(core.stores.driverMode.getState().availability).toBe('on_trip');
+  expect(core.stores.driverMode.getState().verification).toBe('verified');
 
   f.fire('connect');
   await settle();
@@ -418,14 +543,51 @@ it('queues a position the socket could not deliver and uploads it over HTTP late
   const f = fakeIo();
   const core = createCore(deps(s, f, 'r'.repeat(43)));
   await core.boot();
-  await core.reportPosition({
+  const point = {
     lat: 11.55,
     lng: 104.92,
     recordedAt: '2026-11-01T10:00:00.000Z',
-  }); // socket not connected
+  };
+  await core.reportPosition(point); // socket not connected
+  expect(core.stores.driverMode.getState().position).toEqual(point);
   expect(core.queue.pending().points).toBe(1);
   await core.queue.flush();
   expect(s.calls).toContain('POST /drivers/me/locations');
+  expect(core.queue.pending().points).toBe(0);
+});
+
+it('updates the driver position when the socket delivers it', async () => {
+  const f = fakeIo();
+  const core = createCore(deps(server(routes()), f, 'r'.repeat(43)));
+  await core.boot();
+  f.socket.connected = true;
+  const point = { lat: 11.55, lng: 104.92, recordedAt: '2026-11-21T10:00:00Z' };
+  await core.reportPosition(point);
+  expect(core.stores.driverMode.getState().position).toEqual(point);
+  expect(core.queue.pending().points).toBe(0);
+});
+
+it('drops a pending location acknowledgement after sign-out', async () => {
+  const f = fakeIo();
+  const core = createCore(deps(server(routes()), f, 'r'.repeat(43)));
+  await core.boot();
+  f.socket.connected = true;
+  let refuse!: (cause: Error) => void;
+  jest.spyOn(f.socket, 'timeout').mockReturnValueOnce({
+    emitWithAck: () =>
+      new Promise((_resolve, reject) => {
+        refuse = reject;
+      }),
+  });
+  const report = core.reportPosition({
+    lat: 11.55,
+    lng: 104.92,
+    recordedAt: '2026-11-21T10:00:00Z',
+  });
+  await core.signOut();
+  refuse(new Error('disconnected while sending location'));
+  await report;
+  expect(core.stores.driverMode.getState().position).toBeNull();
   expect(core.queue.pending().points).toBe(0);
 });
 
@@ -437,19 +599,26 @@ it('signs out completely: secret, stores, queue and socket', async () => {
   await core.boot();
   f.fire('connect');
   await settle();
-  core.queue.enqueuePoint({
+  await core.reportPosition({
     lat: 11.55,
     lng: 104.92,
     recordedAt: '2026-11-01T10:00:00.000Z',
   });
+  core.stores.driverMode.setState({ locationPermission: 'foreground' });
 
+  expect(core.stores.driverMode.getState().position).not.toBeNull();
+  const callsAtSignOut = s.calls.length;
   await core.signOut();
 
+  expect(s.calls.slice(callsAtSignOut)).not.toContain('GET /drivers/me');
   expect(s.calls).toContain('POST /auth/logout');
   expect(d.secret()).toBeUndefined();
   expect(core.stores.session.getState().status).toBe('signed_out');
   expect(core.stores.activeRide.getState().driver).toBeNull();
   expect(core.stores.driverMode.getState().availability).toBeNull();
+  expect(core.stores.driverMode.getState().verification).toBeNull();
+  expect(core.stores.driverMode.getState().locationPermission).toBeNull();
+  expect(core.stores.driverMode.getState().position).toBeNull();
   expect(core.queue.pending().points).toBe(0);
   expect(f.socket.disconnect).toHaveBeenCalled();
 });
@@ -553,6 +722,460 @@ it('stays restoring while booting offline, keeps the session, and finishes once 
   });
   expect(d.secret()).toBe(pair.refreshToken);
   expect(f.io).toHaveBeenCalledTimes(1);
+});
+
+describe('session cache', () => {
+  const cacheKey = 'session-cache.v1';
+  const cachedDriver = JSON.stringify({ me, verification: 'verified' });
+
+  function restart(d: ReturnType<typeof deps>) {
+    let retry!: () => void;
+    const core = createCore({
+      ...d,
+      io: fakeIo().io,
+      sleep: () => new Promise<void>(resolve => (retry = resolve)),
+    });
+    return { core, retry: () => retry() };
+  }
+
+  it('opens Driver Home offline, then applies fresh account data and keeps the queued step', async () => {
+    const freshMe = { ...me, phone: '+85598765432' };
+    const freshProfile = { ...pendingProfile, verification: 'suspended' };
+    let fresh = false;
+    const s = server(
+      routes({
+        'POST /auth/otp/verify': () => ({ status: 200, body: pair }),
+        'GET /me': () => ({ status: 200, body: fresh ? freshMe : me }),
+        'GET /drivers/me': () => ({
+          status: 200,
+          body: fresh
+            ? freshProfile
+            : {
+                ...pendingProfile,
+                verification: 'verified',
+                availability: 'on_trip',
+              },
+        }),
+      }),
+    );
+    const d = deps(s, fakeIo());
+    const first = createCore(d);
+    await first.boot();
+    await first.signIn(me.phone, '123456');
+    s.state.offline = true;
+    await first.step(rideId, 'complete');
+    const queued = first.queue.pending().steps;
+    expect(queued).toHaveLength(1);
+
+    const { core, retry } = restart(d);
+    const booting = core.boot();
+    await settle();
+
+    const { session, driverMode, appConfig, connection } = core.stores;
+    expect(session.getState()).toMatchObject({ status: 'signed_in', me });
+    expect(driverMode.getState()).toMatchObject({
+      verification: 'verified',
+      availability: null,
+    });
+    expect(rootRoute(session.getState(), appConfig.getState().gate)).toBe(
+      'driver',
+    );
+    expect(connection.getState().connected).toBe(false);
+    expect(JSON.parse(d.kv.get(cacheKey)!)).toEqual({
+      me,
+      verification: 'verified',
+    });
+
+    fresh = true;
+    s.state.offline = false;
+    retry();
+    await booting;
+
+    expect(session.getState().me).toEqual(freshMe);
+    expect(driverMode.getState()).toMatchObject({
+      verification: 'suspended',
+      availability: 'offline',
+    });
+    expect(core.queue.pending().steps).toEqual(queued);
+    expect(JSON.parse(d.kv.get(cacheKey)!)).toEqual({
+      me: freshMe,
+      verification: 'suspended',
+    });
+  });
+
+  it('leaves cached availability and verification alone on foreground before boot retries', async () => {
+    let restored = false;
+    const s = server(
+      routes({
+        'POST /auth/refresh': () => {
+          restored = true;
+          return { status: 200, body: pair };
+        },
+        'GET /drivers/me': () =>
+          restored
+            ? {
+                status: 200,
+                body: { ...pendingProfile, availability: 'on_trip' },
+              }
+            : { status: 401 },
+      }),
+    );
+    const d = deps(s, fakeIo(), pair.refreshToken);
+    d.kv.set(cacheKey, cachedDriver);
+    s.state.offline = true;
+    const { core, retry } = restart(d);
+    const booting = core.boot();
+    await settle();
+    const { session, driverMode } = core.stores;
+    expect(session.getState()).toMatchObject({ status: 'signed_in', me });
+
+    s.state.offline = false;
+    await core.refreshAvailability();
+
+    expect({
+      ...driverMode.getState(),
+      cache: d.kv.get(cacheKey),
+    }).toMatchObject({
+      availability: null,
+      verification: 'verified',
+      cache: cachedDriver,
+    });
+    expect(s.calls).not.toContain('GET /drivers/me');
+
+    retry();
+    await booting;
+    expect(driverMode.getState()).toMatchObject({
+      availability: 'on_trip',
+      verification: 'pending',
+    });
+  });
+
+  it('opens Rider Home for a cached rider while offline', async () => {
+    const s = server(
+      routes({ 'GET /me': () => ({ status: 200, body: rider }) }),
+    );
+    const d = deps(s, fakeIo(), pair.refreshToken);
+    await createCore(d).boot();
+    s.state.offline = true;
+    const { core } = restart(d);
+    await Promise.race([core.boot(), settle()]);
+
+    const { session, appConfig } = core.stores;
+    expect(session.getState()).toMatchObject({
+      status: 'signed_in',
+      me: rider,
+    });
+    expect(rootRoute(session.getState(), appConfig.getState().gate)).toBe(
+      'rider',
+    );
+    expect(JSON.parse(d.kv.get(cacheKey)!)).toEqual({
+      me: rider,
+      verification: null,
+    });
+  });
+
+  it('keeps a cold notification tap until the cached session is confirmed', async () => {
+    const s = server(routes());
+    const push = fakePush({ getInitialNotification: async () => rideTap });
+    const d = deps(s, fakeIo(), pair.refreshToken, undefined, push.native);
+    d.kv.set(cacheKey, cachedDriver);
+    s.state.offline = true;
+    const { core, retry } = restart(d);
+    const booting = core.boot();
+    await settle();
+
+    expect(s.calls).not.toContain('GET /me/active-ride');
+    s.state.offline = false;
+    retry();
+    await booting;
+    await settle();
+
+    expect(core.stores.notification.getState()).toEqual({
+      type: 'ride',
+      id: rideId,
+      status: 'in_progress',
+    });
+  });
+
+  it('clears the cached account before starting a different account from the stored token', async () => {
+    const otherUser = {
+      ...me,
+      id: '00000000-0000-4000-8000-0000000000d2',
+      phone: '+85598765432',
+    };
+    let answerProfile!: () => void;
+    const s = server(
+      routes({
+        'GET /me': () => ({ status: 200, body: otherUser }),
+        'GET /drivers/me': () =>
+          new Promise<Reply>(resolve => {
+            answerProfile = () => resolve({ status: 200, body: pendingProfile });
+          }),
+      }),
+    );
+    const push = fakePush({ getInitialNotification: async () => rideTap });
+    const d = deps(s, fakeIo(), pair.refreshToken, undefined, push.native);
+    d.kv.set(cacheKey, cachedDriver);
+    s.state.offline = true;
+    const { core, retry } = restart(d);
+    const booting = core.boot();
+    await settle();
+    const { session, driverMode, notification } = core.stores;
+    expect(session.getState()).toMatchObject({ status: 'signed_in', me });
+    expect(driverMode.getState().verification).toBe('verified');
+
+    s.state.offline = false;
+    retry();
+    await settle();
+    const whileLoadingProfile = {
+      session: session.getState(),
+      driverMode: driverMode.getState(),
+      cache: d.kv.get(cacheKey),
+    };
+    answerProfile();
+    await booting;
+    await settle();
+
+    expect(whileLoadingProfile).toMatchObject({
+      session: { status: 'signed_out', me: null },
+      driverMode: { availability: null, verification: null },
+      cache: undefined,
+    });
+    expect(session.getState()).toMatchObject({
+      status: 'signed_in',
+      me: otherUser,
+    });
+    expect(driverMode.getState()).toMatchObject({
+      availability: 'offline',
+      verification: 'pending',
+    });
+    expect(JSON.parse(d.kv.get(cacheKey) ?? 'null')).toEqual({
+      me: otherUser,
+      verification: 'pending',
+    });
+    expect(s.calls).not.toContain('GET /me/active-ride');
+    expect(notification.getState()).toBeNull();
+  });
+
+  it('clears the cache on sign-out even if Keychain leaves a token for the next offline boot', async () => {
+    const s = server(routes());
+    const d = deps(s, fakeIo(), pair.refreshToken);
+    const first = createCore(d);
+    await first.boot();
+    d.kv.set(cacheKey, cachedDriver);
+    jest
+      .spyOn(d.refreshToken, 'clear')
+      .mockRejectedValueOnce(new Error('Keychain'));
+    s.state.offline = true;
+
+    await first.signOut();
+    expect(d.kv.get(cacheKey)).toBeUndefined();
+    const { core } = restart(d);
+    await Promise.race([core.boot(), settle()]);
+
+    expect(core.stores.session.getState()).toMatchObject({
+      status: 'restoring',
+      me: null,
+    });
+  });
+
+  it('keeps the cache cleared when a boot response arrives after sign-out', async () => {
+    let answerMe!: () => void;
+    const s = server(
+      routes({
+        'GET /me': () =>
+          new Promise<Reply>(resolve => {
+            answerMe = () => resolve({ status: 200, body: me });
+          }),
+      }),
+    );
+    const d = deps(s, fakeIo(), pair.refreshToken);
+    d.kv.set(cacheKey, cachedDriver);
+    const core = createCore(d);
+    const booting = core.boot();
+    await settle();
+
+    await core.signOut();
+    answerMe();
+    await booting;
+
+    expect(core.stores.session.getState().status).toBe('signed_out');
+    expect(d.kv.get(cacheKey)).toBeUndefined();
+  });
+
+  it('discards an availability refresh that finishes after sign-out', async () => {
+    let reply = async () => ({ status: 200, body: pendingProfile });
+    const s = server(routes({ 'GET /drivers/me': () => reply() }));
+    const d = deps(s, fakeIo(), pair.refreshToken);
+    const core = createCore(d);
+    await core.boot();
+    expect(d.kv.get(cacheKey)).toBeDefined();
+
+    let answerProfile!: () => void;
+    reply = () =>
+      new Promise(resolve => {
+        answerProfile = () =>
+          resolve({
+            status: 200,
+            body: {
+              ...pendingProfile,
+              availability: 'on_trip',
+              verification: 'verified',
+            },
+          });
+      });
+    const refresh = core.refreshAvailability();
+    await settle();
+    await core.signOut();
+    const { driverMode } = core.stores;
+    const signedOutMode = driverMode.getState();
+    expect(d.kv.get(cacheKey)).toBeUndefined();
+
+    answerProfile();
+    await refresh;
+
+    expect({
+      driverMode: driverMode.getState(),
+      cache: d.kv.get(cacheKey),
+    }).toEqual({ driverMode: signedOutMode, cache: undefined });
+  });
+
+  it.each(['at boot', 'while signed in'] as const)(
+    'clears the cache after a refused refresh %s',
+    async when => {
+      let refused = when === 'at boot';
+      const s = server(
+        routes({
+          'POST /auth/refresh': () =>
+            refused ? { status: 401 } : { status: 200, body: pair },
+        }),
+      );
+      const d = deps(s, fakeIo(), pair.refreshToken);
+      d.kv.set(cacheKey, cachedDriver);
+      const core = createCore(d);
+      await core.boot();
+      if (when === 'while signed in') {
+        refused = true;
+        expect(await core.api.restore()).toBe('refused');
+      }
+
+      expect(core.stores.session.getState()).toMatchObject({
+        status: 'signed_out',
+        me: null,
+      });
+      expect(d.kv.get(cacheKey)).toBeUndefined();
+    },
+  );
+
+  it('clears a leftover cache when boot finds no refresh token', async () => {
+    const d = deps(server(routes()), fakeIo(), pair.refreshToken);
+    await d.refreshToken.clear();
+    d.kv.set(cacheKey, cachedDriver);
+    const core = createCore(d);
+    await core.boot();
+
+    expect(core.stores.session.getState()).toMatchObject({
+      status: 'signed_out',
+      me: null,
+    });
+    expect(core.stores.driverMode.getState().verification).toBeNull();
+    expect(d.kv.get(cacheKey)).toBeUndefined();
+  });
+
+  it.each([
+    ['bad JSON', '{'],
+    [
+      'invalid account',
+      JSON.stringify({ me: { id: me.id }, verification: 'verified' }),
+    ],
+    ['invalid verification', JSON.stringify({ me, verification: 'unknown' })],
+  ])(
+    'discards a cache with %s and stays restoring offline',
+    async (_, value) => {
+      const s = server(routes());
+      s.state.offline = true;
+      const d = deps(s, fakeIo(), pair.refreshToken);
+      d.kv.set(cacheKey, value);
+      const { core } = restart(d);
+      await Promise.race([core.boot(), settle()]);
+
+      expect(core.stores.session.getState()).toMatchObject({
+        status: 'restoring',
+        me: null,
+      });
+      expect(d.kv.get(cacheKey)).toBeUndefined();
+    },
+  );
+
+  it('locks the app before exposing the cached session when booting offline', async () => {
+    const s = server(routes());
+    const d = deps(s, fakeIo(), pair.refreshToken);
+    const first = createCore(d);
+    await first.boot();
+    await first.enableLock('123456');
+    d.kv.set(cacheKey, cachedDriver);
+    s.state.offline = true;
+    const { core } = restart(d);
+    const { session, security } = core.stores;
+    const lockedAtSignIn: boolean[] = [];
+    session.subscribe(state => {
+      if (state.status === 'signed_in')
+        lockedAtSignIn.push(security.getState().locked);
+    });
+    await Promise.race([core.boot(), settle()]);
+
+    expect(lockedAtSignIn).toEqual([true]);
+  });
+
+  it('caches the new roles and verification after a rider becomes a driver', async () => {
+    let applied = false;
+    const s = server(
+      routes({
+        'GET /me': () => ({ status: 200, body: applied ? me : rider }),
+        'POST /drivers/me': () => {
+          applied = true;
+          return { status: 201, body: pendingProfile };
+        },
+        'GET /drivers/me': () => ({ status: 200, body: pendingProfile }),
+      }),
+    );
+    const d = deps(s, fakeIo(), pair.refreshToken);
+    const core = createCore(d);
+    await core.boot();
+    await core.becomeDriver(driverApplication);
+
+    expect(JSON.parse(d.kv.get(cacheKey) ?? 'null')).toEqual({
+      me,
+      verification: 'pending',
+    });
+  });
+
+  it('uses the verification learned on socket connect on the next offline boot', async () => {
+    let verification = 'pending';
+    const s = server(
+      routes({
+        'GET /drivers/me': () => ({
+          status: 200,
+          body: { ...pendingProfile, verification },
+        }),
+      }),
+    );
+    const socket = fakeIo();
+    const d = deps(s, socket, pair.refreshToken);
+    const first = createCore(d);
+    await first.boot();
+    expect(first.stores.driverMode.getState().verification).toBe('pending');
+    verification = 'verified';
+    socket.fire('connect');
+    await settle();
+    expect(first.stores.driverMode.getState().verification).toBe('verified');
+
+    s.state.offline = true;
+    const { core } = restart(d);
+    await Promise.race([core.boot(), settle()]);
+
+    expect(core.stores.driverMode.getState().verification).toBe('verified');
+  });
 });
 
 it('drops a command answer that arrives after sign-out, so the next user never sees it', async () => {
@@ -727,13 +1350,6 @@ describe('push', () => {
   const active = 'GET /me/active-ride';
   const details = `GET /rides/${rideId}`;
   const emptyRides = { rider: null, driver: null, offer: null };
-  const offer = {
-    ...ride('pending', 1),
-    id: offerId,
-    rideId,
-    distanceM: 800,
-    expiresAt: '2099-01-01T00:00:00.000Z',
-  };
 
   function deferred<T>() {
     let resolve!: (value: T) => void;
@@ -1334,8 +1950,199 @@ describe('app lock', () => {
   });
 });
 
-it('reads driver availability again on reconnect and ignores an earlier profile response', async () => {
-  let reply = async () => routes()['GET /drivers/me']();
+describe('driver availability from active rides', () => {
+  const profile = routes()['GET /drivers/me']().body;
+  const profileReply = (availability: DriverProfile['availability']) => ({
+    status: 200,
+    body: { ...profile, availability },
+  });
+
+  async function connect(extra: Routes = {}) {
+    const s = server(
+      routes({
+        'GET /me/active-ride': () => ({
+          status: 200,
+          body: { rider: null, driver: null, offer: null },
+        }),
+        ...extra,
+      }),
+    );
+    const f = fakeIo();
+    const core = createCore(deps(s, f, pair.refreshToken));
+    await core.boot();
+    f.fire('connect');
+    await settle();
+    return { core, f, calls: s.calls };
+  }
+
+  it.each(['pending', 'expired', 'cancelled'])(
+    'refreshes on an offer update with status %s',
+    async status => {
+      const expected = status === 'pending' ? 'reserved' : 'available';
+      let availability: DriverProfile['availability'] =
+        status === 'pending' ? 'available' : 'reserved';
+      const { core, f } = await connect({
+        'GET /drivers/me': () => profileReply(availability),
+      });
+      if (status !== 'pending') {
+        f.fire(OFFER_UPDATED_EVENT, offer);
+        await settle();
+      }
+
+      availability = expected;
+      f.fire(OFFER_UPDATED_EVENT, { ...offer, status });
+      await settle();
+
+      expect(core.stores.driverMode.getState().availability).toBe(expected);
+    },
+  );
+
+  it('refreshes when a new pending offer arrives before the old expiry update', async () => {
+    let availability: DriverProfile['availability'] = 'available';
+    const { core, f } = await connect({
+      'GET /drivers/me': () => profileReply(availability),
+    });
+    // The first pending event arrived after its offer expired on the server.
+    const previousOffer = { ...offer, expiresAt: '2020-01-01T00:00:00.000Z' };
+    f.fire(OFFER_UPDATED_EVENT, previousOffer);
+    await settle();
+
+    availability = 'reserved';
+    f.fire(OFFER_UPDATED_EVENT, {
+      ...offer,
+      id: '00000000-0000-4000-8000-000000000004',
+      rideId: otherRideId,
+    });
+    f.fire(OFFER_UPDATED_EVENT, { ...previousOffer, status: 'expired' });
+    await settle();
+
+    expect(core.stores.driverMode.getState().availability).toBe('reserved');
+  });
+
+  it.each([
+    ['decline', 'available', { ...offer, status: 'declined' }],
+    ['accept', 'on_trip', ride('driver_assigned', 2)],
+  ] as const)('refreshes after %s', async (action, expected, body) => {
+    let availability: DriverProfile['availability'] = 'reserved';
+    const { core, f } = await connect({
+      'GET /drivers/me': () => profileReply(availability),
+      [`POST /offers/${offerId}/${action}`]: () => {
+        availability = expected;
+        return { status: 200, body };
+      },
+    });
+    f.fire(OFFER_UPDATED_EVENT, offer);
+    await settle();
+
+    await core[action](offerId);
+    await settle();
+
+    expect(core.stores.driverMode.getState().availability).toBe(expected);
+  });
+
+  it('refreshes after accepting an offer while the previous assignment is still cached', async () => {
+    let availability: DriverProfile['availability'] = 'on_trip';
+    const { core, f } = await connect({
+      'GET /drivers/me': () => profileReply(availability),
+      'GET /me/active-ride': () => ({
+        status: 200,
+        body: {
+          rider: null,
+          driver: { ...ride('driver_assigned', 2), id: otherRideId },
+          offer: null,
+        },
+      }),
+      [`POST /offers/${offerId}/accept`]: () => {
+        availability = 'on_trip';
+        return { status: 200, body: ride('driver_assigned', 2) };
+      },
+    });
+    // The server cancelled the previous ride, and its socket update is delayed.
+    availability = 'reserved';
+    f.fire(OFFER_UPDATED_EVENT, offer);
+    await settle();
+    expect(core.stores.driverMode.getState().availability).toBe('reserved');
+
+    await core.accept(offerId);
+    await settle();
+
+    expect(core.stores.driverMode.getState().availability).toBe('on_trip');
+  });
+
+  it('refreshes on a completed driver ride', async () => {
+    let availability: DriverProfile['availability'] = 'on_trip';
+    const { core, f } = await connect({
+      'GET /drivers/me': () => profileReply(availability),
+      'GET /me/active-ride': routes()['GET /me/active-ride'],
+    });
+
+    availability = 'offline';
+    f.fire(RIDE_UPDATED_EVENT, ride('completed', 5));
+    await settle();
+
+    expect(core.stores.driverMode.getState().availability).toBe('offline');
+  });
+
+  it('skips profile reads for a duplicate offer and a rider ride update', async () => {
+    const { f, calls } = await connect();
+    f.fire(OFFER_UPDATED_EVENT, offer);
+    await settle();
+    const before = calls.length;
+
+    f.fire(OFFER_UPDATED_EVENT, { ...offer });
+    f.fire(RIDE_UPDATED_EVENT, { ...ride('searching', 1), id: otherRideId });
+    await settle();
+
+    expect(calls.slice(before)).not.toContain('GET /drivers/me');
+  });
+
+  it('never reads the driver profile for a rider-only user', async () => {
+    const { f, calls } = await connect({
+      'GET /me': () => ({ status: 200, body: rider }),
+    });
+    f.fire(OFFER_UPDATED_EVENT, offer);
+    await settle();
+
+    expect(calls).not.toContain('GET /drivers/me');
+  });
+
+  it('keeps a newer toggle when an offer-triggered profile read finishes', async () => {
+    let reply: Routes[string] = () => profileReply('available');
+    const { core, f } = await connect({
+      'GET /drivers/me': () => reply(),
+      'PUT /drivers/me/availability': () => ({
+        status: 200,
+        body: { availability: 'offline' },
+      }),
+    });
+    let finish!: (result: Reply) => void;
+    const reading = new Promise<Reply>(resolve => {
+      finish = resolve;
+    });
+    reply = () => reading;
+    f.fire(OFFER_UPDATED_EVENT, offer);
+
+    await core.setOnline(false);
+    finish({
+      status: 200,
+      body: { ...profile, availability: 'reserved', verification: 'suspended' },
+    });
+    await settle();
+
+    expect(core.stores.driverMode.getState()).toMatchObject({
+      availability: 'offline',
+      verification: 'suspended',
+    });
+  });
+});
+
+it('refreshes driver verification and availability on reconnect and ignores an earlier profile response', async () => {
+  const profile = routes()['GET /drivers/me']();
+  const pending = {
+    ...profile,
+    body: { ...profile.body, verification: 'pending' },
+  };
+  let reply = async () => pending;
   const f = fakeIo();
   const core = createCore(
     deps(
@@ -1346,11 +2153,11 @@ it('reads driver availability again on reconnect and ignores an earlier profile 
   );
   await core.boot();
   let finish!: () => void;
-  const profile = routes()['GET /drivers/me']();
-  reply = () =>
-    new Promise(resolve => {
-      finish = () => resolve(profile);
-    });
+  const delayed = new Promise<typeof pending>(resolve => {
+    finish = () => resolve(pending);
+  });
+  reply = () => delayed;
+  expect(core.stores.driverMode.getState().verification).toBe('pending');
   f.fire('connect');
   await settle();
   reply = async () => ({
@@ -1360,12 +2167,14 @@ it('reads driver availability again on reconnect and ignores an earlier profile 
   f.fire('connect');
   await settle();
   expect(core.stores.driverMode.getState().availability).toBe('offline');
+  expect(core.stores.driverMode.getState().verification).toBe('verified');
   finish();
   await settle();
   expect(core.stores.driverMode.getState().availability).toBe('offline');
+  expect(core.stores.driverMode.getState().verification).toBe('verified');
 });
 
-it('keeps a newer driver toggle when a delayed profile read finishes', async () => {
+it('keeps a newer driver toggle while applying verification from a delayed profile read', async () => {
   const profile = routes()['GET /drivers/me']();
   let reply = async () => profile;
   const core = createCore(
@@ -1387,14 +2196,51 @@ it('keeps a newer driver toggle when a delayed profile read finishes', async () 
   let finish!: () => void;
   reply = () =>
     new Promise(resolve => {
-      finish = () => resolve(profile);
+      finish = () =>
+        resolve({
+          ...profile,
+          body: { ...profile.body, verification: 'suspended' },
+        });
     });
   const refresh = core.refreshAvailability();
   await settle();
   await core.setOnline(true);
+  expect(core.stores.driverMode.getState().verification).toBe('verified');
   finish();
   await refresh;
   expect(core.stores.driverMode.getState().availability).toBe('available');
+  expect(core.stores.driverMode.getState().verification).toBe('suspended');
+});
+
+it('applies a profile availability refresh across a location permission update', async () => {
+  const profile = routes()['GET /drivers/me']();
+  let reply = async () => profile;
+  const core = createCore(
+    deps(
+      server(routes({ 'GET /drivers/me': () => reply() })),
+      fakeIo(),
+      'r'.repeat(43),
+    ),
+  );
+  await core.boot();
+  let finish!: () => void;
+  reply = () =>
+    new Promise(resolve => {
+      finish = () =>
+        resolve({
+          ...profile,
+          body: { ...profile.body, availability: 'offline' },
+        });
+    });
+  const refresh = core.refreshAvailability();
+  await settle();
+  core.stores.driverMode.setState({ locationPermission: 'foreground' });
+  finish();
+  await refresh;
+  expect(core.stores.driverMode.getState()).toMatchObject({
+    availability: 'offline',
+    locationPermission: 'foreground',
+  });
 });
 
 it('ignores a superseded profile read even when the latest read is offline', async () => {

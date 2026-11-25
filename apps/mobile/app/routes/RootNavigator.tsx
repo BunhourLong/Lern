@@ -14,8 +14,10 @@ import {
   AppPinContainer,
   type PinActions,
 } from '../screens/AppPin/AppPinContainer';
+import DriverApplyContainer from '../screens/DriverApply/DriverApplyContainer';
 import LoginContainer from '../screens/Login/LoginContainer';
 import OtpContainer from '../screens/Otp/OtpContainer';
+import type { DriverStatusActions } from '../screens/DriverStatus/DriverStatusContainer';
 import RouteMessageContainer from '../screens/RouteMessage/RouteMessageContainer';
 import RouteMessageScreen from '../screens/RouteMessage/RouteMessageScreen';
 import { type RootStackParams, Stack } from './index';
@@ -23,20 +25,47 @@ import { rootRoute } from './root-route';
 import { PrivacyFrame } from './PrivacyFrame';
 import { RoleTabs } from './RoleTabs';
 
-type Props = {
-  core: PinActions & {
-    stores: Pick<
-      Core['stores'],
-      'session' | 'appConfig' | 'notification' | 'security'
-    >;
-    api: Pick<Core['api'], 'requestOtp'>;
-    signIn: Core['signIn'];
-  };
+type Props = Pick<
+  DriverStatusActions,
+  'requestLocationPermission' | 'refreshLocationPermission'
+> & {
+  core: PinActions &
+    Pick<
+      Core,
+      | 'setOnline'
+      | 'refreshAvailability'
+      | 'accept'
+      | 'decline'
+      | 'step'
+      | 'cancel'
+    > & {
+      queue: Pick<Core['queue'], 'pending'> &
+        Partial<Pick<Core['queue'], 'subscribeSteps'>>;
+      stores: Pick<
+        Core['stores'],
+        | 'session'
+        | 'appConfig'
+        | 'notification'
+        | 'security'
+        | 'driverMode'
+        | 'connection'
+        | 'activeRide'
+      >;
+      api: Pick<Core['api'], 'requestOtp'>;
+      signIn: Core['signIn'];
+      becomeDriver: Core['becomeDriver'];
+    };
   debug: ReactNode;
   foreground?: boolean;
 };
 
-export function RootNavigator({ core, debug, foreground = true }: Props) {
+export function RootNavigator({
+  core,
+  requestLocationPermission,
+  refreshLocationPermission,
+  debug,
+  foreground = true,
+}: Props) {
   const session = useStore(core.stores.session);
   const gate = useStore(core.stores.appConfig, state => state.gate);
   const notifications = core.stores.notification;
@@ -160,6 +189,22 @@ export function RootNavigator({ core, debug, foreground = true }: Props) {
               {({ navigation }) => (
                 <RoleTabs
                   role={route}
+                  driverStatus={{
+                    driverMode: core.stores.driverMode,
+                    connection: core.stores.connection,
+                    activeRide: core.stores.activeRide,
+                    setOnline: core.setOnline,
+                    refreshAvailability: core.refreshAvailability,
+                    accept: core.accept,
+                    decline: core.decline,
+                    step: core.step,
+                    cancel: core.cancel,
+                    pendingSteps: () => core.queue.pending().steps,
+                    subscribePendingSteps: core.queue.subscribeSteps,
+                    requestLocationPermission,
+                    refreshLocationPermission,
+                  }}
+                  onApply={() => navigation.navigate('DriverApply')}
                   onEnroll={
                     enabled ? undefined : () => navigation.navigate('EnrollPin')
                   }
@@ -170,6 +215,16 @@ export function RootNavigator({ core, debug, foreground = true }: Props) {
                   }
                 />
               )}
+            </Stack.Screen>
+            <Stack.Screen
+              name="DriverApply"
+              options={{
+                headerShown: true,
+                title: t('driverApply.title'),
+                headerBackTitle: t('route.back'),
+              }}
+            >
+              {() => <DriverApplyContainer becomeDriver={core.becomeDriver} />}
             </Stack.Screen>
             <Stack.Screen name="EnrollPin">
               {({ navigation }) => (
@@ -231,7 +286,10 @@ export function RootNavigator({ core, debug, foreground = true }: Props) {
           <Stack.Group>
             <Stack.Screen name={route}>
               {() => (
-                <RouteMessageContainer route={route} storeUrl={storeUrl} />
+                <RouteMessageContainer
+                  route={route}
+                  storeUrl={storeUrl}
+                />
               )}
             </Stack.Screen>
           </Stack.Group>

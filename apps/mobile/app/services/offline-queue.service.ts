@@ -58,6 +58,11 @@ export function createOfflineQueue({
     store.set(STORAGE_KEY, JSON.stringify(q));
   };
 
+  const stepListeners = new Set<() => void>();
+  const notifySteps = () => {
+    for (const listener of stepListeners) listener();
+  };
+
   let flushing: Promise<void> | undefined;
   // Bumped by clear(): a request answered after sign-out reports nothing and changes nothing
   let generation = 0;
@@ -80,6 +85,7 @@ export function createOfflineQueue({
           q.steps.shift();
         });
         if (ride) onStepDone(ride);
+        notifySteps();
         continue;
       }
       const batch = read().points.slice(0, BATCH);
@@ -103,6 +109,7 @@ export function createOfflineQueue({
       write(q => {
         q.steps.push(step);
       });
+      notifySteps();
       return step;
     },
     enqueuePoint(point: LocationPoint): void {
@@ -115,6 +122,13 @@ export function createOfflineQueue({
     clear: () => {
       generation++;
       store.remove(STORAGE_KEY);
+      notifySteps();
+    },
+    subscribeSteps(listener: () => void): () => void {
+      stepListeners.add(listener);
+      return () => {
+        stepListeners.delete(listener);
+      };
     },
     pending: () => {
       const { steps, points } = read();

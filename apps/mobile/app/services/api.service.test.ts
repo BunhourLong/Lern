@@ -128,6 +128,40 @@ it('registers this phone for pushes, with a key, and accepts the empty 204', asy
   ).toBe(true);
 });
 
+it('posts the driver application with a key and validates the returned profile', async () => {
+  const input = { vehicleType: 'moto', plate: 'PP 1' } as const;
+  const profile = {
+    ...input,
+    verification: 'pending',
+    availability: 'offline',
+  };
+  const s = server(
+    { status: 200, body: tokens(1) },
+    { status: 201, body: profile },
+    { status: 201, body: { ...profile, verification: 'unknown' } },
+  );
+  const { api: client } = api(s);
+  await client.verifyOtp('+85512345678', '000000');
+  await expect(client.applyDriver(input)).resolves.toEqual(profile);
+  expect(s.calls[1]).toMatchObject({
+    method: 'POST',
+    path: '/drivers/me',
+    body: input,
+    headers: { authorization: 'Bearer access-1' },
+  });
+  expect(
+    idempotencyKeySchema.safeParse(s.calls[1].headers[IDEMPOTENCY_KEY_HEADER])
+      .success,
+  ).toBe(true);
+
+  const key = '11111111-1111-4111-8111-111111111111';
+  await expect(client.applyDriver(input, key)).rejects.toMatchObject({
+    status: 201,
+    body: { error: 'BAD_RESPONSE' },
+  });
+  expect(s.calls[2].headers[IDEMPOTENCY_KEY_HEADER]).toBe(key);
+});
+
 it('sends an Idempotency-Key on a mutating call: the caller’s on a retry, a fresh one otherwise', async () => {
   const s = server(
     { status: 200, body: tokens(1) },

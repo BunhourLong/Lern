@@ -4,10 +4,12 @@ import { createNativeBottomTabNavigator } from '@react-navigation/bottom-tabs/un
 import { isLiquidGlassAvailable } from 'expo-glass-effect';
 import type { ImageSourcePropType } from 'react-native';
 import type { Edge } from 'react-native-safe-area-context';
-import RouteMessageScreen from '../screens/RouteMessage/RouteMessageScreen';
 import { useInteraction } from '../hooks/use-interaction';
 import { useT } from '../i18n';
+import DriverStatusContainer from '../screens/DriverStatus/DriverStatusContainer';
+import type { DriverStatusActions } from '../screens/DriverStatus/DriverStatusContainer';
 import RouteMessageContainer from '../screens/RouteMessage/RouteMessageContainer';
+import RouteMessageScreen from '../screens/RouteMessage/RouteMessageScreen';
 import { TabBar } from './TabBar';
 
 type Role = 'rider' | 'driver';
@@ -36,10 +38,14 @@ const tabs = isLiquidGlassAvailable()
 
 export function RoleTabs({
   role,
+  driverStatus,
+  onApply,
   onDebug,
   onEnroll,
 }: {
   role: Role;
+  driverStatus: DriverStatusActions;
+  onApply: () => void;
   onDebug?: () => void;
   onEnroll?: () => void;
 }) {
@@ -47,23 +53,39 @@ export function RoleTabs({
   const names = tabsByRole[role];
   const interact = useInteraction();
   const listeners = { tabPress: interact };
-  const renderMessage = (name: TabName) =>
-    name === 'account' ? (
-      <RouteMessageScreen
-        edges={screenEdges}
-        title={t('tab.account')}
-        body={onEnroll ? undefined : t('pin.enabled')}
-        secondaryAction={
-          onEnroll && { label: t('pin.title.enroll'), onPress: onEnroll }
-        }
-      />
-    ) : (
+  const renderTab = (name: TabName) => {
+    if (name === 'account')
+      return (
+        <RouteMessageScreen
+          edges={screenEdges}
+          title={t('tab.account')}
+          body={onEnroll ? undefined : t('pin.enabled')}
+          primaryAction={
+            role === 'rider'
+              ? { label: t('driverApply.title'), onPress: onApply }
+              : undefined
+          }
+          secondaryAction={
+            onEnroll && { label: t('pin.title.enroll'), onPress: onEnroll }
+          }
+        />
+      );
+    if (name === 'home' && role === 'driver')
+      return (
+        <DriverStatusContainer
+          {...driverStatus}
+          onDebug={onDebug}
+          edges={screenEdges}
+        />
+      );
+    return (
       <RouteMessageContainer
-        route={name === 'home' ? role : name}
+        route={name === 'home' ? 'rider' : name}
         onDebug={name === 'home' ? onDebug : undefined}
         edges={screenEdges}
       />
     );
+  };
 
   if (tabs.kind === 'native') {
     const { Navigator, Screen } = tabs;
@@ -78,7 +100,7 @@ export function RoleTabs({
               tabBarIcon: { type: 'image', source: icons[name] },
             }}
           >
-            {() => renderMessage(name)}
+            {() => renderTab(name)}
           </Screen>
         ))}
       </Navigator>
@@ -98,7 +120,7 @@ export function RoleTabs({
     >
       {names.map(name => (
         <Screen key={name} name={name} options={{ title: t(`tab.${name}`) }}>
-          {() => renderMessage(name)}
+          {() => renderTab(name)}
         </Screen>
       ))}
     </Navigator>

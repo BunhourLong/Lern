@@ -6,7 +6,10 @@ import { createStore } from 'zustand/vanilla';
 import { themes } from '@theme';
 import { InteractionContext } from '../hooks/use-interaction';
 import type { NotificationTarget } from '../boot/core';
+import { createActiveRideStore } from '../stores/active-ride.store';
 import { createAppConfigStore } from '../stores/app-config.store';
+import { createConnectionStore } from '../stores/connection.store';
+import { createDriverModeStore } from '../stores/driver-mode.store';
 import { createSecurityStore } from '../stores/security.store';
 import { createSessionStore } from '../stores/session.store';
 import { RootNavigator } from './RootNavigator';
@@ -46,6 +49,10 @@ function setup(
   const session = createSessionStore();
   const security = createSecurityStore();
   const appConfig = createAppConfigStore();
+  const driverMode = createDriverModeStore();
+  driverMode.setState({ verification: 'pending' });
+  const connection = createConnectionStore();
+  const requestLocationPermission = jest.fn(async () => 'always' as const);
   const notification = createStore<NotificationTarget | null>()(() => null);
   const requestOtp = jest
     .fn<Promise<undefined>, [string]>()
@@ -57,9 +64,30 @@ function setup(
     security.getState().update({ enabled: true }),
   );
   const core = {
-    stores: { session, security, appConfig, notification },
+    stores: {
+      session,
+      security,
+      appConfig,
+      notification,
+      driverMode,
+      connection,
+      activeRide: createActiveRideStore(),
+    },
     api: { requestOtp },
+    setOnline: jest.fn(),
+    refreshAvailability: jest.fn(),
+    accept: jest.fn(),
+    decline: jest.fn(),
+    step: jest.fn(),
+    cancel: jest.fn(),
+    queue: {
+      pending: () => ({ steps: [], points: 0 }),
+      subscribeSteps: () => () => {},
+    },
     signIn,
+    becomeDriver: jest.fn(async () => {
+      session.getState().signedIn(me('rider', 'driver'));
+    }),
     unlock: jest.fn(async () => {
       security.getState().update({ locked: false });
       return { ok: true as const };
@@ -70,7 +98,13 @@ function setup(
     pinWaitMs: () => 0,
   };
   const navigator = (
-    <RootNavigator core={core} foreground={foreground} debug={debug} />
+    <RootNavigator
+      core={core}
+      foreground={foreground}
+      debug={debug}
+      requestLocationPermission={requestLocationPermission}
+      refreshLocationPermission={jest.fn()}
+    />
   );
   return {
     core,
@@ -81,9 +115,72 @@ function setup(
     notification,
     navigator,
     requestOtp,
+    requestLocationPermission,
     signIn,
   };
 }
+
+test('wires the driver Home toggle to the injected permission and core action', async () => {
+  const { core, session, appConfig, navigator, requestLocationPermission } =
+    setup();
+  session.getState().signedIn(me('driver'));
+  appConfig.getState().setGate({ status: 'ok' });
+  core.stores.driverMode.setState({
+    availability: 'offline',
+    verification: 'verified',
+  });
+  core.stores.connection.getState().setConnected(true);
+  await render(navigator);
+  await fireEvent.press(screen.getByRole('button', { name: 'Go online' }));
+
+  expect(requestLocationPermission).toHaveBeenCalledTimes(1);
+  expect(core.setOnline).toHaveBeenCalledWith(true);
+});
+
+test('wires the driver Home offer and its actions to core', async () => {
+  const { core, session, appConfig, navigator } = setup();
+  session.getState().signedIn(me('driver'));
+  appConfig.getState().setGate({ status: 'ok' });
+  core.stores.driverMode.setState({
+    availability: 'reserved',
+    verification: 'verified',
+  });
+  core.stores.connection.getState().setConnected(true);
+  core.stores.activeRide.getState().applyOffer({
+    id: 'offer-1',
+    rideId: 'ride-1',
+    status: 'pending',
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    distanceM: 850,
+    vehicleType: 'remork',
+    pickup: { lat: 11.55, lng: 104.92 },
+    dropoff: { lat: 11.54, lng: 104.92 },
+    fare: { amountMinor: 12_000, currency: 'KHR' },
+  });
+  await render(navigator);
+  await fireEvent.press(screen.getByRole('button', { name: 'Accept' }));
+  await fireEvent.press(screen.getByRole('button', { name: 'Decline' }));
+
+  expect(core.accept).toHaveBeenCalledWith('offer-1');
+  expect(core.decline).toHaveBeenCalledWith('offer-1');
+});
+
+test('keeps Rider Home free of inline reconnecting banners', async () => {
+  const { core, session, appConfig, navigator } = setup();
+  session.getState().signedIn(me('rider'));
+  appConfig.getState().setGate({ status: 'ok' });
+  const { connection } = core.stores;
+
+  await render(navigator);
+  expect(screen.getByRole('header', { name: 'Rider home' })).toBeOnTheScreen();
+  expect(screen.queryByText('Reconnecting…')).toBeNull();
+
+  await act(() => connection.getState().setConnected(true));
+  expect(screen.queryByRole('alert')).toBeNull();
+
+  await act(() => connection.getState().setConnected(false));
+  expect(screen.queryByText('Reconnecting…')).toBeNull();
+});
 
 test('keeps a locked rider’s notification queued after navigation is ready', async () => {
   const { session, security, appConfig, notification, navigator } = setup();
@@ -126,6 +223,60 @@ test('enrolls from Account after both PIN entries match', async () => {
   await fireEvent.press(screen.getByRole('button', { name: 'Save PIN' }));
   expect(enableLock).toHaveBeenCalledWith('123456');
   expect(screen.getByText('App lock is on.')).toBeOnTheScreen();
+});
+
+test('opens the driver application from rider Account and resets to Driver Home on success', async () => {
+  const { core, session, appConfig, navigator } = setup();
+  session.getState().signedIn(me('rider'));
+  appConfig.getState().setGate({ status: 'ok' });
+  await render(navigator);
+
+  await fireEvent.press(screen.getByRole('tab', { name: 'Account' }));
+  expect(
+    screen.getByRole('button', { name: 'Set up app lock' }),
+  ).toBeOnTheScreen();
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Drive with Lern' }),
+  );
+  expect(
+    screen.container
+      .queryAll(node => node.type === 'RNSScreenStackHeaderConfig')
+      .map(header => header.props),
+  ).toContainEqual(
+    expect.objectContaining({ title: 'Drive with Lern', backTitle: 'Back' }),
+  );
+  await fireEvent.press(screen.getByRole('radio', { name: 'Motorbike' }));
+  await fireEvent.changeText(screen.getByLabelText('License plate'), 'PP 1');
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Send application' }),
+  );
+
+  expect(core.becomeDriver).toHaveBeenCalledWith({
+    vehicleType: 'moto',
+    plate: 'PP 1',
+  });
+  expect(
+    screen.getByRole('header', { name: 'Application under review' }),
+  ).toBeOnTheScreen();
+  expect(
+    screen.getByRole('tab', { name: 'Home', selected: true }),
+  ).toBeOnTheScreen();
+  expect(
+    screen.queryByLabelText('License plate', { includeHiddenElements: true }),
+  ).toBeNull();
+});
+
+test('driver Account keeps app-lock enrollment and hides the application action', async () => {
+  const { session, appConfig, navigator } = setup();
+  session.getState().signedIn(me('rider', 'driver'));
+  appConfig.getState().setGate({ status: 'ok' });
+  await render(navigator);
+
+  await fireEvent.press(screen.getByRole('tab', { name: 'Account' }));
+  expect(
+    screen.getByRole('button', { name: 'Set up app lock' }),
+  ).toBeOnTheScreen();
+  expect(screen.queryByRole('button', { name: 'Drive with Lern' })).toBeNull();
 });
 
 test('requires a fresh PIN for signed-in Debug and cancels without opening it', async () => {
@@ -190,16 +341,20 @@ test('switches between login, rider and driver as the session changes', async ()
 
   await act(() => session.getState().signedIn(me('rider', 'driver')));
   expect(screen.queryByRole('header', { name: 'Rider home' })).toBeNull();
-  expect(screen.getByRole('header', { name: 'Driver home' })).toBeOnTheScreen();
+  expect(
+    screen.getByRole('header', { name: 'Application under review' }),
+  ).toBeOnTheScreen();
 
   await act(() => session.getState().signedOut());
-  expect(screen.queryByRole('header', { name: 'Driver home' })).toBeNull();
+  expect(
+    screen.queryByRole('header', { name: 'Application under review' }),
+  ).toBeNull();
   expect(screen.getByLabelText('Phone number')).toBeOnTheScreen();
 });
 
 test.each([
   ['rider', 'Rider home'],
-  ['driver', 'Driver home'],
+  ['driver', 'Application under review'],
 ] as const)(
   'replaces both sign-in screens with %s home after verification',
   async (role, title) => {
@@ -257,7 +412,9 @@ test('selects Driver Home when a rider on Activity becomes a driver', async () =
 
   await act(() => session.getState().signedIn(me('driver')));
 
-  expect(screen.getByRole('header', { name: 'Driver home' })).toBeOnTheScreen();
+  expect(
+    screen.getByRole('header', { name: 'Application under review' }),
+  ).toBeOnTheScreen();
   expect(
     screen.getByRole('tab', { name: 'Home', selected: true }),
   ).toBeOnTheScreen();
@@ -549,7 +706,9 @@ test('opens Debug and drops it from the stack when the session changes', async (
 
   await act(() => session.getState().signedIn(me('driver')));
   expect(screen.queryByRole('header', { name: 'Debug tools' })).toBeNull();
-  expect(screen.getByRole('header', { name: 'Driver home' })).toBeOnTheScreen();
+  expect(
+    screen.getByRole('header', { name: 'Application under review' }),
+  ).toBeOnTheScreen();
 });
 
 test('updates the screen background from the light to the dark token', async () => {
@@ -595,7 +754,7 @@ test('closing the protected stack also dismisses an open modal across unlock', a
   expect(screen.queryByText('Ride detail modal')).toBeNull();
   await fireEvent.changeText(screen.getByLabelText('6-digit PIN'), '123456');
   await fireEvent.press(screen.getByRole('button', { name: 'Unlock' }));
-  expect(screen.getByText('Driver home')).toBeOnTheScreen();
+  expect(screen.getByText('Application under review')).toBeOnTheScreen();
   expect(screen.queryByText('Ride detail modal')).toBeNull();
 });
 
@@ -710,4 +869,51 @@ test('denies the button and text callbacks when the interaction expires', async 
   interact.mockReturnValue(false);
   await fireEvent.press(screen.getByRole('button', { name: 'Save PIN' }));
   expect(core.enableLock).not.toHaveBeenCalled();
+});
+
+test('wires driver ride step and cancellation to core', async () => {
+  const { core, session, appConfig, navigator } = setup();
+  session.getState().signedIn(me('driver'));
+  appConfig.getState().setGate({ status: 'ok' });
+  core.stores.driverMode.setState({
+    availability: 'on_trip',
+    verification: 'verified',
+  });
+  core.stores.connection.getState().setConnected(true);
+  const activeRide = core.stores.activeRide;
+  const ride = {
+    id: 'ride-1',
+    status: 'driver_assigned',
+    version: 1,
+    vehicleType: 'remork',
+    pickup: { lat: 11.55, lng: 104.92 },
+    dropoff: { lat: 11.54, lng: 104.92 },
+    fare: { amountMinor: 12_000, currency: 'KHR' },
+  } as const;
+  activeRide.getState().applyRide(ride, 'driver');
+  core.step.mockImplementationOnce(async () => {
+    activeRide
+      .getState()
+      .applyRide({ ...ride, status: 'driver_arrived', version: 2 }, 'driver');
+  });
+  core.cancel.mockImplementationOnce(async () => {
+    activeRide
+      .getState()
+      .applyRide({ ...ride, status: 'cancelled', version: 3 }, 'driver');
+  });
+  await render(navigator);
+
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Arrived at pickup' }),
+  );
+  expect(core.step).toHaveBeenCalledWith(ride.id, 'arrive');
+  await fireEvent.press(screen.getByRole('button', { name: 'Cancel ride' }));
+  await fireEvent.press(screen.getByRole('radio', { name: 'Other' }));
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Confirm cancellation' }),
+  );
+  expect(core.cancel).toHaveBeenCalledWith(ride.id, 'other');
+  expect(
+    screen.getByRole('header', { name: 'Ride cancelled' }),
+  ).toBeOnTheScreen();
 });

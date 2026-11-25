@@ -4,7 +4,10 @@ import { Text } from 'react-native';
 import type { TabSelectedEvent } from 'react-native-screens';
 import { createStore } from 'zustand/vanilla';
 import type { NotificationTarget } from '../boot/core';
+import { createActiveRideStore } from '../stores/active-ride.store';
 import { createAppConfigStore } from '../stores/app-config.store';
+import { createConnectionStore } from '../stores/connection.store';
+import { createDriverModeStore } from '../stores/driver-mode.store';
 import { createSecurityStore } from '../stores/security.store';
 import { createSessionStore } from '../stores/session.store';
 import { RootNavigator } from './RootNavigator';
@@ -37,16 +40,32 @@ function renderRiderTabs(debug: ReactNode = null) {
           session,
           appConfig,
           notification,
+          driverMode: createDriverModeStore(),
+          connection: createConnectionStore(),
+          activeRide: createActiveRideStore(),
           security: createSecurityStore(),
         },
         api: { requestOtp: jest.fn() },
         signIn: jest.fn(),
+        setOnline: jest.fn(),
+        refreshAvailability: jest.fn(),
+        accept: jest.fn(),
+        decline: jest.fn(),
+        step: jest.fn(),
+        cancel: jest.fn(),
+        queue: {
+          pending: () => ({ steps: [], points: 0 }),
+          subscribeSteps: () => () => {},
+        },
+        becomeDriver: jest.fn(),
         enableLock: jest.fn(),
         unlock: jest.fn(),
         interruptPinCheck: jest.fn(),
         signOut: jest.fn(),
         pinWaitMs: () => 0,
       }}
+      requestLocationPermission={jest.fn()}
+      refreshLocationPermission={jest.fn()}
       debug={debug}
     />,
   );
