@@ -64,10 +64,11 @@ it('connects with an access token and receives events sent to its user room', as
 
 it('disconnects a socket when its access token expires', async () => {
   const { sub } = app.get(JwtService).decode<{ sub: string }>(await login());
-  const socket = connect(app.get(JwtService).sign({ sub, roles: ['rider'] }, { expiresIn: 1 }));
+  const socket = connect(app.get(JwtService).sign({ sub, roles: ['rider'] }, { expiresIn: 2 }));
+  // Listen before the handshake: the server may disconnect before the handshake's continuation runs
+  const disconnected = new Promise((resolve) => socket.once('disconnect', resolve));
   expect(await handshake(socket)).toBe('connect');
-  const reason = await new Promise((resolve) => socket.once('disconnect', resolve));
-  expect(reason).toBe('io server disconnect');
+  expect(await disconnected).toBe('io server disconnect');
 });
 
 it('knows the caller in message handlers (auth happened once, at the handshake)', async () => {

@@ -219,6 +219,7 @@ export function createCore({
       appConfig
         .getState()
         .setGate(appGate(config, pushNative.platform, appVersion));
+      appConfig.getState().setKhrPerUsd(config.khrPerUsd);
     } catch {
       appConfig
         .getState()

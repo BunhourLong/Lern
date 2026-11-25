@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { PostgreSqlContainer } from '@testcontainers/postgresql';
 import { RedisContainer } from '@testcontainers/redis';
 import { createDataSource } from '../src/shared/database/database';
+import { TEMPLATE_DB } from './support/isolated-database';
 
 // Same images as the dev stack: compose.yml is the single source of truth
 const compose = readFileSync(join(__dirname, '../../../infra/docker/compose.yml'), 'utf8');
@@ -29,6 +30,18 @@ export default async function globalSetup(): Promise<void> {
     await ds.runMigrations();
   } finally {
     await ds.destroy();
+  }
+  // Admin session on `postgres`: a session on the source DB would block the clone
+  const maintenance = new URL(process.env.DATABASE_URL);
+  const sharedName = maintenance.pathname.slice(1);
+  maintenance.pathname = '/postgres';
+  const admin = await createDataSource(maintenance.toString()).initialize();
+  try {
+    await admin.query(
+      `CREATE DATABASE ${TEMPLATE_DB} TEMPLATE ${sharedName} IS_TEMPLATE true ALLOW_CONNECTIONS false`,
+    );
+  } finally {
+    await admin.destroy();
   }
   // globalTeardown runs in this same process
   Object.assign(globalThis, { __containers: [pg, redis] });

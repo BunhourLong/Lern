@@ -193,19 +193,14 @@ export function apply(m: Model, c: Command): Outcome {
       return 'ok';
     }
     case 'cancel': {
+      if ('driver' in c.by) return driverMove(m, c.ride, 'cancel', c.by.driver).map((s) => s()).pop()!;
       const r = rideOf(m, c.ride);
-      if ('driver' in c.by && r.driver !== c.by.driver) return 404;
-      if (!moveRide(r, 'cancel', 'rider' in c.by ? 'rider' : 'driver')) return 409;
+      if (!moveRide(r, 'cancel', 'rider')) return 409;
       if (r.driver !== null) moveDriver(m, r.driver, 'finish');
       return 200;
     }
-    case 'step': {
-      const r = rideOf(m, c.ride);
-      if (r.driver !== c.by) return 404;
-      if (!moveRide(r, c.action, 'driver')) return 409;
-      if (r.status === 'completed') moveDriver(m, c.by, 'finish');
-      return 200;
-    }
+    case 'step':
+      return driverMove(m, c.ride, c.action, c.by).map((s) => s()).pop()!;
     case 'online': {
       if (m.drivers[c.driver] === (c.online ? 'available' : 'offline')) return 200;
       return moveDriver(m, c.driver, c.online ? 'go_online' : 'go_offline') ? 200 : 409;
@@ -220,7 +215,11 @@ export function apply(m: Model, c: Command): Outcome {
 // unlocked, then locks one from that list, so a driver released in between is missed; the ride lock it holds
 // serialises everything else, so the read only needs driver availability. The timer's job (MatchingService.expire)
 // expires the offer and releases its driver, then syncs the ride in a second transaction, only if it expired the offer.
+// A driver's step or cancel is RidesService.move's two statements (driverMove). A rider's cancel stays one step: a
+// ride's rider never changes, so its read after a miss always answers 409.
 function steps(m: Model, c: Command): (() => Outcome)[] {
+  if (c.kind === 'step') return driverMove(m, c.ride, c.action, c.by);
+  if (c.kind === 'cancel' && 'driver' in c.by) return driverMove(m, c.ride, 'cancel', c.by.driver);
   let seen: number[] | undefined;
   const read = () => {
     seen = m.drivers.flatMap((a, i) => (a === 'available' ? [i] : []));
@@ -251,6 +250,22 @@ function steps(m: Model, c: Command): (() => Outcome)[] {
       if (expired) sync(m, c.offer.ride, seen);
       return 'ok';
     },
+  ];
+}
+
+// RidesService.move: the guarded UPDATE in its own transaction, then on a miss a separate READ COMMITTED read of the
+// ride: 409 to a participant, 404 to anyone else. An accept committing in between makes the driver a participant.
+function driverMove(m: Model, ride: string, action: RideAction, d: number): (() => Outcome)[] {
+  let moved = false;
+  return [
+    () => {
+      const r = rideOf(m, ride);
+      if (r.driver !== d || !moveRide(r, action, 'driver')) return 'ok';
+      if (r.status === 'completed' || r.status === 'cancelled') moveDriver(m, d, 'finish');
+      moved = true;
+      return 'ok';
+    },
+    () => (moved ? 200 : rideOf(m, ride).driver === d ? 409 : 404),
   ];
 }
 

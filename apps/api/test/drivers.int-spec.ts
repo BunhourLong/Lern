@@ -2,7 +2,6 @@ import { Controller, Get, HttpStatus, type INestApplication, Module } from '@nes
 import request from 'supertest';
 import type { App } from 'supertest/types';
 import { DataSource } from 'typeorm';
-import { DriversModule } from '../src/drivers/drivers.module';
 import { VerifiedDriver } from '../src/drivers/verified-driver.guard';
 import { bootApp, signIn } from './support/actors';
 import { lockTable } from './support/gate';
@@ -20,7 +19,7 @@ class ProbeController {
   }
 }
 
-@Module({ imports: [DriversModule], controllers: [ProbeController] })
+@Module({ controllers: [ProbeController] })
 class ProbeModule {}
 
 let app: INestApplication<App>;
@@ -177,7 +176,7 @@ describe('PUT /drivers/me/availability', () => {
     for (let round = 0; round < 3; round++) {
       const t = await driver();
       if (!online) await put(t, { online: true }).expect(HttpStatus.OK);
-      const gate = await lockTable(app.get(DataSource), 'driver_availability_events');
+      await using gate = await lockTable(app.get(DataSource), 'driver_availability_events');
       const racing = [put(t, { online }), put(t, { online })].map((r) => r.then((res) => res));
       await gate.arrived(2);
       await gate.release();

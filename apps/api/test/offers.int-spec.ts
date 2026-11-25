@@ -163,7 +163,7 @@ describe('POST /offers/:id/accept', () => {
       const ride = await book(await signIn(app));
       const driver = await verifiedDriver();
       const offerId = await offer(app, driver, ride.id);
-      const gate = await lockTable(db(), 'rides');
+      await using gate = await lockTable(db(), 'rides');
       const racing = Array.from({ length: N }, () => accept(driver, offerId).then((r) => r));
       await gate.arrived(N);
       await gate.release();
@@ -192,7 +192,7 @@ describe('POST /offers/:id/accept', () => {
         const offerId = await offer(app, driver, ride.id);
         await db().query(`UPDATE ride_offers SET expires_at = now() + interval '300 milliseconds' WHERE id = $1`, [offerId]);
         const { at } = await row<{ at: Date }>('SELECT expires_at AS at FROM ride_offers WHERE id = $1', [offerId]);
-        const gate = await lockTable(db(), table);
+        await using gate = await lockTable(db(), table);
         const accepting = accept(driver, offerId).then((r) => r);
         await gate.arrived(1);
         while (!(await row<{ due: boolean }>('SELECT now() >= $1::timestamptz AS due', [at])).due) {
@@ -217,12 +217,14 @@ describe('POST /offers/:id/accept', () => {
   // The rider may cancel from searching and from driver_assigned, so either order is legal; whichever commits
   // first, the ride ends cancelled and the driver free. Gate: rides, where both guarded UPDATEs wait.
   it('ends cancelled with the driver free when the rider cancels as the driver accepts', async () => {
+    // Actors are made once: each round asserts both end free, so they can book and be offered again. Per-round
+    // sign-ins made this test too slow for Jest's 5 s timeout under parallel load.
+    const rider = await signIn(app);
+    const driver = await verifiedDriver();
     for (let round = 0; round < 6; round++) {
-      const rider = await signIn(app);
       const ride = await book(rider);
-      const driver = await verifiedDriver();
       const offerId = await offer(app, driver, ride.id);
-      const gate = await lockTable(db(), 'rides');
+      await using gate = await lockTable(db(), 'rides');
       const cancel = () => http().post(`/rides/${ride.id}/cancel`).set(rider.auth).send({ reason: 'changed_mind' }).then((r) => r);
       const accepting = () => accept(driver, offerId).then((r) => r);
       // Alternate who queues first at the lock

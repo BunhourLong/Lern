@@ -10,6 +10,7 @@ import { DataSource } from 'typeorm';
 import { MatchingService } from '../src/matching/matching.service';
 import { MatchingQueue } from '../src/shared/queue/matching-queue';
 import type { Config } from '../src/shared/config/env';
+import { OutboxService } from '../src/outbox/outbox.service';
 import { type Actor, bootApp, signIn } from './support/actors';
 import { lockTable } from './support/gate';
 import { isolatedDatabase } from './support/isolated-database';
@@ -96,6 +97,7 @@ const listen = async (a: Actor) => {
       `INSERT INTO outbox_events (topic, recipients, payload) VALUES ($1, ARRAY[$2]::uuid[], '{"sentinel":true}')`,
       [RIDE_UPDATED_EVENT, a.id],
     );
+    app.get(OutboxService).kick(); // a raw insert kicks nothing: send the sentinel now, not on the 1 s poll
     await until(() => Promise.resolve(rides.some((r) => (r as { sentinel?: boolean }).sentinel)), 2000, 'sentinel');
   };
   return { offers, rides, drained };
@@ -233,7 +235,7 @@ describe('MatchingService.sync', () => {
       const spot = nextSpot();
       const d = await driver(north(spot, 100));
       const rides = [await book(await signIn(app), spot), await book(await signIn(app), spot)];
-      const gate = await lockTable(db(), 'drivers');
+      await using gate = await lockTable(db(), 'drivers');
       const racing = rides.map((r) => sync(r.id));
       await gate.arrived(2);
       await gate.release();
@@ -397,7 +399,7 @@ describe('MatchingService.expire', () => {
       const { first, next, ride, offerId } = await offered();
       const listener = await listen(first);
       await due(offerId);
-      const gate = await lockTable(db(), 'ride_offers');
+      await using gate = await lockTable(db(), 'ride_offers');
       const racing = [expire(offerId), expire(offerId)];
       await gate.arrived(2);
       await gate.release();

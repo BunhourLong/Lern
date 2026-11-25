@@ -1,6 +1,26 @@
-import { type ActiveRides, type CancelReason, type Ride, type RideAction, rideTransition } from '@lern/contracts';
-import { ConflictException, GoneException, HttpStatus, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  type ActiveRides,
+  type CancelReason,
+  type CreateRating,
+  type Rating,
+  type Receipt,
+  type Ride,
+  type RideAction,
+  type RideHistoryPage,
+  type RideHistoryQuery,
+  rideTransition,
+} from '@lern/contracts';
+import {
+  BadRequestException,
+  ConflictException,
+  GoneException,
+  HttpStatus,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { DataSource, type EntityManager, QueryFailedError } from 'typeorm';
+import { z } from 'zod';
 import { OutboxService } from '../outbox/outbox.service';
 import { PricingService } from '../pricing/pricing.service';
 import { DriversService } from '../drivers/drivers.service';
@@ -12,6 +32,33 @@ const CONFLICTS: Record<string, string> = {
   rides_one_active_per_rider: 'Rider already has an active ride',
   rides_one_active_per_driver: 'Driver already has an active ride',
 };
+
+// Same shape as the INVALID_TRANSITION 409 in move(): clients branch on `code`
+function refused(code: string, message: string): ConflictException {
+  return new ConflictException({ statusCode: HttpStatus.CONFLICT, code, message });
+}
+
+// The keyset position. at is the last row's created_at to the microsecond (a Date would keep ms only). zod already
+// rejects impossible days; Postgres has no year 0, so that one is refused here (a 500 otherwise).
+const cursorSchema = z.object({
+  at: z.iso.datetime({ precision: 6 }).refine((at) => !at.startsWith('0000'), 'cursor time out of range'),
+  id: z.uuid(),
+});
+
+function decodeCursor(token: string): z.infer<typeof cursorSchema> {
+  let json: unknown = null;
+  try {
+    json = JSON.parse(Buffer.from(token, 'base64url').toString('utf8'));
+  } catch {
+    // not JSON: the schema refuses null below
+  }
+  const cursor = cursorSchema.safeParse(json);
+  if (!cursor.success) throw new BadRequestException('Invalid cursor');
+  return cursor.data;
+}
+
+const encodeCursor = (last: { cursorAt: string; id: string }): string =>
+  Buffer.from(JSON.stringify({ at: last.cursorAt, id: last.id })).toString('base64url');
 
 // Maps a unique violation the schema uses to decide a race onto a 409; anything else is rethrown
 function conflict(err: unknown): unknown {
@@ -71,6 +118,27 @@ export class RidesService {
     return ride;
   }
 
+  // The insert decides the common case; on a miss the reads say why. Ratings are final: a repeat is a 409, not an update.
+  async rate(userId: string, rideId: string, body: CreateRating): Promise<Rating> {
+    const rated = await this.rides.insertRating(userId, rideId, body);
+    if (rated) return rated;
+    // Only a participant gets a reason; anyone else can't tell the ride exists
+    const mine = await this.rides.findForParticipant(rideId, userId);
+    if (!mine) throw new NotFoundException('Ride not found');
+    if (await this.rides.hasRating(rideId, userId)) throw refused('ALREADY_RATED', 'You already rated this ride');
+    if (mine.status !== 'completed') throw refused('RIDE_NOT_COMPLETED', 'Only a completed ride can be rated');
+    throw refused('RATING_WINDOW_CLOSED', 'Ratings close 7 days after the ride completes');
+  }
+
+  // The query decides; on a miss the reads say why, as in rate(). Only a participant gets a reason.
+  async receipt(userId: string, rideId: string): Promise<Receipt> {
+    const receipt = await this.rides.receipt(rideId, userId);
+    if (receipt) return receipt;
+    const mine = await this.rides.findForParticipant(rideId, userId);
+    if (!mine) throw new NotFoundException('Ride not found');
+    throw refused('RIDE_NOT_COMPLETED', 'Only a completed ride has a receipt');
+  }
+
   // Matching's read of a ride, locked for the rest of its transaction
   lockForMatching(m: EntityManager, rideId: string): Promise<MatchableRide | undefined> {
     return this.rides.lockForMatching(m, rideId);
@@ -102,10 +170,10 @@ export class RidesService {
       try {
         row = await this.db.transaction(async (m) => {
           const moved = await this.rides.transition(userId, rideId, actor, action, t, cancelReason, m);
-          // A ride that ends frees its driver. A driver who isn't on_trip has drifted: the move misses, the ride
-          // change still stands, and the reconciler repairs the driver.
+          // A ride that ends frees its driver (or ends their shift past the debt limit). A driver who isn't on_trip
+          // has drifted: the move misses, the ride change still stands, and the reconciler repairs the driver.
           if (moved?.driverId && (moved.status === 'completed' || moved.status === 'cancelled')) {
-            await this.drivers.move(m, moved.driverId, 'finish');
+            await this.drivers.endTrip(m, moved.driverId);
           }
           return moved;
         });
@@ -126,6 +194,18 @@ export class RidesService {
       message: `Ride can't ${action} from its current status`,
       ride: mine,
     });
+  }
+
+  // Finished rides only (active ones come from active()). The query's WHERE decides ownership; the DTO drops any
+  // owner parameter in the URL before it gets here.
+  async history(userId: string, query: RideHistoryQuery): Promise<RideHistoryPage> {
+    const after = query.cursor === undefined ? null : decodeCursor(query.cursor);
+    // One row past the page says whether there is a next page
+    const rows = await this.rides.history(userId, query.as, after, query.limit + 1);
+    const items = rows.slice(0, query.limit);
+    const last = items.at(-1);
+    // cursorAt isn't in the item schema: the serializer strips it, as it strips driverId from a ride
+    return { items, nextCursor: rows.length > query.limit && last ? encodeCursor(last) : null };
   }
 
   async get(userId: string, rideId: string): Promise<Ride> {
