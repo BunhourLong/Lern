@@ -22,5 +22,9 @@ overrides:
   'body-parser@>=2 <2.4.0': ^2.4.0
   # Snyk critical: firebase 13.1 > @firebase/firestore pins ~1.9.0; firestore's RN entry never loads grpc-js, the Node entry was smoke-tested on 1.14.6
   '@grpc/grpc-js@<1.13.6': 1.14.6
+  # SNYK-JS-WEBSOCKETDRIVER-22743215: permessage-deflate data amplification via faye-websocket 0.11.4 in firebase-admin and firebase
+  'websocket-driver@<0.8.0': 0.8.0
+  # SNYK-JS-WEBSOCKETEXTENSIONS-22743216: data amplification via websocket-driver
+  'websocket-extensions@<0.2.0': 0.2.0
 patchedDependencies:
   expo-modules-core@58.0.28: patches/expo-modules-core@58.0.28.patch
