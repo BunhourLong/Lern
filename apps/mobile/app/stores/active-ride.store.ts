@@ -6,7 +6,7 @@ import type {
   Ride,
 } from '@lern/contracts';
 import { createStore } from 'zustand/vanilla';
-import { keepNewer, keepOffer, keepRide } from '../utils/ordering';
+import { isEndedRide, keepNewer, keepOffer, keepRide } from '../utils/ordering';
 
 export type Side = 'rider' | 'driver';
 
@@ -16,6 +16,8 @@ export type ActiveRideState = {
   offer: Offer | null; // the offer this user holds as a driver
   position: DriverPosition | null; // the rider's driver on the map
   connectivity: DriverConnectivity | null; // whether that driver went silent
+  dismissedRiderIds: ReadonlySet<string>;
+  dismissRiderRide(id: string): void;
   // command responses know their side (book → rider, accept → driver); events are placed by ride id
   applyRide(ride: Ride, side?: Side): void;
   applyOffer(offer: Offer): void;
@@ -46,16 +48,26 @@ export const createActiveRideStore = () =>
     const snapshotRide = (held: Ride | null, snap: Ride | null) =>
       snap && held?.id === snap.id ? keepRide(held, snap) : snap;
 
-    const empty = {
+    const empty = () => ({
       rider: null,
       driver: null,
       offer: null,
       position: null,
       connectivity: null,
-    };
+      dismissedRiderIds: new Set<string>(),
+    });
     return {
-      ...empty,
-      reset: () => set(empty),
+      ...empty(),
+      reset: () => set(empty()),
+      dismissRiderRide: id => {
+        const { rider, dismissedRiderIds } = get();
+        if (
+          rider?.id === id &&
+          isEndedRide(rider.status) &&
+          !dismissedRiderIds.has(id)
+        )
+          set({ dismissedRiderIds: new Set(dismissedRiderIds).add(id) });
+      },
       // A command response (explicit side) is authoritative even for another ride: the held one's final event may
       // have been lost. Events keep the stricter rule (utils/ordering)
       applyRide: (ride, side) => {
@@ -66,13 +78,20 @@ export const createActiveRideStore = () =>
       },
       applyOffer: offer => set({ offer: keepOffer(get().offer, offer) }),
       applyPosition: position => {
-        if (position.rideId !== get().rider?.id) return;
+        const { rider, position: previous, connectivity } = get();
+        if (position.rideId !== rider?.id) return;
+        const next = keepNewer(
+          previous ?? undefined,
+          position,
+          p => p.recordedAt,
+        );
+        if (next === previous) return;
         set({
-          position: keepNewer(
-            get().position ?? undefined,
-            position,
-            p => p.recordedAt,
-          ),
+          position: next,
+          connectivity:
+            connectivity?.rideId === position.rideId && connectivity.stale
+              ? { ...connectivity, stale: false }
+              : connectivity,
         });
       },
       applyConnectivity: connectivity => {
@@ -87,8 +106,15 @@ export const createActiveRideStore = () =>
       },
       applySnapshot: ({ rider, driver, offer = null }) => {
         const held = get();
+        const keepEndedRider =
+          rider === null &&
+          held.rider &&
+          isEndedRide(held.rider.status) &&
+          !held.dismissedRiderIds.has(held.rider.id);
         set({
-          ...riderRide(snapshotRide(held.rider, rider)),
+          ...riderRide(
+            keepEndedRider ? held.rider : snapshotRide(held.rider, rider),
+          ),
           driver: snapshotRide(held.driver, driver),
           offer:
             offer && held.offer?.id === offer.id

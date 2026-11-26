@@ -1,7 +1,11 @@
 import type { LocationPoint } from '@lern/contracts';
 import * as Location from 'expo-location';
 import { Platform } from 'react-native';
-import { createLocationService, LOCATION_TASK } from './location.service';
+import {
+  createLocationService,
+  getCurrentLocation,
+  LOCATION_TASK,
+} from './location.service';
 
 // The native modules don't exist in Jest; the task handler is captured so the test can play the OS
 let task: (body: { data?: unknown; error?: unknown }) => Promise<void>;
@@ -15,6 +19,7 @@ jest.mock('expo-location', () => ({
   ActivityType: { AutomotiveNavigation: 2 },
   requestForegroundPermissionsAsync: jest.fn(async () => ({ granted: true })),
   requestBackgroundPermissionsAsync: jest.fn(async () => ({ granted: true })),
+  getCurrentPositionAsync: jest.fn(),
   startLocationUpdatesAsync: jest.fn(async () => undefined),
   stopLocationUpdatesAsync: jest.fn(async () => undefined),
   hasStartedLocationUpdatesAsync: jest.fn(async () => true),
@@ -28,7 +33,107 @@ const loc = (s: number, speed: number) => ({
 const deliver = async (...locations: ReturnType<typeof loc>[]) =>
   task({ data: { locations } });
 
-beforeEach(() => jest.clearAllMocks());
+beforeEach(() => {
+  jest.clearAllMocks();
+  L.requestForegroundPermissionsAsync
+    .mockReset()
+    .mockResolvedValue({ granted: true } as never);
+  L.getCurrentPositionAsync.mockReset();
+});
+
+describe('one-shot foreground location', () => {
+  afterEach(() => {
+    jest.useRealTimers();
+    expect(L.requestForegroundPermissionsAsync).toHaveBeenCalledTimes(1);
+    expect(L.requestBackgroundPermissionsAsync).not.toHaveBeenCalled();
+  });
+
+  it('returns the fix at balanced accuracy', async () => {
+    L.getCurrentPositionAsync.mockResolvedValueOnce(loc(0, 0) as never);
+    await expect(getCurrentLocation()).resolves.toEqual({
+      status: 'ok',
+      point: { lat: 11.5564, lng: 104.9282 },
+    });
+    expect(L.getCurrentPositionAsync).toHaveBeenCalledWith({
+      accuracy: Location.Accuracy.Balanced,
+    });
+  });
+
+  it('times out a stalled native fix at the requested deadline', async () => {
+    jest.useFakeTimers();
+    L.getCurrentPositionAsync.mockReturnValueOnce(new Promise(() => {}));
+    const received = jest.fn();
+    getCurrentLocation(250).then(received);
+    await jest.advanceTimersByTimeAsync(249);
+    expect(received).not.toHaveBeenCalled();
+    await jest.advanceTimersByTimeAsync(1);
+    expect(received).toHaveBeenCalledWith({ status: 'unavailable' });
+    expect(jest.getTimerCount()).toBe(0);
+  });
+
+  it.each(['resolve', 'reject'])(
+    'clears its timeout when the fix %ss first',
+    async outcome => {
+      jest.useFakeTimers();
+      let settle!: () => void;
+      const native = new Promise<Location.LocationObject>((resolve, reject) => {
+        settle = () =>
+          outcome === 'resolve'
+            ? resolve(loc(0, 0) as never)
+            : reject(new Error('No fix'));
+      });
+      L.getCurrentPositionAsync.mockReturnValueOnce(native);
+      const result = getCurrentLocation();
+      await jest.advanceTimersByTimeAsync(0);
+      expect(jest.getTimerCount()).toBe(1);
+      settle();
+      await expect(result).resolves.toMatchObject({
+        status: outcome === 'resolve' ? 'ok' : 'unavailable',
+      });
+      expect(jest.getTimerCount()).toBe(0);
+    },
+  );
+
+  it('skips the fix if foreground permission is denied', async () => {
+    L.requestForegroundPermissionsAsync.mockResolvedValueOnce({
+      granted: false,
+    } as never);
+    await expect(getCurrentLocation()).resolves.toEqual({ status: 'denied' });
+    expect(L.getCurrentPositionAsync).not.toHaveBeenCalled();
+  });
+
+  it('reports an unavailable fix when the native lookup rejects', async () => {
+    L.getCurrentPositionAsync.mockRejectedValueOnce(new Error('No fix'));
+    await expect(getCurrentLocation()).resolves.toEqual({
+      status: 'unavailable',
+    });
+  });
+
+  it('reports unavailable when the permission request rejects', async () => {
+    L.requestForegroundPermissionsAsync.mockRejectedValueOnce(
+      new Error('No permission response'),
+    );
+    await expect(getCurrentLocation()).resolves.toEqual({
+      status: 'unavailable',
+    });
+    expect(L.getCurrentPositionAsync).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [NaN, 104.92],
+    [11.55, Infinity],
+  ])(
+    'reports an unavailable fix for non-finite coordinates %s, %s',
+    async (latitude, longitude) => {
+      L.getCurrentPositionAsync.mockResolvedValueOnce({
+        coords: { latitude, longitude },
+      } as never);
+      await expect(getCurrentLocation()).resolves.toEqual({
+        status: 'unavailable',
+      });
+    },
+  );
+});
 
 it('asks for foreground then background permission and starts the moving profile with a foreground service', async () => {
   const service = createLocationService(jest.fn(async () => undefined));

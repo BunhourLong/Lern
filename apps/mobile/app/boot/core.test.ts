@@ -1,5 +1,6 @@
 import {
   type DriverProfile,
+  IDEMPOTENCY_KEY_HEADER,
   OFFER_UPDATED_EVENT,
   RIDE_UPDATED_EVENT,
 } from '@lern/contracts';
@@ -1178,6 +1179,25 @@ describe('session cache', () => {
   });
 });
 
+it('forwards a booking retry key in the POST /rides header', async () => {
+  const s = server(
+    routes({
+      'POST /rides': () => ({ status: 201, body: ride('searching', 1) }),
+    }),
+  );
+  const core = createCore(deps(s, fakeIo(), pair.refreshToken));
+  await core.boot();
+  const key = '00000000-0000-4000-8000-0000000000bb';
+  await core.book('00000000-0000-4000-8000-0000000000aa', key);
+  expect(s.fetch).toHaveBeenCalledWith(
+    'http://api.test/rides',
+    expect.objectContaining({
+      method: 'POST',
+      headers: expect.objectContaining({ [IDEMPOTENCY_KEY_HEADER]: key }),
+    }),
+  );
+});
+
 it('drops a command answer that arrives after sign-out, so the next user never sees it', async () => {
   let answer!: () => void;
   const s = server(
@@ -2272,4 +2292,37 @@ it('ignores a superseded profile read even when the latest read is offline', asy
   finish();
   await first;
   expect(core.stores.driverMode.getState().availability).toBe('on_trip');
+});
+
+it('forwards a rider cancellation retry key and still generates a default key for driver cancellation', async () => {
+  const path = `/rides/${rideId}/cancel`;
+  const s = server(
+    routes({
+      [`POST ${path}`]: () => ({ status: 200, body: ride('cancelled', 2) }),
+    }),
+  );
+  const core = createCore(deps(s, fakeIo(), pair.refreshToken));
+  await core.boot();
+  const key = '00000000-0000-4000-8000-0000000000bb';
+  await core.cancel(rideId, 'changed_mind', key);
+  await core.cancel(rideId, 'other');
+  const calls = jest
+    .mocked(s.fetch)
+    .mock.calls.filter(([url]) => String(url).endsWith(path));
+  expect(calls).toHaveLength(2);
+  expect(calls[0][1]).toMatchObject({
+    method: 'POST',
+    headers: { [IDEMPOTENCY_KEY_HEADER]: key },
+    body: JSON.stringify({ reason: 'changed_mind' }),
+  });
+  expect(calls[1][1]).toMatchObject({
+    method: 'POST',
+    headers: {
+      [IDEMPOTENCY_KEY_HEADER]: expect.stringMatching(/^[0-9a-f-]{36}$/),
+    },
+    body: JSON.stringify({ reason: 'other' }),
+  });
+  expect(calls[1][1]?.headers).not.toMatchObject({
+    [IDEMPOTENCY_KEY_HEADER]: key,
+  });
 });

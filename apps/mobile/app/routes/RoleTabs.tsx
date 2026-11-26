@@ -1,6 +1,7 @@
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { createNativeBottomTabNavigator } from '@react-navigation/bottom-tabs/unstable';
+import { useIsFocused } from '@react-navigation/native';
 import { isLiquidGlassAvailable } from 'expo-glass-effect';
 import type { ImageSourcePropType } from 'react-native';
 import type { Edge } from 'react-native-safe-area-context';
@@ -8,6 +9,9 @@ import { useInteraction } from '../hooks/use-interaction';
 import { useT } from '../i18n';
 import DriverStatusContainer from '../screens/DriverStatus/DriverStatusContainer';
 import type { DriverStatusActions } from '../screens/DriverStatus/DriverStatusContainer';
+import RiderBookingContainer, {
+  type RiderBookingActions,
+} from '../screens/RiderBooking/RiderBookingContainer';
 import RouteMessageContainer from '../screens/RouteMessage/RouteMessageContainer';
 import RouteMessageScreen from '../screens/RouteMessage/RouteMessageScreen';
 import { TabBar } from './TabBar';
@@ -39,17 +43,22 @@ const tabs = isLiquidGlassAvailable()
 export function RoleTabs({
   role,
   driverStatus,
+  riderBooking,
+  onOpenRideMap,
   onApply,
   onDebug,
   onEnroll,
 }: {
   role: Role;
   driverStatus: DriverStatusActions;
+  riderBooking: Omit<RiderBookingActions, 'onOpenMap'>;
+  onOpenRideMap?: () => void;
   onApply: () => void;
   onDebug?: () => void;
   onEnroll?: () => void;
 }) {
   const t = useT();
+  const focused = useIsFocused();
   const names = tabsByRole[role];
   const interact = useInteraction();
   const listeners = { tabPress: interact };
@@ -70,21 +79,23 @@ export function RoleTabs({
           }
         />
       );
-    if (name === 'home' && role === 'driver')
-      return (
+    if (name === 'home')
+      return role === 'driver' ? (
         <DriverStatusContainer
           {...driverStatus}
           onDebug={onDebug}
           edges={screenEdges}
         />
+      ) : (
+        <RiderBookingContainer
+          {...riderBooking}
+          onOpenMap={onOpenRideMap}
+          focused={focused}
+          onDebug={onDebug}
+          edges={screenEdges}
+        />
       );
-    return (
-      <RouteMessageContainer
-        route={name === 'home' ? 'rider' : name}
-        onDebug={name === 'home' ? onDebug : undefined}
-        edges={screenEdges}
-      />
-    );
+    return <RouteMessageContainer route={name} edges={screenEdges} />;
   };
 
   if (tabs.kind === 'native') {

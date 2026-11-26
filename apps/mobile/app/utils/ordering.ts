@@ -8,11 +8,16 @@ const ENDED = new Set<Ride['status']>([
   'no_driver_found',
 ]);
 
+export function isEndedRide(status: Ride['status']): boolean {
+  return ENDED.has(status);
+}
+
 // Invariant 8: seq = version. Another ride replaces the held one only after the held one ended, so a late event of
 // an old ride never hides the current one (one active ride per side).
 export function keepRide(held: Ride | null, incoming: Ride): Ride {
   if (!held) return incoming;
-  if (held.id !== incoming.id) return ENDED.has(held.status) ? incoming : held;
+  if (held.id !== incoming.id)
+    return isEndedRide(held.status) ? incoming : held;
   return incoming.version > held.version ? incoming : held;
 }
 
