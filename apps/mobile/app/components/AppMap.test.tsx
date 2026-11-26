@@ -364,3 +364,38 @@ test('animates only when the camera key changes on an interactive map', async ()
   await rerender(<AppMap {...props} cameraKey={2} />);
   expect(animateToRegion).toHaveBeenCalledTimes(1);
 });
+
+test.each(['light', 'dark'] as const)(
+  'fills the available iOS map space in %s mode',
+  async scheme => {
+    jest.replaceProperty(Platform, 'OS', 'ios');
+    jest.mocked(useColorScheme).mockReturnValue(scheme);
+    await render(<AppMap {...props} size="full" interactive />);
+    const map = screen.getByTestId('map-view');
+    expect(map).toHaveStyle({ flex: 1, minHeight: mapHeight.active });
+    expect(map.parent).toHaveStyle({ flex: 1, minHeight: mapHeight.active });
+    expect(map.props).toMatchObject({
+      userInterfaceStyle: scheme,
+      scrollEnabled: true,
+    });
+  },
+);
+
+test.each(['light', 'dark'] as const)(
+  'fills the available Android fallback space in %s mode',
+  async scheme => {
+    jest.replaceProperty(Platform, 'OS', 'android');
+    jest.mocked(useColorScheme).mockReturnValue(scheme);
+    await render(<AppMap {...props} size="full" interactive />);
+    expect(screen.queryByTestId('map-view')).toBeNull();
+    expect(
+      screen.getByRole('image', { name: props.accessibilityLabel }),
+    ).toHaveStyle({
+      flex: 1,
+      minHeight: mapHeight.active,
+      backgroundColor: themes[scheme].surface,
+      borderColor: themes[scheme].border,
+    });
+    expect(screen.getByText(props.unavailableLabel)).toBeOnTheScreen();
+  },
+);

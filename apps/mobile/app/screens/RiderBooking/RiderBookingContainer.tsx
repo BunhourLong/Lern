@@ -1,4 +1,10 @@
-import type { Point, Quote, VehicleType } from '@lern/contracts';
+import {
+  type Point,
+  type Quote,
+  type Ride,
+  rideSchema,
+  type VehicleType,
+} from '@lern/contracts';
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import type { Edge } from 'react-native-safe-area-context';
 import { useStore } from 'zustand';
@@ -22,6 +28,17 @@ import {
   type PresetId,
   remainingQuoteSeconds,
 } from './rider-booking';
+import {
+  canRiderCancel,
+  hasAssignedDriver,
+  isEndedRiderRide,
+  riderCancelReasons,
+  type RiderCancelReason,
+} from './rider-ride';
+
+function rideScope(ride: Ride | null) {
+  return ride ? `${ride.id}:${ride.status}` : undefined;
+}
 
 export type RiderBookingActions = {
   activeRide: ReturnType<typeof createActiveRideStore>;
@@ -29,6 +46,8 @@ export type RiderBookingActions = {
   connection: ReturnType<typeof createConnectionStore>;
   quote: Core['api']['quote'];
   book: Core['book'];
+  cancel: Core['cancel'];
+  onOpenMap?: () => void;
   getCurrentLocation: () => Promise<CurrentLocationResult>;
 };
 
@@ -40,22 +59,45 @@ export default function RiderBookingContainer({
   connection,
   quote,
   book,
+  cancel,
   getCurrentLocation,
+  onOpenMap,
+  focused,
   onDebug,
   edges,
   now = Date.now,
 }: RiderBookingActions & {
   onDebug?: () => void;
+  focused?: boolean;
   edges?: Edge[];
   now?: () => number;
 }) {
   const riderRide = useStore(activeRide, state => state.rider);
   const khrPerUsd = useStore(appConfig, state => state.khrPerUsd);
   const connected = useStore(connection, state => state.connected);
-  const activeStatus =
-    riderRide && isActiveRiderRide(riderRide.status)
-      ? riderRide.status
-      : undefined;
+  const driverPositionRaw = useStore(activeRide, state => state.position);
+  const driverConnectivity = useStore(activeRide, state => state.connectivity);
+  const dismissedRideIds = useStore(
+    activeRide,
+    state => state.dismissedRiderIds,
+  );
+  const visibleRide =
+    riderRide && !dismissedRideIds.has(riderRide.id) ? riderRide : null;
+  const currentRideScope = rideScope(visibleRide);
+  const cancelInFlight = useRef(false);
+  const [cancellingScope, setCancellingScope] = useState<string>();
+  const [cancelPanel, setCancelPanel] = useState<{
+    scope: string;
+    reason?: RiderCancelReason;
+    key?: string;
+    error?: StringKey;
+  }>();
+
+  useEffect(() => {
+    setCancelPanel(panel =>
+      panel?.scope === currentRideScope ? panel : undefined,
+    );
+  }, [currentRideScope]);
 
   const [pickup, setPickup] = useState<Point>(PHNOM_PENH_PRESETS[0].point);
   const [pickupSource, setPickupSource] = useState<PickupSource>('preset');
@@ -97,7 +139,7 @@ export default function RiderBookingContainer({
     setLocating(false);
   }, []);
 
-  const activeRideId = activeStatus ? riderRide?.id : undefined;
+  const activeRideId = visibleRide?.id;
   useEffect(() => {
     if (!activeRideId) return;
     stopLocating();
@@ -133,8 +175,12 @@ export default function RiderBookingContainer({
   const busy = pending === 'book';
 
   function canEdit() {
-    const ride = activeRide.getState().rider;
-    return mounted.current && !(ride && isActiveRiderRide(ride.status));
+    const { rider: ride, dismissedRiderIds } = activeRide.getState();
+    return (
+      mounted.current &&
+      (!ride ||
+        (!isActiveRiderRide(ride.status) && dismissedRiderIds.has(ride.id)))
+    );
   }
 
   function canChangeSelection() {
@@ -301,14 +347,153 @@ export default function RiderBookingContainer({
     }
   }
 
-  const screenProps = { khrPerUsd, onDebug, edges };
-  if (riderRide && activeStatus)
+  async function confirmCancel(
+    id: string,
+    scope: string,
+    reason?: RiderCancelReason,
+    key?: string,
+  ) {
+    const latest = activeRide.getState().rider;
+    if (
+      cancelInFlight.current ||
+      !mounted.current ||
+      !connection.getState().connected ||
+      !reason ||
+      !key ||
+      latest?.id !== id ||
+      rideScope(latest) !== scope ||
+      !canRiderCancel(latest.status)
+    )
+      return;
+
+    cancelInFlight.current = true;
+    setCancellingScope(scope);
+    setCancelPanel({ scope, reason, key });
+    try {
+      await cancel(id, reason, key);
+      if (mounted.current) setCancelPanel(undefined);
+    } catch (cause) {
+      const state = activeRide.getState();
+      const currentRide = state.rider;
+      if (currentRide?.id !== id) return;
+      const status = cause instanceof ApiError ? cause.status : undefined;
+      const body = cause instanceof ApiError ? cause.body : undefined;
+      if (
+        status === 409 &&
+        body &&
+        typeof body === 'object' &&
+        'ride' in body
+      ) {
+        const parsed = rideSchema.safeParse(body.ride);
+        if (parsed.success && parsed.data.id === id) {
+          state.applyRide(parsed.data, 'rider');
+          if (mounted.current) setCancelPanel(undefined);
+          return;
+        }
+      }
+      const latestScope = rideScope(currentRide);
+      if (
+        mounted.current &&
+        latestScope &&
+        canRiderCancel(currentRide.status) &&
+        riderCancelReasons(currentRide.status).includes(reason)
+      ) {
+        const error =
+          status === 404
+            ? 'riderRide.error.unavailable'
+            : status === 0
+            ? 'riderRide.error.connection'
+            : 'riderRide.error.cancelFailed';
+        setCancelPanel({ scope: latestScope, reason, key, error });
+      }
+    } finally {
+      cancelInFlight.current = false;
+      if (mounted.current) setCancellingScope(undefined);
+    }
+  }
+
+  const screenProps = { khrPerUsd, onDebug, edges, focused };
+  if (visibleRide && currentRideScope) {
+    const { id, status } = visibleRide;
+    if (isEndedRiderRide(status)) {
+      return (
+        <RiderBookingScreen
+          {...screenProps}
+          activeRide={{
+            ...visibleRide,
+            variant: 'ended',
+            status,
+            onDismiss: () => {
+              if (mounted.current) activeRide.getState().dismissRiderRide(id);
+            },
+          }}
+        />
+      );
+    }
+    const panel =
+      cancelPanel?.scope === currentRideScope ? cancelPanel : undefined;
+    const showDriver = hasAssignedDriver(status);
     return (
       <RiderBookingScreen
         {...screenProps}
-        activeRide={{ ...riderRide, status: activeStatus }}
+        activeRide={{
+          ...visibleRide,
+          variant: 'active',
+          status,
+          onOpenMap,
+          driverPosition:
+            showDriver && driverPositionRaw?.rideId === id
+              ? driverPositionRaw
+              : null,
+          driverStale:
+            showDriver &&
+            driverConnectivity?.rideId === id &&
+            driverConnectivity.stale,
+          cancel: canRiderCancel(status)
+            ? {
+                open: Boolean(panel),
+                disabled: !connected || cancellingScope !== undefined,
+                loading: cancellingScope === currentRideScope,
+                selected: panel?.reason,
+                error: panel?.error,
+                onOpen: () => {
+                  if (
+                    !cancelInFlight.current &&
+                    rideScope(activeRide.getState().rider) === currentRideScope
+                  )
+                    setCancelPanel({ scope: currentRideScope });
+                },
+                onKeep: () => {
+                  if (!cancelInFlight.current) setCancelPanel(undefined);
+                },
+                onSelect: reason => {
+                  if (cancelInFlight.current) return;
+                  setCancelPanel(prev =>
+                    prev?.scope === currentRideScope
+                      ? {
+                          scope: currentRideScope,
+                          reason,
+                          key:
+                            prev.reason === reason && prev.key
+                              ? prev.key
+                              : uuid(),
+                        }
+                      : prev,
+                  );
+                },
+                onConfirm: () =>
+                  confirmCancel(
+                    id,
+                    currentRideScope,
+                    panel?.reason,
+                    panel?.key,
+                  ),
+              }
+            : undefined,
+        }}
       />
     );
+  }
 
   return (
     <RiderBookingScreen

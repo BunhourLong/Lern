@@ -1,7 +1,15 @@
 import type { Me } from '@lern/contracts';
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
 import { createContext, useContext } from 'react';
-import { Linking, Modal, StyleSheet, Text, useColorScheme } from 'react-native';
+import {
+  AccessibilityInfo,
+  Linking,
+  Modal,
+  Platform,
+  StyleSheet,
+  Text,
+  useColorScheme,
+} from 'react-native';
 import { createStore } from 'zustand/vanilla';
 import { themes } from '@theme';
 import { InteractionContext } from '../hooks/use-interaction';
@@ -969,5 +977,150 @@ test('wires driver ride step and cancellation to core', async () => {
   expect(core.cancel).toHaveBeenCalledWith(ride.id, 'other');
   expect(
     screen.getByRole('header', { name: 'Ride cancelled' }),
+  ).toBeOnTheScreen();
+});
+
+const riderTrip = {
+  id: 'ride-rider',
+  status: 'driver_assigned',
+  version: 1,
+  vehicleType: 'remork',
+  pickup: { lat: 11.55, lng: 104.92 },
+  dropoff: { lat: 11.54, lng: 104.92 },
+  fare: { amountMinor: 12_000, currency: 'KHR' },
+} as const;
+
+function riderWithActiveTrip() {
+  const result = setup();
+  result.session.getState().signedIn(me('rider'));
+  result.appConfig.getState().setGate({ status: 'ok' });
+  result.core.stores.connection.getState().setConnected(true);
+  result.core.stores.activeRide.getState().applyRide(riderTrip, 'rider');
+  return result;
+}
+
+test('wires rider cancellation to core with a reason and retry key', async () => {
+  const { core, navigator } = riderWithActiveTrip();
+  core.cancel.mockImplementationOnce(async () => {
+    core.stores.activeRide
+      .getState()
+      .applyRide({ ...riderTrip, status: 'cancelled', version: 2 }, 'rider');
+  });
+  await render(navigator);
+  await fireEvent.press(screen.getByRole('button', { name: 'Cancel ride' }));
+  await fireEvent.press(
+    screen.getByRole('radio', { name: 'Driver not moving' }),
+  );
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Confirm cancellation' }),
+  );
+  expect(core.cancel).toHaveBeenCalledWith(
+    riderTrip.id,
+    'driver_not_moving',
+    expect.any(String),
+  );
+  expect(
+    screen.getByRole('header', { name: 'Ride cancelled' }),
+  ).toBeOnTheScreen();
+});
+
+test('opens the protected live ride map with current pins and a back header', async () => {
+  jest.replaceProperty(Platform, 'OS', 'ios');
+  const announce = jest
+    .spyOn(AccessibilityInfo, 'announceForAccessibility')
+    .mockClear();
+  const { core, navigator } = riderWithActiveTrip();
+  core.stores.activeRide
+    .getState()
+    .applyPosition({
+      lat: 11.57,
+      lng: 104.93,
+      rideId: riderTrip.id,
+      recordedAt: '2026-11-26T00:00:00Z',
+    });
+  await render(navigator);
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Open live ride map' }),
+  );
+  const [header] = screen.container.queryAll(
+    node =>
+      node.type === 'RNSScreenStackHeaderConfig' &&
+      node.props.title === 'Live ride map',
+  );
+  expect(header.props.backTitle).toBe('Back');
+  const map = screen.getByLabelText('Live ride map');
+  expect(map).toHaveProp('scrollEnabled', true);
+  expect(
+    screen.getAllByTestId('map-marker').map(pin => pin.props.title),
+  ).toEqual(['Pickup', 'Dropoff', 'Driver']);
+  await act(() =>
+    core.stores.activeRide
+      .getState()
+      .applyRide(
+        { ...riderTrip, status: 'driver_arrived', version: 2 },
+        'rider',
+      ),
+  );
+  expect(announce.mock.calls).toEqual([['Driver arrived']]);
+  await act(() =>
+    core.stores.activeRide
+      .getState()
+      .applyRide({ ...riderTrip, status: 'completed', version: 3 }, 'rider'),
+  );
+  await fireEvent.press(screen.getByRole('button', { name: 'Back to ride' }));
+  expect(screen.getByRole('header', { name: 'Rider home' })).toBeOnTheScreen();
+  expect(screen.queryByLabelText('Live ride map')).toBeNull();
+  expect(
+    screen.getByRole('button', { name: 'Book another ride' }),
+  ).toBeOnTheScreen();
+  expect(announce.mock.calls).toEqual([['Driver arrived'], ['Ride completed']]);
+});
+
+test('announces a stale driver location once while the ride map is open', async () => {
+  jest.replaceProperty(Platform, 'OS', 'ios');
+  const announce = jest
+    .spyOn(AccessibilityInfo, 'announceForAccessibility')
+    .mockClear();
+  const { core, navigator } = riderWithActiveTrip();
+  await render(navigator);
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Open live ride map' }),
+  );
+  await act(() =>
+    core.stores.activeRide.getState().applyConnectivity({
+      rideId: riderTrip.id,
+      stale: true,
+      lastSeenAt: '2026-11-26T00:00:00Z',
+    }),
+  );
+  const message =
+    'Driver location hasn’t updated recently. Trying to reconnect.';
+  expect(screen.getByRole('alert', { name: message })).toBeOnTheScreen();
+  expect(announce.mock.calls).toEqual([[message]]);
+});
+
+test('keeps an ended rider ride dismissed after locking and unlocking', async () => {
+  const { core, security, navigator } = riderWithActiveTrip();
+  core.stores.activeRide
+    .getState()
+    .applyRide({ ...riderTrip, status: 'completed', version: 2 }, 'rider');
+  await render(navigator);
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Book another ride' }),
+  );
+  expect(
+    screen.getByRole('button', { name: 'Get fare quote' }),
+  ).toBeOnTheScreen();
+
+  await act(() => security.getState().update({ enabled: true, locked: true }));
+  await fireEvent.changeText(screen.getByLabelText('6-digit PIN'), '123456');
+  await fireEvent.press(screen.getByRole('button', { name: 'Unlock' }));
+
+  expect(core.unlock).toHaveBeenCalledWith('123456');
+  expect(
+    screen.queryByRole('button', { name: 'Book another ride' }),
+  ).toBeNull();
+  expect(
+    screen.getByRole('button', { name: 'Get fare quote' }),
   ).toBeOnTheScreen();
 });

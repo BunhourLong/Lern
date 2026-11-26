@@ -3,7 +3,13 @@ import type { NotificationTarget } from '../boot/core';
 import type { RootRoute } from './root-route';
 
 export type RootStackParams = Record<
-  RootRoute | 'Debug' | 'AppLock' | 'EnrollPin' | 'ConfirmPin' | 'DriverApply',
+  | RootRoute
+  | 'Debug'
+  | 'AppLock'
+  | 'EnrollPin'
+  | 'ConfirmPin'
+  | 'DriverApply'
+  | 'RiderRideMap',
   undefined
 > & {
   Otp: { phone: string; sentAt: number };

@@ -40,7 +40,7 @@ type Props = {
   center: Point;
   pins?: readonly MapPin[];
   delta?: number;
-  size?: keyof typeof mapHeight;
+  size?: keyof typeof mapHeight | 'full';
   interactive?: boolean;
   onPressPoint?: (point: Point) => void;
   cameraKey?: number;
@@ -89,7 +89,7 @@ export function AppMap({
         style={[
           styles.frame,
           styles.fallback,
-          size === 'active' ? styles.activeFallback : styles.miniFallback,
+          styles[`${size}Fallback`],
           style,
         ]}
         accessible
@@ -113,17 +113,14 @@ export function AppMap({
 
   return (
     <View
-      style={[styles.frame, style]}
+      style={[styles.frame, size === 'full' && styles.fullFrame, style]}
       accessible={!interactive}
       accessibilityRole={interactive ? undefined : 'image'}
       accessibilityLabel={interactive ? undefined : accessibilityLabel}
     >
       <MapView
         ref={mapRef}
-        style={[
-          styles.map,
-          size === 'active' ? styles.activeMap : styles.miniMap,
-        ]}
+        style={[styles.map, styles[`${size}Map`]]}
         provider={android ? PROVIDER_GOOGLE : undefined}
         initialRegion={region}
         region={interactive ? undefined : region}
@@ -242,7 +239,10 @@ const useStyles = makeStyles(t => ({
     borderColor: t.colors.border,
     overflow: 'hidden',
   },
+  fullFrame: { flex: 1, minHeight: mapHeight.active },
   map: { width: '100%' },
+  fullMap: { flex: 1, minHeight: mapHeight.active },
+  fullFallback: { flex: 1, minHeight: mapHeight.active },
   miniMap: { height: mapHeight.mini },
   activeMap: { height: mapHeight.active },
   miniFallback: { minHeight: mapHeight.mini },

@@ -6,15 +6,17 @@ import { Text } from './Text';
 export function Banner({
   message,
   tone = 'info',
+  announce = true,
 }: {
   message: string;
   tone?: 'info' | 'warning' | 'danger';
+  announce?: boolean;
 }) {
   const styles = useStyles();
   useEffect(() => {
-    if (Platform.OS === 'ios')
+    if (announce && Platform.OS === 'ios')
       AccessibilityInfo.announceForAccessibility(message);
-  }, [message]);
+  }, [announce, message]);
 
   return (
     <View

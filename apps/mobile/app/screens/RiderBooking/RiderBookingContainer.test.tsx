@@ -1,6 +1,6 @@
 import type { Point, Quote, Ride } from '@lern/contracts';
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
-import { Platform } from 'react-native';
+import { AccessibilityInfo, Platform } from 'react-native';
 import MapView from 'react-native-maps';
 import { ApiError } from '../../services/api.service';
 import type { CurrentLocationResult } from '../../services/location.service';
@@ -44,7 +44,7 @@ const exampleQuote: Quote = {
   distanceM: 1850,
 };
 const ride: Ride = {
-  id: 'ride-1',
+  id: '00000000-0000-4000-8000-000000000001',
   version: 1,
   status: 'searching',
   pickup: independence.point,
@@ -78,6 +78,12 @@ async function setup(now = () => start) {
   const book = jest.fn<Promise<void>, [string, string?]>(async () => {
     activeRide.getState().applyRide(ride, 'rider');
   });
+  const cancel = jest.fn<Promise<void>, [string, string, string?]>(async () =>
+    activeRide
+      .getState()
+      .applyRide({ ...ride, status: 'cancelled', version: 10 }, 'rider'),
+  );
+  const onOpenMap = jest.fn();
   const view = await render(
     <RiderBookingContainer
       {...{
@@ -86,6 +92,8 @@ async function setup(now = () => start) {
         connection,
         quote,
         book,
+        cancel,
+        onOpenMap,
         getCurrentLocation,
         now,
       }}
@@ -97,6 +105,8 @@ async function setup(now = () => start) {
     connection,
     quote,
     book,
+    cancel,
+    onOpenMap,
     getCurrentLocation,
     view,
   };
@@ -476,17 +486,29 @@ test('books once and follows the active ride until booking can resume', async ()
     );
     expect(screen.getByText(label)).toBeOnTheScreen();
   }
-  for (const [index, status] of (
-    ['completed', 'cancelled', 'no_driver_found'] as const
-  ).entries()) {
-    await act(() =>
-      activeRide
-        .getState()
-        .applyRide({ ...ride, version: index + 5, status }, 'rider'),
-    );
-    expect(button('Get fare quote')).toBeEnabled();
-    expect(screen.queryByRole('button', { name: 'Book ride' })).toBeNull();
-  }
+  await act(() =>
+    activeRide
+      .getState()
+      .applyRide({ ...ride, version: 5, status: 'completed' }, 'rider'),
+  );
+  expect(screen.queryByRole('button', { name: 'Get fare quote' })).toBeNull();
+  expect(screen.getByRole('progressbar')).toHaveProp(
+    'accessibilityValue',
+    expect.objectContaining({ now: 5, max: 5 }),
+  );
+  expect(
+    screen.getByText('✓ Done', { includeHiddenElements: true }),
+  ).toBeOnTheScreen();
+  await press('Book another ride');
+  expect(button('Get fare quote')).toBeEnabled();
+  await act(() =>
+    activeRide
+      .getState()
+      .applyRide({ ...ride, version: 6, status: 'completed' }, 'rider'),
+  );
+  expect(
+    screen.queryByRole('button', { name: 'Book another ride' }),
+  ).toBeNull();
 });
 
 test('reuses the booking key after a lost response and gives a new quote a fresh key', async () => {
@@ -527,7 +549,7 @@ test('books while GPS is pending and keeps the quoted pickup if booking fails', 
   );
 });
 
-test.each(['completed', 'cancelled'] as const)(
+test.each(['completed', 'cancelled', 'no_driver_found'] as const)(
   'clears a held quote when an external ride arrives and then becomes %s',
   async status => {
     const { activeRide } = await setup();
@@ -538,6 +560,25 @@ test.each(['completed', 'cancelled'] as const)(
     await act(() =>
       activeRide.getState().applyRide({ ...ride, version: 2, status }),
     );
+    expect(screen.queryByRole('button', { name: 'Get fare quote' })).toBeNull();
+    if (status === 'completed') {
+      expect(screen.getByRole('progressbar')).toHaveProp(
+        'accessibilityValue',
+        expect.objectContaining({ now: 5, max: 5 }),
+      );
+      expect(
+        screen.getByText('✓ Done', { includeHiddenElements: true }),
+      ).toBeOnTheScreen();
+    } else {
+      expect(screen.queryByRole('progressbar')).toBeNull();
+    }
+    if (status === 'no_driver_found')
+      expect(
+        screen.getByText(
+          'No driver was available nearby. You can try booking again.',
+        ),
+      ).toBeOnTheScreen();
+    await press('Book another ride');
     expect(button('Get fare quote')).toBeEnabled();
     expect(screen.queryByRole('button', { name: 'Book ride' })).toBeNull();
   },
@@ -556,6 +597,7 @@ test.each(['resolve', 'reject'])(
         .getState()
         .applyRide({ ...ride, version: 2, status: 'completed' }),
     );
+    await press('Book another ride');
     expect(button('Use current location')).toBeEnabled();
     await act(() => {
       if (outcome === 'resolve') fix.resolve({ status: 'ok', point: gpsPoint });
@@ -611,6 +653,7 @@ test.each([409, 500])(
     expect(
       screen.queryByText(/A ride is already active|Could not book your ride/),
     ).toBeNull();
+    await press('Book another ride');
     await requestQuote();
     expect(button('Book ride')).toBeEnabled();
   },
@@ -649,3 +692,384 @@ test.each(['gps', 'quote', 'book'] as const)(
     expect(warn).not.toHaveBeenCalled();
   },
 );
+
+const staleNotice =
+  'Driver location hasn’t updated recently. Trying to reconnect.';
+const connectionError = 'Connection lost. Try again when you’re connected.';
+const genericCancelError = 'Could not cancel your ride. Try again.';
+const confirm = () => press('Confirm cancellation');
+const selectReason = (name: string) => fireEvent.press(radio(name));
+
+async function openCancel(reason: string) {
+  await press('Cancel ride');
+  expect(button('Confirm cancellation')).toBeDisabled();
+  await selectReason(reason);
+}
+
+test('shows map position and connectivity only for the current assigned ride', async () => {
+  const { activeRide, onOpenMap } = await setup();
+  const position = {
+    ...gpsPoint,
+    rideId: ride.id,
+    recordedAt: new Date(start).toISOString(),
+  };
+  const connectivity = {
+    rideId: ride.id,
+    stale: true,
+    lastSeenAt: position.recordedAt,
+  };
+  await act(() => {
+    activeRide.getState().applyRide(ride, 'rider');
+    activeRide.setState({ position, connectivity });
+  });
+  expect(screen.getAllByTestId('map-marker')).toHaveLength(2);
+  expect(screen.queryByText(staleNotice)).toBeNull();
+  await press('Open live ride map');
+  expect(onOpenMap).toHaveBeenCalledTimes(1);
+  await act(() => {
+    activeRide
+      .getState()
+      .applyRide({ ...ride, version: 2, status: 'driver_assigned' }, 'rider');
+    activeRide.setState({ position: { ...position, rideId: 'old' } });
+  });
+  expect(screen.getAllByTestId('map-marker')).toHaveLength(2);
+  expect(screen.getByText(staleNotice)).toBeOnTheScreen();
+  await act(() =>
+    activeRide.setState({
+      position,
+      connectivity: { ...connectivity, rideId: 'old' },
+    }),
+  );
+  expect(marker('Driver')).toHaveProp('coordinate', coordinates(gpsPoint));
+  expect(screen.queryByText(staleNotice)).toBeNull();
+  await act(() => activeRide.setState({ connectivity }));
+  expect(screen.getByText(staleNotice)).toBeOnTheScreen();
+  await act(() =>
+    activeRide
+      .getState()
+      .applyRide({ ...ride, version: 3, status: 'completed' }, 'rider'),
+  );
+  expect(screen.queryByText(staleNotice)).toBeNull();
+  expect(screen.queryByTestId('map-view')).toBeNull();
+});
+
+test('blocks cancellation offline, announces a lost response once and reuses the key until the reason changes', async () => {
+  const announce = jest
+    .spyOn(AccessibilityInfo, 'announceForAccessibility')
+    .mockClear();
+  const { activeRide, cancel, connection } = await setup();
+  cancel
+    .mockRejectedValueOnce(new ApiError(0, null))
+    .mockRejectedValueOnce(new ApiError(404, null));
+  await act(() => {
+    activeRide.getState().applyRide(ride, 'rider');
+    connection.getState().setConnected(false);
+  });
+  expect(button('Cancel ride')).toBeDisabled();
+  await press('Cancel ride');
+  expect(cancel).not.toHaveBeenCalled();
+  await act(() => connection.getState().setConnected(true));
+  await openCancel('Other');
+  expect(screen.queryByRole('radio', { name: 'Driver not moving' })).toBeNull();
+  await act(() => connection.getState().setConnected(false));
+  expect(button('Confirm cancellation')).toBeDisabled();
+  await confirm();
+  expect(cancel).not.toHaveBeenCalled();
+  await act(() => connection.getState().setConnected(true));
+
+  await confirm();
+  const key = cancel.mock.calls[0][2];
+  expect(key).toEqual(expect.any(String));
+  expect(screen.getByText(connectionError)).toHaveProp(
+    'accessibilityLiveRegion',
+    'polite',
+  );
+  await act(() => connection.getState().setConnected(false));
+  await act(() => connection.getState().setConnected(true));
+  expect(announce.mock.calls).toEqual([[connectionError]]);
+  await selectReason('Other');
+  await confirm();
+  expect(cancel).toHaveBeenLastCalledWith(ride.id, 'other', key);
+  expect(screen.getByText('Ride is no longer active.')).toBeOnTheScreen();
+
+  await selectReason('Changed mind');
+  expect(screen.queryByText('Ride is no longer active.')).toBeNull();
+  await confirm();
+  expect(cancel).toHaveBeenLastCalledWith(
+    ride.id,
+    'changed_mind',
+    expect.any(String),
+  );
+  expect(cancel.mock.calls[2][2]).not.toBe(key);
+  expect(
+    screen.getByRole('header', { name: 'Ride cancelled' }),
+  ).toBeOnTheScreen();
+});
+
+test('ignores a stale confirm press when the connection drops', async () => {
+  const { activeRide, cancel, connection } = await setup();
+  await act(() => activeRide.getState().applyRide(ride, 'rider'));
+  await openCancel('Other');
+  const confirmButton = button('Confirm cancellation');
+  expect(confirmButton).toBeEnabled();
+  const { onClick } = confirmButton.props;
+
+  await act(() => {
+    connection.getState().setConnected(false);
+    onClick();
+  });
+
+  expect(cancel).not.toHaveBeenCalled();
+});
+
+test.each([
+  ['the ride starts', { ...ride, status: 'in_progress', version: 2 }],
+  ['another ride replaces it', { ...ride, id: 'different' }],
+] as const)('ignores a stale confirm press when %s', async (_event, next) => {
+  const { activeRide, cancel } = await setup();
+  await act(() => activeRide.getState().applyRide(ride, 'rider'));
+  await openCancel('Other');
+  const confirmButton = button('Confirm cancellation');
+  expect(confirmButton).toBeEnabled();
+  const { onClick } = confirmButton.props;
+
+  await act(() => {
+    activeRide.getState().applyRide(next, 'rider');
+    onClick();
+  });
+
+  expect(cancel).not.toHaveBeenCalled();
+});
+
+test('a stale dismissal cannot dismiss either ride after a replacement', async () => {
+  const { activeRide } = await setup();
+  const ended = { ...ride, status: 'completed' } as const;
+  const replacement = {
+    ...ride,
+    id: 'different',
+    status: 'cancelled',
+  } as const;
+  await act(() => activeRide.getState().applyRide(ended, 'rider'));
+  const { onClick } = button('Book another ride').props;
+  await act(() => {
+    activeRide.getState().applyRide(replacement, 'rider');
+    onClick();
+  });
+  expect(
+    screen.getByRole('header', { name: 'Ride cancelled' }),
+  ).toBeOnTheScreen();
+  expect(button('Book another ride')).toBeOnTheScreen();
+
+  await act(() => activeRide.getState().applyRide(ended, 'rider'));
+  expect(
+    screen.getByRole('header', { name: 'Ride completed' }),
+  ).toBeOnTheScreen();
+  expect(button('Book another ride')).toBeOnTheScreen();
+});
+
+test('clears an open picker and selection whenever ride status changes', async () => {
+  const { activeRide, cancel } = await setup();
+  await act(() => activeRide.getState().applyRide(ride, 'rider'));
+  await openCancel('Other');
+  await act(() =>
+    activeRide
+      .getState()
+      .applyRide({ ...ride, version: 2, status: 'driver_assigned' }, 'rider'),
+  );
+  expect(
+    screen.queryByRole('button', { name: 'Confirm cancellation' }),
+  ).toBeNull();
+  await openCancel('Driver not moving');
+  expect(radio('Driver not moving')).toBeChecked();
+  await press('Keep ride');
+  expect(screen.queryByRole('radio', { name: 'Driver not moving' })).toBeNull();
+  await act(() =>
+    activeRide
+      .getState()
+      .applyRide({ ...ride, version: 3, status: 'driver_arrived' }, 'rider'),
+  );
+  await openCancel('Driver not moving');
+  await act(() =>
+    activeRide
+      .getState()
+      .applyRide({ ...ride, version: 4, status: 'in_progress' }, 'rider'),
+  );
+  expect(screen.queryByRole('button', { name: 'Cancel ride' })).toBeNull();
+  expect(
+    screen.queryByRole('button', { name: 'Confirm cancellation' }),
+  ).toBeNull();
+  expect(cancel).not.toHaveBeenCalled();
+});
+
+test('discards the cancel selection when the same ride returns after an empty snapshot', async () => {
+  const { activeRide } = await setup();
+  await act(() => activeRide.getState().applyRide(ride, 'rider'));
+  await openCancel('Other');
+  expect(radio('Other')).toBeChecked();
+
+  await act(() =>
+    activeRide.getState().applySnapshot({ rider: null, driver: null }),
+  );
+  await act(() =>
+    activeRide.getState().applySnapshot({ rider: ride, driver: null }),
+  );
+
+  expect(
+    screen.queryByRole('button', { name: 'Confirm cancellation' }),
+  ).toBeNull();
+  await press('Cancel ride');
+  expect(button('Confirm cancellation')).toBeDisabled();
+  expect(radio('Other')).not.toBeChecked();
+});
+
+test('reconciles a same-ride 409 without leaving a cancel error or allowing a double submit', async () => {
+  const { activeRide, cancel } = await setup();
+  const pending = deferred<void>();
+  cancel.mockReturnValueOnce(pending.promise);
+  await act(() => activeRide.getState().applyRide(ride, 'rider'));
+  await openCancel('Other');
+  await act(async () => {
+    await confirm();
+    await confirm();
+  });
+  expect(cancel).toHaveBeenCalledTimes(1);
+  expect(button('Confirm cancellation')).toBeBusy();
+  const latest = { ...ride, version: 2, status: 'in_progress' } as const;
+  await act(() => pending.reject(new ApiError(409, { ride: latest })));
+  expect(activeRide.getState().rider).toEqual(latest);
+  expect(
+    screen.getByRole('header', { name: 'Ride in progress' }),
+  ).toBeOnTheScreen();
+  expect(screen.queryByText(genericCancelError)).toBeNull();
+});
+
+test('keeps the cancel failure and retry key when the driver arrives during cancellation', async () => {
+  const { activeRide, cancel } = await setup();
+  const pending = deferred<void>();
+  cancel.mockReturnValueOnce(pending.promise);
+  await act(() =>
+    activeRide
+      .getState()
+      .applyRide({ ...ride, status: 'driver_assigned' }, 'rider'),
+  );
+  await openCancel('Driver not moving');
+  await confirm();
+  const key = cancel.mock.calls[0][2];
+  expect(key).toEqual(expect.any(String));
+
+  await act(() =>
+    activeRide
+      .getState()
+      .applyRide({ ...ride, status: 'driver_arrived', version: 2 }, 'rider'),
+  );
+  await act(() => pending.reject(new ApiError(500, null)));
+  expect(
+    screen.getByRole('header', { name: 'Driver arrived' }),
+  ).toBeOnTheScreen();
+  expect(screen.getByText(genericCancelError)).toBeOnTheScreen();
+  expect(radio('Driver not moving')).toBeChecked();
+
+  await confirm();
+  expect(cancel).toHaveBeenLastCalledWith(ride.id, 'driver_not_moving', key);
+});
+
+test('keeps the newer held ride when cancellation returns an older same-ride 409', async () => {
+  const { activeRide, cancel } = await setup();
+  const pending = deferred<void>();
+  cancel.mockReturnValueOnce(pending.promise);
+  await act(() => activeRide.getState().applyRide(ride, 'rider'));
+  await openCancel('Other');
+  await confirm();
+
+  const latest = { ...ride, status: 'driver_arrived', version: 3 } as const;
+  await act(() => activeRide.getState().applyRide(latest, 'rider'));
+  await act(() =>
+    pending.reject(
+      new ApiError(409, { ride: { ...ride, status: 'cancelled', version: 2 } }),
+    ),
+  );
+
+  expect(activeRide.getState().rider).toEqual(latest);
+  expect(
+    screen.getByRole('header', { name: 'Driver arrived' }),
+  ).toBeOnTheScreen();
+  expect(screen.queryByText(genericCancelError)).toBeNull();
+});
+
+test.each([
+  {
+    ride: {
+      ...ride,
+      status: 'driver_assigned',
+      id: '00000000-0000-4000-8000-000000000002',
+    },
+  },
+  { ride: { ...ride, status: 'invalid' } },
+])(
+  'leaves the current ride and shows an error for an unusable 409 payload',
+  async body => {
+    const { activeRide, cancel } = await setup();
+    cancel.mockRejectedValueOnce(new ApiError(409, body));
+    await act(() => activeRide.getState().applyRide(ride, 'rider'));
+    await openCancel('Other');
+    await confirm();
+    expect(activeRide.getState().rider).toEqual(ride);
+    expect(screen.getByText(genericCancelError)).toBeOnTheScreen();
+    expect(radio('Other')).toBeChecked();
+  },
+);
+
+test('ignores a cancel response for a ride replaced while the request was pending', async () => {
+  const { activeRide, cancel } = await setup();
+  const pending = deferred<void>();
+  cancel.mockReturnValueOnce(pending.promise);
+  await act(() => activeRide.getState().applyRide(ride, 'rider'));
+  await openCancel('Other');
+  await confirm();
+  const newRide = { ...ride, id: '00000000-0000-4000-8000-000000000002' };
+  await act(() => activeRide.getState().applyRide(newRide, 'rider'));
+  await act(() =>
+    pending.reject(
+      new ApiError(409, { ride: { ...ride, status: 'cancelled', version: 2 } }),
+    ),
+  );
+  expect(activeRide.getState().rider).toEqual(newRide);
+  expect(screen.queryByText(genericCancelError)).toBeNull();
+  expect(button('Cancel ride')).toBeEnabled();
+});
+
+test.each(['resolve', 'reject'])(
+  'handles a cancellation that %ss after unmount',
+  async outcome => {
+    const { activeRide, cancel, view } = await setup();
+    const error = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const pending = deferred<void>();
+    cancel.mockReturnValueOnce(pending.promise);
+    await act(() => activeRide.getState().applyRide(ride, 'rider'));
+    await openCancel('Other');
+    await confirm();
+    await view.unmount();
+    await act(() => {
+      if (outcome === 'resolve') pending.resolve();
+      else pending.reject(new ApiError(500, null));
+    });
+    expect(error).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+  },
+);
+
+test('blocks a pending quote when the first visible ride is already ended', async () => {
+  const { activeRide, quote } = await setup();
+  const pending = deferred<Quote>();
+  quote.mockReturnValueOnce(pending.promise);
+  await selectDropoffAndQuote();
+  await act(() =>
+    activeRide.getState().applyRide({ ...ride, status: 'completed' }, 'rider'),
+  );
+  await act(() => pending.resolve(exampleQuote));
+  expect(screen.queryByRole('button', { name: 'Get fare quote' })).toBeNull();
+  await press('Book another ride');
+  expect(button('Get fare quote')).toBeEnabled();
+  expect(screen.queryByRole('button', { name: 'Book ride' })).toBeNull();
+});

@@ -63,6 +63,7 @@ export const outlineWidth = 1;
 export const bannerEdgeWidth = 4;
 export const syncStatusMaxWidth = 320;
 export const mapHeight = { mini: 160, active: 240 } as const;
+export const progressBarHeight = 6;
 export const mapPinSize = 36;
 export const mapPinIconSize = 20;
 export const mapPinBorderWidth = 2;

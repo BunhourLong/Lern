@@ -4,7 +4,6 @@ import { AccessibilityInfo, Platform, Pressable, View } from 'react-native';
 import type { Edge } from 'react-native-safe-area-context';
 import {
   makeStyles,
-  mapPinBorderWidth,
   opacity,
   outlineWidth,
   radius,
@@ -25,6 +24,12 @@ import { Text } from '../../components/Text';
 import { useInteraction } from '../../hooks/use-interaction';
 import { useT, type StringKey } from '../../i18n';
 import { formatDistance } from '../../utils/trip-format';
+import { RadioOption } from './components/RadioOption';
+import {
+  RiderRideCard,
+  type CancelPicker,
+  useRideStatusAnnouncement,
+} from './components/RiderRideCard';
 import {
   type ActiveRiderRideStatus,
   findPresetId,
@@ -34,12 +39,43 @@ import {
   type PresetId,
   VEHICLE_TYPES,
 } from './rider-booking';
+import {
+  buildRiderRideMap,
+  type EndedRiderRideStatus,
+  riderCancelReasons,
+  riderRideMapLabels,
+  riderRideProgress,
+} from './rider-ride';
 
 export type BookingEndpoint = 'pickup' | 'dropoff';
 export type PickupSource = 'preset' | 'map' | 'gps';
-type ActiveRide = Pick<Ride, 'pickup' | 'dropoff' | 'fare' | 'vehicleType'> & {
-  status: ActiveRiderRideStatus;
-};
+type RiderHomeRide = Pick<
+  Ride,
+  'id' | 'pickup' | 'dropoff' | 'fare' | 'vehicleType'
+> &
+  (
+    | {
+        variant: 'active';
+        status: ActiveRiderRideStatus;
+        driverPosition?: Point | null;
+        driverStale?: boolean;
+        onOpenMap?: () => void;
+        cancel?: Pick<
+          CancelPicker,
+          | 'open'
+          | 'selected'
+          | 'disabled'
+          | 'loading'
+          | 'onOpen'
+          | 'onSelect'
+          | 'onConfirm'
+          | 'onKeep'
+        > & {
+          error?: StringKey;
+        };
+      }
+    | { variant: 'ended'; status: EndedRiderRideStatus; onDismiss: () => void }
+  );
 
 export type RiderBookingForm = {
   pickup: Point;
@@ -77,12 +113,14 @@ export default function RiderBookingScreen({
   khrPerUsd,
   edges,
   onDebug,
+  focused = true,
 }: {
   khrPerUsd: number | null;
   edges?: Edge[];
   onDebug?: () => void;
+  focused?: boolean;
 } & (
-  | { activeRide: ActiveRide; booking?: never }
+  | { activeRide: RiderHomeRide; booking?: never }
   | { booking: RiderBookingForm; activeRide?: never }
 )) {
   const t = useT();
@@ -91,54 +129,17 @@ export default function RiderBookingScreen({
   const mapAvailable =
     Platform.OS === 'ios' ||
     (Platform.OS === 'android' && androidMapsConfigured);
-  const status = activeRide?.status;
-  const statusLabel = status && t(`notification.ride.${status}`);
-  const previousStatus = useRef<ActiveRiderRideStatus | undefined>(undefined);
-  useEffect(() => {
-    if (
-      Platform.OS === 'ios' &&
-      statusLabel &&
-      previousStatus.current !== undefined &&
-      previousStatus.current !== status
-    )
-      AccessibilityInfo.announceForAccessibility(statusLabel);
-    previousStatus.current = status;
-  }, [status, statusLabel]);
-
   return (
     <Screen scroll edges={edges}>
       <View style={styles.content}>
         <Text role="title">{t('route.rider.title')}</Text>
         {activeRide ? (
-          <GlassSurface style={styles.card}>
-            <Text role="bodyStrong" accessibilityLiveRegion="polite">
-              {statusLabel}
-            </Text>
-            <AppMap
-              size="active"
-              {...frameMapRegion(activeRide.pickup, activeRide.dropoff)}
-              pins={[
-                {
-                  id: 'pickup',
-                  point: activeRide.pickup,
-                  kind: 'rider',
-                  title: t('riderBooking.pickup'),
-                },
-                {
-                  id: 'dropoff',
-                  point: activeRide.dropoff,
-                  kind: 'dropoff',
-                  title: t('riderBooking.dropoff'),
-                },
-              ]}
-              accessibilityLabel={t(
-                mapAvailable ? 'riderBooking.activeMap' : 'map.unavailable',
-              )}
-              unavailableLabel={t('map.unavailable')}
-            />
-            <TripPrice trip={activeRide} khrPerUsd={khrPerUsd} />
-            <Text tone="muted">{t('riderBooking.activeRideNotice')}</Text>
-          </GlassSurface>
+          <RideCard
+            ride={activeRide}
+            khrPerUsd={khrPerUsd}
+            focused={focused}
+            mapAvailable={mapAvailable}
+          />
         ) : (
           <BookingForm
             booking={booking}
@@ -155,6 +156,108 @@ export default function RiderBookingScreen({
         )}
       </View>
     </Screen>
+  );
+}
+
+function placeName(point: Point, t: ReturnType<typeof useT>) {
+  const preset = findPresetId(point);
+  return preset ? t(`riderBooking.preset.${preset}`) : formatPoint(point);
+}
+
+function RideCard({
+  ride,
+  khrPerUsd,
+  focused,
+  mapAvailable,
+}: {
+  ride: RiderHomeRide;
+  khrPerUsd: number | null;
+  focused: boolean;
+  mapAvailable: boolean;
+}) {
+  const t = useT();
+  const statusTitle = t(`notification.ride.${ride.status}`);
+  useRideStatusAnnouncement(ride.id, ride.status, statusTitle, focused);
+  const errorKey = ride.variant === 'active' ? ride.cancel?.error : undefined;
+  const cancelError = errorKey && t(errorKey);
+  const previousError = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (!cancelError) {
+      previousError.current = undefined;
+      return;
+    }
+    if (!focused) return;
+    if (Platform.OS === 'ios' && cancelError !== previousError.current) {
+      AccessibilityInfo.announceForAccessibility(cancelError);
+      previousError.current = cancelError;
+    }
+  }, [cancelError, focused]);
+  const price = formatQuotePrice(ride.fare, khrPerUsd, t);
+  const summary = {
+    statusTitle,
+    progress: riderRideProgress(ride.status, t),
+    pickupLabel: t('riderBooking.pickup'),
+    pickupSummary: placeName(ride.pickup, t),
+    dropoffLabel: t('riderBooking.dropoff'),
+    dropoffSummary: placeName(ride.dropoff, t),
+    fare: price.primary,
+    approxUsd: price.approxUsd,
+    vehicle: t('driverOffer.vehicle', {
+      vehicle: t(`driverApply.${ride.vehicleType}`),
+    }),
+  };
+  if (ride.variant === 'ended')
+    return (
+      <RiderRideCard
+        {...summary}
+        variant="ended"
+        note={
+          ride.status === 'no_driver_found'
+            ? t('riderRide.noDriverBody')
+            : undefined
+        }
+        dismiss={{ label: t('riderRide.bookAnother'), onPress: ride.onDismiss }}
+      />
+    );
+
+  const cancel = ride.cancel && {
+    ...ride.cancel,
+    openLabel: t('riderRide.cancel.open'),
+    prompt: t('riderRide.cancel.prompt'),
+    reasons: riderCancelReasons(ride.status).map(value => ({
+      value,
+      label: t(`riderRide.cancel.reason.${value}`),
+    })),
+    confirmLabel: t('riderRide.cancel.confirm'),
+    keepLabel: t('riderRide.cancel.keep'),
+    error: cancelError,
+  };
+  const onOpen = mapAvailable ? ride.onOpenMap : undefined;
+  return (
+    <RiderRideCard
+      {...summary}
+      variant="active"
+      staleNotice={ride.driverStale ? t('riderRide.driverStale') : undefined}
+      announceStale={focused}
+      map={{
+        ...buildRiderRideMap({
+          ...ride,
+          driverPosition: ride.driverPosition ?? null,
+          labels: riderRideMapLabels(t),
+        }),
+        label: t(
+          onOpen
+            ? 'riderRide.map.open'
+            : mapAvailable
+            ? 'riderRide.map.live'
+            : 'map.unavailable',
+        ),
+        hintLabel: t('riderRide.map.openHint'),
+        unavailableLabel: t('map.unavailable'),
+        onOpen,
+      }}
+      cancel={cancel}
+    />
   );
 }
 
@@ -217,19 +320,15 @@ function BookingForm({
       title: t('riderBooking.dropoff'),
       onDragEnd: pointHandler(booking.onDragDropoff),
     });
-  const placeName = (point: Point) => {
-    const preset = findPresetId(point);
-    return preset ? t(`riderBooking.preset.${preset}`) : formatPoint(point);
-  };
   const summaries = {
     pickup:
       pickupSource === 'gps'
         ? t('riderBooking.currentLocation')
         : pickupSource === 'preset'
-        ? placeName(pickup)
+        ? placeName(pickup, t)
         : formatPoint(pickup),
     dropoff: dropoff
-      ? placeName(dropoff)
+      ? placeName(dropoff, t)
       : t('riderBooking.dropoffPlaceholder'),
   };
 
@@ -388,65 +487,6 @@ function BookingForm({
   );
 }
 
-function RadioOption({
-  label,
-  hint,
-  valueText,
-  checked,
-  disabled,
-  onPress,
-}: {
-  label: string;
-  hint?: string;
-  valueText?: string;
-  checked: boolean;
-  disabled: boolean;
-  onPress: () => void;
-}) {
-  const styles = useStyles();
-  const interact = useInteraction();
-  return (
-    <Pressable
-      accessibilityRole="radio"
-      accessibilityLabel={label}
-      accessibilityHint={hint}
-      accessibilityValue={valueText ? { text: valueText } : undefined}
-      accessibilityState={{ checked, disabled }}
-      disabled={disabled}
-      onPress={() => {
-        if (interact()) onPress();
-      }}
-      style={({ pressed }) => [
-        styles.option,
-        checked && styles.checked,
-        disabled && styles.disabled,
-        pressed && styles.pressed,
-      ]}
-    >
-      <View style={styles.optionHeader}>
-        <View style={styles.optionLabel}>
-          <Text role="bodyStrong" tone={checked ? 'primary' : 'default'}>
-            {label}
-          </Text>
-        </View>
-        {checked && (
-          <Text
-            role="bodyStrong"
-            tone="primary"
-            accessible={false}
-            importantForAccessibility="no"
-          >
-            ✓
-          </Text>
-        )}
-      </View>
-      <Text role="caption" tone="muted">
-        {valueText ?? hint}
-      </Text>
-    </Pressable>
-  );
-}
-
 function TripPrice({
   trip,
   khrPerUsd,
@@ -485,14 +525,6 @@ const useStyles = makeStyles(t => ({
     paddingVertical: spacing.sm,
     paddingHorizontal: spacing.md,
   },
-  optionHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    gap: spacing.sm,
-  },
-  optionLabel: { flexShrink: 1 },
-  checked: { borderColor: t.colors.primary, borderWidth: mapPinBorderWidth },
   disabled: { opacity: opacity.disabled },
   pressed: { opacity: opacity.pressed },
 }));

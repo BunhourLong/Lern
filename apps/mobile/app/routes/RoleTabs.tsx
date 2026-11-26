@@ -1,6 +1,7 @@
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { createNativeBottomTabNavigator } from '@react-navigation/bottom-tabs/unstable';
+import { useIsFocused } from '@react-navigation/native';
 import { isLiquidGlassAvailable } from 'expo-glass-effect';
 import type { ImageSourcePropType } from 'react-native';
 import type { Edge } from 'react-native-safe-area-context';
@@ -43,18 +44,21 @@ export function RoleTabs({
   role,
   driverStatus,
   riderBooking,
+  onOpenRideMap,
   onApply,
   onDebug,
   onEnroll,
 }: {
   role: Role;
   driverStatus: DriverStatusActions;
-  riderBooking: RiderBookingActions;
+  riderBooking: Omit<RiderBookingActions, 'onOpenMap'>;
+  onOpenRideMap?: () => void;
   onApply: () => void;
   onDebug?: () => void;
   onEnroll?: () => void;
 }) {
   const t = useT();
+  const focused = useIsFocused();
   const names = tabsByRole[role];
   const interact = useInteraction();
   const listeners = { tabPress: interact };
@@ -85,6 +89,8 @@ export function RoleTabs({
       ) : (
         <RiderBookingContainer
           {...riderBooking}
+          onOpenMap={onOpenRideMap}
+          focused={focused}
           onDebug={onDebug}
           edges={screenEdges}
         />

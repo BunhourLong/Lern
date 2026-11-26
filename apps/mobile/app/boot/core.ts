@@ -517,9 +517,9 @@ export function createCore({
         () => api.book(quoteId, key),
         ride => activeRide.getState().applyRide(ride, 'rider'),
       ),
-    cancel: (rideId: string, reason: CancelReason) =>
+    cancel: (rideId: string, reason: CancelReason, key?: string) =>
       command(
-        () => api.cancel(rideId, reason),
+        () => api.cancel(rideId, reason, key),
         ride => activeRide.getState().applyRide(ride),
       ),
     accept: (offerId: string) =>

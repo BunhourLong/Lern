@@ -67,6 +67,34 @@ it('drops what the snapshot no longer has: the ride ended while the app was away
   expect(store.getState().rider).toBeNull();
 });
 
+it.each(['completed', 'cancelled', 'no_driver_found'] as const)(
+  'keeps a %s rider ride through reconnect until dismissed',
+  status => {
+    const store = createActiveRideStore();
+    const s = store.getState;
+    const ended = ride('a', 4, status);
+    s().applyRide(ended, 'rider');
+    s().applySnapshot({ rider: null, driver: null });
+    expect(s().rider).toEqual(ended);
+
+    s().dismissRiderRide('a');
+    expect(s().dismissedRiderIds).toEqual(new Set(['a']));
+    s().applySnapshot({ rider: null, driver: null });
+    expect(s().rider).toBeNull();
+  },
+);
+
+it('only dismisses the current ended rider ride', () => {
+  const store = createActiveRideStore();
+  const s = store.getState;
+  expect(s().dismissRiderRide).toEqual(expect.any(Function));
+  s().applyRide(ride('a', 2), 'rider');
+  s().dismissRiderRide('a');
+  s().applyRide(ride('a', 3, 'completed'), 'rider');
+  s().dismissRiderRide('other');
+  expect(s().dismissedRiderIds).toEqual(new Set());
+});
+
 it('keeps offers by their status rules and lets the snapshot replace an offer it no longer holds', () => {
   const store = createActiveRideStore();
   store.getState().applyOffer(offer('o', 'b'));
@@ -95,9 +123,43 @@ it('keeps the newest driver position and connectivity for the rider’s current 
   expect([s().position, s().connectivity]).toEqual([null, null]); // a new ride starts with no driver on the map
 });
 
+it('clears stale connectivity only when a newer position for the current ride arrives', () => {
+  const store = createActiveRideStore();
+  const s = store.getState;
+  const current = ride('a', 2);
+  const position = { rideId: 'a', lat: 11.5, lng: 104.9, recordedAt: at(2) };
+  const stale = { rideId: 'a', stale: true, lastSeenAt: at(10) };
+  s().applyRide(current, 'rider');
+  s().applyPosition(position);
+  s().applyConnectivity(stale);
+  s().applySnapshot({ rider: current, driver: null });
+  expect(s().connectivity).toEqual(stale);
+
+  for (const ignored of [
+    { ...position, lat: 11.6 },
+    { ...position, recordedAt: at(1) },
+    { ...position, rideId: 'other', recordedAt: at(12) },
+  ]) {
+    s().applyPosition(ignored);
+    expect(s().position).toEqual(position);
+    expect(s().connectivity).toEqual(stale);
+  }
+
+  const newer = { ...position, recordedAt: at(3) };
+  s().applyPosition(newer);
+  expect(s().position).toEqual(newer);
+  expect(s().connectivity).toEqual({ ...stale, stale: false });
+
+  const staleAgain = { ...stale, lastSeenAt: at(11) };
+  s().applyConnectivity(staleAgain);
+  expect(s().connectivity).toEqual(staleAgain);
+});
+
 it('forgets everything on reset (sign-out)', () => {
   const store = createActiveRideStore();
-  store.getState().applyRide(ride('a', 2), 'rider');
+  store.getState().applyRide(ride('a', 2, 'completed'), 'rider');
+  expect(store.getState().dismissRiderRide).toEqual(expect.any(Function));
+  store.getState().dismissRiderRide('a');
   store.getState().applyOffer(offer('o', 'b'));
   store.getState().reset();
   expect(store.getState()).toMatchObject({
@@ -106,6 +168,7 @@ it('forgets everything on reset (sign-out)', () => {
     offer: null,
     position: null,
     connectivity: null,
+    dismissedRiderIds: new Set(),
   });
 });
 

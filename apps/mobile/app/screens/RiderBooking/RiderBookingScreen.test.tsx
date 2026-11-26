@@ -28,6 +28,16 @@ jest.mock('react-native/Libraries/Utilities/useColorScheme', () => ({
 const pickup = PHNOM_PENH_PRESETS[0].point;
 const dropoff = PHNOM_PENH_PRESETS[1].point;
 const fare = { amountMinor: 5000, currency: 'KHR' } as const;
+const trip = {
+  id: 'ride-1',
+  variant: 'active',
+  pickup,
+  dropoff,
+  fare,
+  vehicleType: 'moto',
+  onOpenMap: jest.fn(),
+} as const;
+
 const quote = {
   quote: {
     id: 'quote-1',
@@ -279,21 +289,27 @@ test('adapts the English map hint and label to Android Maps configuration', asyn
   expect(screen.getByText(interactiveHint)).toBeOnTheScreen();
   expect(screen.queryByText(fallbackHint)).toBeNull();
 
-  await rerender(
+  const active = (
     <RiderBookingScreen
-      activeRide={{
-        status: 'searching',
-        pickup,
-        dropoff,
-        fare,
-        vehicleType: 'moto',
-      }}
+      activeRide={{ ...trip, status: 'searching' }}
       khrPerUsd={null}
-    />,
+    />
   );
+  await rerender(active);
   expect(
     screen.getByRole('image', { name: 'Map preview unavailable' }),
   ).toBeOnTheScreen();
+  expect(
+    screen.queryByRole('button', { name: 'Open live ride map' }),
+  ).toBeNull();
+  expect(screen.queryByText('Tap map to view full screen')).toBeNull();
+
+  await rerender(
+    <AndroidMapsContext.Provider value>{active}</AndroidMapsContext.Provider>,
+  );
+  expect(button('Open live ride map')).toBeOnTheScreen();
+  await fireEvent.press(button('Open live ride map'));
+  expect(trip.onOpenMap).toHaveBeenCalledTimes(1);
 });
 
 test('keeps booking enabled and omits the countdown at zero seconds', async () => {
@@ -314,7 +330,6 @@ test('keeps booking enabled and omits the countdown at zero seconds', async () =
 
 test('announces changed active-ride status once on iOS', async () => {
   const announce = jest.spyOn(AccessibilityInfo, 'announceForAccessibility');
-  const trip = { pickup, dropoff, fare, vehicleType: 'moto' } as const;
   const { rerender } = await render(
     <RiderBookingScreen
       activeRide={{ ...trip, status: 'searching' }}
@@ -332,6 +347,12 @@ test('announces changed active-ride status once on iOS', async () => {
     <RiderBookingScreen
       activeRide={{ ...trip, status: 'driver_assigned' }}
       khrPerUsd={4000}
+    />,
+  );
+  await rerender(
+    <RiderBookingScreen
+      activeRide={{ ...trip, id: 'different-ride', status: 'searching' }}
+      khrPerUsd={null}
     />,
   );
   expect(announce.mock.calls).toEqual([['Driver assigned']]);
@@ -375,17 +396,55 @@ test('announces changed inline errors and lets the expiry banner announce itself
   ]);
 });
 
+test('announces an offscreen cancellation error once when Rider Home regains focus', async () => {
+  const announce = jest.spyOn(AccessibilityInfo, 'announceForAccessibility');
+  const activeRide = {
+    ...trip,
+    status: 'driver_assigned',
+    cancel: {
+      open: true,
+      selected: 'other',
+      disabled: false,
+      loading: false,
+      error: 'riderRide.error.cancelFailed',
+      onOpen: jest.fn(),
+      onSelect: jest.fn(),
+      onConfirm: jest.fn(),
+      onKeep: jest.fn(),
+    },
+  } as const;
+  const view = (focused: boolean) => (
+    <RiderBookingScreen
+      activeRide={activeRide}
+      khrPerUsd={null}
+      focused={focused}
+    />
+  );
+  const { rerender } = await render(
+    <RiderBookingScreen
+      activeRide={{
+        ...activeRide,
+        cancel: { ...activeRide.cancel, error: undefined },
+      }}
+      khrPerUsd={null}
+      focused={false}
+    />,
+  );
+  await rerender(view(false));
+  const error = 'Could not cancel your ride. Try again.';
+  expect(screen.getByText(error)).toBeOnTheScreen();
+  expect(announce).not.toHaveBeenCalled();
+  await rerender(view(true));
+  await rerender(view(false));
+  await rerender(view(true));
+  expect(announce.mock.calls).toEqual([[error]]);
+});
+
 test('shows the active ride with both pins, fare, and status in place of booking', async () => {
   const onDebug = jest.fn();
   await render(
     <RiderBookingScreen
-      activeRide={{
-        status: 'driver_arrived',
-        pickup,
-        dropoff,
-        fare,
-        vehicleType: 'remork',
-      }}
+      activeRide={{ ...trip, status: 'driver_arrived', vehicleType: 'remork' }}
       khrPerUsd={4000}
       onDebug={onDebug}
     />,
@@ -396,8 +455,11 @@ test('shows the active ride with both pins, fare, and status in place of booking
     'accessibilityLiveRegion',
     'polite',
   );
+  expect(button('Open live ride map')).toBeOnTheScreen();
   expect(
-    screen.getByRole('image', { name: 'Active ride map' }),
+    screen.getByRole('progressbar', {
+      name: 'Ride progress: step 3 of 5, Arrived',
+    }),
   ).toBeOnTheScreen();
   expect(screen.getByTestId('map-view').props.region).toMatchObject({
     latitude: (pickup.lat + dropoff.lat) / 2,
@@ -407,10 +469,39 @@ test('shows the active ride with both pins, fare, and status in place of booking
   expect(screen.getByText('5,000 ៛')).toBeOnTheScreen();
   expect(screen.getByText('≈ $1.25')).toBeOnTheScreen();
   expect(screen.getByText('Vehicle type: Remork')).toBeOnTheScreen();
-  expect(
-    screen.getByText('You can book another ride when this one ends.'),
-  ).toBeOnTheScreen();
+  expect(screen.getByText('Independence Monument')).toBeOnTheScreen();
+  expect(screen.getByText('Central Market')).toBeOnTheScreen();
   expect(screen.queryByRole('button', { name: 'Get fare quote' })).toBeNull();
   await fireEvent.press(button('Debug'));
   expect(onDebug).toHaveBeenCalledTimes(1);
+});
+
+test('localizes active status, stages, map, and route summary in dark mode and Khmer', async () => {
+  jest.mocked(useColorScheme).mockReturnValue('dark');
+  await render(
+    <LanguageContext.Provider value="km">
+      <RiderBookingScreen
+        activeRide={{
+          ...trip,
+          status: 'driver_assigned',
+          driverStale: true,
+          dropoff: { lat: 11.55, lng: 104.915 },
+        }}
+        khrPerUsd={null}
+      />
+    </LanguageContext.Provider>,
+  );
+  expect(screen.getByRole('header', { name: 'បានរកឃើញអ្នកបើកបរ' })).toHaveStyle(
+    { color: themes.dark.text },
+  );
+  expect(screen.getByRole('progressbar', { name: /2.*5/ })).toBeOnTheScreen();
+  expect(screen.getByText('វិមានឯករាជ្យ')).toBeOnTheScreen();
+  expect(screen.getByText('11.5500, 104.9150')).toBeOnTheScreen();
+  expect(
+    screen.getByText(/ទីតាំងអ្នកបើកបរមិនបានធ្វើបច្ចុប្បន្នភាព/),
+  ).toBeOnTheScreen();
+  expect(screen.getByTestId('map-view')).toHaveProp(
+    'userInterfaceStyle',
+    'dark',
+  );
 });
