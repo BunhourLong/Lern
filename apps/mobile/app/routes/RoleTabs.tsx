@@ -8,6 +8,9 @@ import { useInteraction } from '../hooks/use-interaction';
 import { useT } from '../i18n';
 import DriverStatusContainer from '../screens/DriverStatus/DriverStatusContainer';
 import type { DriverStatusActions } from '../screens/DriverStatus/DriverStatusContainer';
+import RiderBookingContainer, {
+  type RiderBookingActions,
+} from '../screens/RiderBooking/RiderBookingContainer';
 import RouteMessageContainer from '../screens/RouteMessage/RouteMessageContainer';
 import RouteMessageScreen from '../screens/RouteMessage/RouteMessageScreen';
 import { TabBar } from './TabBar';
@@ -39,12 +42,14 @@ const tabs = isLiquidGlassAvailable()
 export function RoleTabs({
   role,
   driverStatus,
+  riderBooking,
   onApply,
   onDebug,
   onEnroll,
 }: {
   role: Role;
   driverStatus: DriverStatusActions;
+  riderBooking: RiderBookingActions;
   onApply: () => void;
   onDebug?: () => void;
   onEnroll?: () => void;
@@ -70,21 +75,21 @@ export function RoleTabs({
           }
         />
       );
-    if (name === 'home' && role === 'driver')
-      return (
+    if (name === 'home')
+      return role === 'driver' ? (
         <DriverStatusContainer
           {...driverStatus}
           onDebug={onDebug}
           edges={screenEdges}
         />
+      ) : (
+        <RiderBookingContainer
+          {...riderBooking}
+          onDebug={onDebug}
+          edges={screenEdges}
+        />
       );
-    return (
-      <RouteMessageContainer
-        route={name === 'home' ? 'rider' : name}
-        onDebug={name === 'home' ? onDebug : undefined}
-        edges={screenEdges}
-      />
-    );
+    return <RouteMessageContainer route={name} edges={screenEdges} />;
   };
 
   if (tabs.kind === 'native') {

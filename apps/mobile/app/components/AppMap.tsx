@@ -1,7 +1,8 @@
-import { createContext, useContext } from 'react';
+import { createContext, useContext, useEffect, useRef } from 'react';
 import { Image, Platform, View } from 'react-native';
 import type { StyleProp, ViewStyle } from 'react-native';
 import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
+import type { LatLng } from 'react-native-maps';
 import type { Point } from '@lern/contracts';
 import {
   darkMapStyle,
@@ -25,6 +26,7 @@ export type MapPin = {
   point: Point;
   title?: string;
   kind?: MapPinKind;
+  onDragEnd?: (point: Point) => void;
 };
 
 const PIN_ANCHOR = { x: 0.5, y: 0.5 };
@@ -40,6 +42,8 @@ type Props = {
   delta?: number;
   size?: keyof typeof mapHeight;
   interactive?: boolean;
+  onPressPoint?: (point: Point) => void;
+  cameraKey?: number;
   accessibilityLabel: string;
   unavailableLabel: string;
   style?: StyleProp<ViewStyle>;
@@ -51,6 +55,8 @@ export function AppMap({
   delta = 0.008,
   size = 'mini',
   interactive = false,
+  onPressPoint,
+  cameraKey,
   accessibilityLabel,
   unavailableLabel,
   style,
@@ -60,6 +66,22 @@ export function AppMap({
   const androidMapsConfigured = useContext(AndroidMapsContext);
   const android = Platform.OS === 'android';
   const available = Platform.OS === 'ios' || (android && androidMapsConfigured);
+  const mapRef = useRef<MapView>(null);
+  const previousCameraKey = useRef(cameraKey);
+  const lastMarkerPressAt = useRef(0);
+  const liveDelta = useRef({ lat: delta, lng: delta });
+  const { lat, lng } = center;
+  useEffect(() => {
+    if (!interactive) {
+      liveDelta.current = { lat: delta, lng: delta };
+      return;
+    }
+    if (cameraKey === undefined || previousCameraKey.current === cameraKey)
+      return;
+    previousCameraKey.current = cameraKey;
+    liveDelta.current = { lat: delta, lng: delta };
+    mapRef.current?.animateToRegion?.(mapRegion(lat, lng, delta), 250);
+  }, [cameraKey, delta, interactive, lat, lng]);
 
   if (!available) {
     return (
@@ -81,12 +103,13 @@ export function AppMap({
     );
   }
 
-  const region = {
-    latitude: center.lat,
-    longitude: center.lng,
-    latitudeDelta: delta,
-    longitudeDelta: delta,
-  };
+  const region = mapRegion(lat, lng, delta);
+  const recordMarkerPress =
+    interactive && onPressPoint
+      ? () => {
+          lastMarkerPressAt.current = Date.now();
+        }
+      : undefined;
 
   return (
     <View
@@ -96,6 +119,7 @@ export function AppMap({
       accessibilityLabel={interactive ? undefined : accessibilityLabel}
     >
       <MapView
+        ref={mapRef}
         style={[
           styles.map,
           size === 'active' ? styles.activeMap : styles.miniMap,
@@ -112,36 +136,103 @@ export function AppMap({
         toolbarEnabled={false}
         pointerEvents={interactive ? 'auto' : 'none'}
         accessibilityLabel={interactive ? accessibilityLabel : undefined}
+        onRegionChangeComplete={
+          interactive
+            ? ({ latitudeDelta, longitudeDelta }) => {
+                if (
+                  Number.isFinite(latitudeDelta) &&
+                  latitudeDelta > 0 &&
+                  Number.isFinite(longitudeDelta) &&
+                  longitudeDelta > 0
+                )
+                  liveDelta.current = {
+                    lat: latitudeDelta,
+                    lng: longitudeDelta,
+                  };
+              }
+            : undefined
+        }
+        onMarkerPress={recordMarkerPress}
+        onPress={
+          interactive && onPressPoint
+            ? event => {
+                if (
+                  event?.nativeEvent?.action === 'marker-press' ||
+                  Date.now() - lastMarkerPressAt.current < 300
+                )
+                  return;
+                // shortcut: Use a region-relative hit area until iOS Fabric identifies pin taps.
+                forwardPoint(event?.nativeEvent?.coordinate, point => {
+                  const view = liveDelta.current;
+                  if (
+                    !pins?.some(
+                      ({ point: pin }) =>
+                        Math.abs(point.lat - pin.lat) <= view.lat * 0.08 &&
+                        Math.abs(point.lng - pin.lng) <= view.lng * 0.08,
+                    )
+                  )
+                    onPressPoint(point);
+                });
+              }
+            : undefined
+        }
       >
-        {pins?.map(({ id, point, title, kind }) => {
-          const coordinate = { latitude: point.lat, longitude: point.lng };
-          return kind ? (
+        {pins?.map(({ id, point, title, kind, onDragEnd }) => {
+          const draggable = interactive && onDragEnd !== undefined;
+          return (
             <Marker
-              key={`${id}:${dark ? 'dark' : 'light'}`}
-              coordinate={coordinate}
+              key={kind ? `${id}:${dark ? 'dark' : 'light'}` : id}
+              coordinate={{ latitude: point.lat, longitude: point.lng }}
               title={title}
-              anchor={PIN_ANCHOR}
+              anchor={kind ? PIN_ANCHOR : undefined}
+              pinColor={kind ? undefined : colors.primary}
+              draggable={draggable || undefined}
+              onPress={
+                recordMarkerPress
+                  ? event => {
+                      recordMarkerPress();
+                      event?.stopPropagation?.();
+                    }
+                  : undefined
+              }
+              onDragEnd={
+                interactive && onDragEnd
+                  ? event =>
+                      forwardPoint(event?.nativeEvent?.coordinate, onDragEnd)
+                  : undefined
+              }
             >
-              <View style={[styles.pinBadge, styles[`pinBadge_${kind}`]]}>
-                <Image
-                  accessible={false}
-                  source={PIN_ICONS[kind]}
-                  style={[styles.pinIcon, styles[`pinIcon_${kind}`]]}
-                />
-              </View>
+              {kind && (
+                <View style={[styles.pinBadge, styles[`pinBadge_${kind}`]]}>
+                  <Image
+                    accessible={false}
+                    source={PIN_ICONS[kind]}
+                    style={[styles.pinIcon, styles[`pinIcon_${kind}`]]}
+                  />
+                </View>
+              )}
             </Marker>
-          ) : (
-            <Marker
-              key={id}
-              coordinate={coordinate}
-              title={title}
-              pinColor={colors.primary}
-            />
           );
         })}
       </MapView>
     </View>
   );
+}
+
+function mapRegion(latitude: number, longitude: number, delta: number) {
+  return { latitude, longitude, latitudeDelta: delta, longitudeDelta: delta };
+}
+
+function forwardPoint(
+  coordinate: LatLng | undefined,
+  onPoint: (point: Point) => void,
+) {
+  if (
+    coordinate &&
+    Number.isFinite(coordinate.latitude) &&
+    Number.isFinite(coordinate.longitude)
+  )
+    onPoint({ lat: coordinate.latitude, lng: coordinate.longitude });
 }
 
 const useStyles = makeStyles(t => ({

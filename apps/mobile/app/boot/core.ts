@@ -512,9 +512,9 @@ export function createCore({
       ),
 
     // Time-bound decisions: straight to the server, the caller shows the result or the error now
-    book: (quoteId: string) =>
+    book: (quoteId: string, key?: string) =>
       command(
-        () => api.book(quoteId),
+        () => api.book(quoteId, key),
         ride => activeRide.getState().applyRide(ride, 'rider'),
       ),
     cancel: (rideId: string, reason: CancelReason) =>

@@ -18,6 +18,7 @@ import DriverApplyContainer from '../screens/DriverApply/DriverApplyContainer';
 import LoginContainer from '../screens/Login/LoginContainer';
 import OtpContainer from '../screens/Otp/OtpContainer';
 import type { DriverStatusActions } from '../screens/DriverStatus/DriverStatusContainer';
+import type { RiderBookingActions } from '../screens/RiderBooking/RiderBookingContainer';
 import RouteMessageContainer from '../screens/RouteMessage/RouteMessageContainer';
 import RouteMessageScreen from '../screens/RouteMessage/RouteMessageScreen';
 import { type RootStackParams, Stack } from './index';
@@ -29,6 +30,7 @@ type Props = Pick<
   DriverStatusActions,
   'requestLocationPermission' | 'refreshLocationPermission'
 > & {
+  getCurrentLocation: RiderBookingActions['getCurrentLocation'];
   core: PinActions &
     Pick<
       Core,
@@ -38,6 +40,7 @@ type Props = Pick<
       | 'decline'
       | 'step'
       | 'cancel'
+      | 'book'
     > & {
       queue: Pick<Core['queue'], 'pending'> &
         Partial<Pick<Core['queue'], 'subscribeSteps'>>;
@@ -51,7 +54,7 @@ type Props = Pick<
         | 'connection'
         | 'activeRide'
       >;
-      api: Pick<Core['api'], 'requestOtp'>;
+      api: Pick<Core['api'], 'requestOtp' | 'quote'>;
       signIn: Core['signIn'];
       becomeDriver: Core['becomeDriver'];
     };
@@ -61,6 +64,7 @@ type Props = Pick<
 
 export function RootNavigator({
   core,
+  getCurrentLocation,
   requestLocationPermission,
   refreshLocationPermission,
   debug,
@@ -189,6 +193,14 @@ export function RootNavigator({
               {({ navigation }) => (
                 <RoleTabs
                   role={route}
+                  riderBooking={{
+                    activeRide: core.stores.activeRide,
+                    appConfig: core.stores.appConfig,
+                    connection: core.stores.connection,
+                    quote: core.api.quote,
+                    book: core.book,
+                    getCurrentLocation,
+                  }}
                   driverStatus={{
                     driverMode: core.stores.driverMode,
                     connection: core.stores.connection,

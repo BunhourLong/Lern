@@ -1,5 +1,6 @@
 import {
   type DriverProfile,
+  IDEMPOTENCY_KEY_HEADER,
   OFFER_UPDATED_EVENT,
   RIDE_UPDATED_EVENT,
 } from '@lern/contracts';
@@ -1176,6 +1177,25 @@ describe('session cache', () => {
 
     expect(core.stores.driverMode.getState().verification).toBe('verified');
   });
+});
+
+it('forwards a booking retry key in the POST /rides header', async () => {
+  const s = server(
+    routes({
+      'POST /rides': () => ({ status: 201, body: ride('searching', 1) }),
+    }),
+  );
+  const core = createCore(deps(s, fakeIo(), pair.refreshToken));
+  await core.boot();
+  const key = '00000000-0000-4000-8000-0000000000bb';
+  await core.book('00000000-0000-4000-8000-0000000000aa', key);
+  expect(s.fetch).toHaveBeenCalledWith(
+    'http://api.test/rides',
+    expect.objectContaining({
+      method: 'POST',
+      headers: expect.objectContaining({ [IDEMPOTENCY_KEY_HEADER]: key }),
+    }),
+  );
 });
 
 it('drops a command answer that arrives after sign-out, so the next user never sees it', async () => {

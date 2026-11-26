@@ -52,6 +52,10 @@ function setup(
   const driverMode = createDriverModeStore();
   driverMode.setState({ verification: 'pending' });
   const connection = createConnectionStore();
+  const getCurrentLocation = jest.fn(async () => ({
+    status: 'ok' as const,
+    point: { lat: 11.57, lng: 104.93 },
+  }));
   const requestLocationPermission = jest.fn(async () => 'always' as const);
   const notification = createStore<NotificationTarget | null>()(() => null);
   const requestOtp = jest
@@ -73,7 +77,8 @@ function setup(
       connection,
       activeRide: createActiveRideStore(),
     },
-    api: { requestOtp },
+    api: { requestOtp, quote: jest.fn() },
+    book: jest.fn(),
     setOnline: jest.fn(),
     refreshAvailability: jest.fn(),
     accept: jest.fn(),
@@ -102,6 +107,7 @@ function setup(
       core={core}
       foreground={foreground}
       debug={debug}
+      getCurrentLocation={getCurrentLocation}
       requestLocationPermission={requestLocationPermission}
       refreshLocationPermission={jest.fn()}
     />
@@ -114,6 +120,7 @@ function setup(
     appConfig,
     notification,
     navigator,
+    getCurrentLocation,
     requestOtp,
     requestLocationPermission,
     signIn,
@@ -135,6 +142,53 @@ test('wires the driver Home toggle to the injected permission and core action', 
 
   expect(requestLocationPermission).toHaveBeenCalledTimes(1);
   expect(core.setOnline).toHaveBeenCalledWith(true);
+});
+
+test('wires rider Home GPS, quote and booking to their injected actions', async () => {
+  const { core, session, appConfig, navigator, getCurrentLocation } = setup();
+  const pickup = { lat: 11.57, lng: 104.93 };
+  const dropoff = { lat: 11.5696, lng: 104.9211 };
+  const fare = { amountMinor: 5000, currency: 'KHR' } as const;
+  core.api.quote.mockResolvedValue({
+    id: 'quote-1',
+    vehicleType: 'moto',
+    distanceM: 1850,
+    fare,
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+  });
+  core.book.mockImplementation(async () => {
+    core.stores.activeRide.getState().applyRide(
+      {
+        id: 'ride-1',
+        status: 'searching',
+        version: 1,
+        vehicleType: 'moto',
+        pickup,
+        dropoff,
+        fare,
+      },
+      'rider',
+    );
+  });
+  session.getState().signedIn(me('rider'));
+  appConfig.getState().setGate({ status: 'ok' });
+  core.stores.connection.getState().setConnected(true);
+  await render(navigator);
+
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Use current location' }),
+  );
+  expect(getCurrentLocation).toHaveBeenCalledTimes(1);
+  await fireEvent.press(screen.getByRole('button', { name: 'Central Market' }));
+  await fireEvent.press(screen.getByRole('button', { name: 'Get fare quote' }));
+  expect(core.api.quote).toHaveBeenCalledWith({
+    pickup,
+    dropoff,
+    vehicleType: 'moto',
+  });
+  await fireEvent.press(screen.getByRole('button', { name: 'Book ride' }));
+  expect(core.book).toHaveBeenCalledWith('quote-1', expect.any(String));
+  expect(screen.getByText('Looking for a driver')).toBeOnTheScreen();
 });
 
 test('wires the driver Home offer and its actions to core', async () => {

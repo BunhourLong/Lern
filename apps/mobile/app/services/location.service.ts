@@ -1,4 +1,4 @@
-import type { LocationPoint } from '@lern/contracts';
+import type { LocationPoint, Point } from '@lern/contracts';
 import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
 import { Platform } from 'react-native';
@@ -14,6 +14,41 @@ import {
 
 export const LOCATION_TASK = 'lern.driver-location';
 export type Permission = 'always' | 'foreground' | 'denied';
+
+export type CurrentLocationResult =
+  | { status: 'ok'; point: Point }
+  | { status: 'denied' }
+  | { status: 'unavailable' };
+
+export async function getCurrentLocation(
+  timeoutMs = 10_000,
+): Promise<CurrentLocationResult> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const foreground = await Location.requestForegroundPermissionsAsync();
+    if (!foreground.granted) return { status: 'denied' };
+    const fix = await Promise.race([
+      Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Balanced,
+      }),
+      new Promise<undefined>(resolve => {
+        timer = setTimeout(() => resolve(undefined), timeoutMs);
+      }),
+    ]);
+    if (!fix) return { status: 'unavailable' };
+    const { coords } = fix;
+    if (Number.isFinite(coords.latitude) && Number.isFinite(coords.longitude))
+      return {
+        status: 'ok',
+        point: { lat: coords.latitude, lng: coords.longitude },
+      };
+  } catch {
+    return { status: 'unavailable' };
+  } finally {
+    clearTimeout(timer);
+  }
+  return { status: 'unavailable' };
+}
 
 // Android needs only foreground permission for its foreground service. iOS needs Always to track in the background.
 export async function getLocationPermission(

@@ -45,7 +45,8 @@ function renderRiderTabs(debug: ReactNode = null) {
           activeRide: createActiveRideStore(),
           security: createSecurityStore(),
         },
-        api: { requestOtp: jest.fn() },
+        api: { requestOtp: jest.fn(), quote: jest.fn() },
+        book: jest.fn(),
         signIn: jest.fn(),
         setOnline: jest.fn(),
         refreshAvailability: jest.fn(),
@@ -65,6 +66,7 @@ function renderRiderTabs(debug: ReactNode = null) {
         pinWaitMs: () => 0,
       }}
       requestLocationPermission={jest.fn()}
+      getCurrentLocation={jest.fn()}
       refreshLocationPermission={jest.fn()}
       debug={debug}
     />,

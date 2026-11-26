@@ -4,6 +4,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { useStore } from 'zustand';
 import {
   core,
+  getCurrentLocation,
   refreshLocationPermission,
   requestLocationPermission,
   startApp,
@@ -32,6 +33,7 @@ function App({
               <RootNavigator
                 foreground={foreground}
                 core={core}
+                getCurrentLocation={getCurrentLocation}
                 requestLocationPermission={requestLocationPermission}
                 refreshLocationPermission={refreshLocationPermission}
                 debug={__DEV__ ? <DebugContainer core={core} /> : null}

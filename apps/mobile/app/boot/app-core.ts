@@ -40,6 +40,7 @@ export const core = createCore({
   appVersion: '1.0',
 });
 
+export { getCurrentLocation } from '../services/location.service';
 export const requestLocationPermission = () => getLocationPermission('request');
 
 function applyLocationPermission(locationPermission: Permission | 'failed') {

@@ -42,6 +42,8 @@ jest.mock('../app/boot/app-core', () => {
       decline: jest.fn(),
       step: jest.fn(),
       cancel: jest.fn(),
+      api: { requestOtp: jest.fn(), quote: jest.fn() },
+      book: jest.fn(),
       queue: {
         pending: () => ({ steps: [], points: 0 }),
         subscribeSteps: () => () => {},
@@ -67,6 +69,7 @@ jest.mock('../app/boot/app-core', () => {
       },
     },
     requestLocationPermission: jest.fn(),
+    getCurrentLocation: jest.fn(),
     refreshLocationPermission: jest.fn(),
     startApp: jest.fn(),
   };
