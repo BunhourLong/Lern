@@ -67,4 +67,22 @@ ignore:
           this entry), or if anyone develops on Windows or WSL (then fix before running Metro there).
         expires: 2027-02-14T00:00:00.000Z
         created: 2026-11-16T00:00:00.000Z
+  SNYK-RUBY-ACTIVESUPPORT-22839999:
+    - '*':
+        reason: >-
+          WHAT: activesupport <8.0.5.2 (CVE-2026-126080, GHSA-8474-xrp6-wh69, High,
+          Executable Regular Expression Error).
+          NO COMPATIBLE FIX: 7.2.4 is the newest 7.x release and Snyk lists 8.0.5.2 as the
+          first fixed version. All cocoapods-core releases through the latest (1.17.0) require
+          activesupport (>= 5.0, < 8), so Bundler cannot install 8.0.5.2 alongside CocoaPods.
+          HOW IT REACHES US: apps/mobile/Gemfile.lock locks activesupport@7.2.4 directly and
+          through cocoapods@1.15.2 > cocoapods-core@1.15.2 > activesupport@7.2.4. This
+          Gemfile.lock is for mobile iOS only. CocoaPods is build-time tooling that runs on
+          developer Macs during pod install and is never bundled in the mobile app or API.
+          EXPLOITABILITY: the repo has no Rails or Action Cable runtime, and no untrusted
+          input reaches activesupport.
+          REVISIT: at expiry, or sooner if CocoaPods supports activesupport 8.x or a fixed
+          7.2.x backport ships.
+        expires: 2027-02-23T00:00:00.000Z
+        created: 2026-11-25T00:00:00.000Z
 patch: {}

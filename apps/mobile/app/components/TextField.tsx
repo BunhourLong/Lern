@@ -9,16 +9,35 @@ import {
   type,
   useTheme,
 } from '@theme';
+import { useInteraction } from '../hooks/use-interaction';
 import { Text } from './Text';
 
 export function TextField({
   label,
   error,
+  prefix,
   accessibilityHint,
   ...props
-}: Omit<TextInputProps, 'style'> & { label: string; error?: string }) {
+}: Omit<TextInputProps, 'style'> & {
+  label: string;
+  error?: string;
+  prefix?: string;
+}) {
   const { colors } = useTheme();
+  const interact = useInteraction();
   const styles = useStyles();
+  const input = (
+    <TextInput
+      {...props}
+      onChangeText={value => {
+        if (interact()) props.onChangeText?.(value);
+      }}
+      accessibilityLabel={label}
+      accessibilityHint={error || accessibilityHint}
+      placeholderTextColor={colors.textMuted}
+      style={[styles.input, !!error && styles.invalid, !!prefix && styles.grow]}
+    />
+  );
 
   return (
     <View style={styles.field}>
@@ -29,13 +48,14 @@ export function TextField({
       >
         {label}
       </Text>
-      <TextInput
-        {...props}
-        accessibilityLabel={label}
-        accessibilityHint={error || accessibilityHint}
-        placeholderTextColor={colors.textMuted}
-        style={[styles.input, !!error && styles.invalid]}
-      />
+      {prefix ? (
+        <View style={styles.inputRow}>
+          <Text role="bodyStrong">{prefix}</Text>
+          {input}
+        </View>
+      ) : (
+        input
+      )}
       {error ? (
         <Text tone="danger" accessibilityLiveRegion="polite">
           {error}
@@ -47,6 +67,8 @@ export function TextField({
 
 const useStyles = makeStyles(t => ({
   field: { gap: spacing.xs },
+  inputRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  grow: { flex: 1 },
   input: {
     ...type.body,
     color: t.colors.text,

@@ -7,6 +7,7 @@ import { DataSource } from 'typeorm';
 import { EtaProvider } from '../src/matching/eta.provider';
 import { MatchingRepository } from '../src/matching/matching.repository';
 import { MatchingService } from '../src/matching/matching.service';
+import { RidesRepository } from '../src/rides/rides.repository';
 import { type Actor, bootApp, signIn } from './support/actors';
 import { violations } from './support/invariants';
 import { isolatedDatabase } from './support/isolated-database';
@@ -371,6 +372,55 @@ it("a driver released between sync's candidate read and its lock is missed, as t
   expect(new Set(expectations(model, pair).map((e) => JSON.stringify(e.state)))).toEqual(
     new Set([offered(2, 1), offered(1, 2), offered(1, 0)]),
   );
+});
+
+// CI seed -1853268774: a driver's move runs its guarded UPDATE, then on a miss reads the ride in a separate
+// READ COMMITTED statement, so an accept committing in between makes the driver a participant: 409, not 404
+it('a driver move that misses just before an accept commits answers 409, as the model says', async () => {
+  await reset();
+  const rideIds = new Map<string, string>();
+  const model = initialModel();
+  for (const c of [
+    { kind: 'book', rider: 0, token: 'X' },
+    { kind: 'sync', ride: 'X' },
+  ] satisfies Command[]) {
+    expect(await run(c, rideIds)).toEqual(apply(model, c));
+  }
+  const repo = app.get(RidesRepository);
+  const real = repo.findForParticipant.bind(repo);
+  let reached!: () => void;
+  const reachedP = new Promise<void>((r) => (reached = r));
+  let open!: () => void;
+  const gate = new Promise<void>((r) => (open = r));
+  const spy = jest.spyOn(repo, 'findForParticipant').mockImplementationOnce(async (...args) => {
+    reached();
+    await gate; // the arrive's UPDATE has missed (no driver yet) while the accept commits
+    return real(...args);
+  });
+  const accept: Command = { kind: 'accept', offer: { ride: 'X', driver: 0 }, by: 0 };
+  const arrive: Command = { kind: 'step', ride: 'X', action: 'arrive', by: 0 };
+  const stepped = attempt(arrive, rideIds);
+  let accepted: Outcome;
+  try {
+    // An arrive that answered without the read would leave the one-shot gate to the accept, which would then hang
+    expect(await Promise.race([reachedP.then(() => 'reached'), stepped.then(() => 'returned')])).toBe('reached');
+    accepted = await run(accept, rideIds);
+  } finally {
+    open();
+    await stepped;
+    spy.mockRestore();
+  }
+  const outcome = [accepted, await stepped];
+  const state = await observed(rideIds);
+  expect({ outcome, state }).toEqual({
+    outcome: [200, 409],
+    state: { rides: [['X', 'driver_assigned', 0]], offers: [['X', 0, 'accepted']], drivers: ['on_trip', 'available', 'available'] },
+  });
+  expect(await violations(db())).toEqual([]);
+  const seen = (pair: Command) => expectations(model, pair).map((e) => ({ outcome: e.outcome, state: e.state }));
+  expect(seen({ kind: 'pair', a: accept, b: arrive })).toContainEqual({ outcome, state });
+  // A driver's cancel goes through the same two statements
+  expect(seen({ kind: 'pair', a: accept, b: { kind: 'cancel', ride: 'X', by: { driver: 0 } } })).toContainEqual({ outcome, state });
 });
 
 it('interleaves two step lists in every order that keeps each list in its own order', () => {

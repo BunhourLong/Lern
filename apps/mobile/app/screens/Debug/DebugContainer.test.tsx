@@ -11,6 +11,7 @@ import { createDriverModeStore } from '../../stores/driver-mode.store';
 import { createLanguageStore } from '../../stores/language.store';
 import { createRawEventsStore } from '../../stores/raw-events.store';
 import { createSessionStore } from '../../stores/session.store';
+import { InteractionContext } from '../../hooks/use-interaction';
 import DebugContainer from './DebugContainer';
 
 jest.mock('expo-glass-effect', () => ({
@@ -99,6 +100,15 @@ it('marks the current language choice as selected', async () => {
   expect(screen.getByRole('button', { name: 'Phone' })).not.toBeSelected();
 });
 
+it('shows all three sync status pill samples', async () => {
+  const { core } = stub();
+  await renderScreen(<DebugContainer core={core as unknown as Props['core']} />);
+
+  for (const name of ['Offline', 'Reconnecting…', 'Connected']) {
+    expect(screen.getByRole('alert', { name })).toBeOnTheScreen();
+  }
+});
+
 it('shows store changes and raw events live', () => {
   const { core, stores } = stub();
   const r = render(core);
@@ -141,4 +151,17 @@ it('logs a rejected command as an error entry instead of throwing', async () => 
     event: 'error',
     payload: 'Error: nope',
   });
+});
+
+it('ignores an expired accessible action or keyboard edit in Debug', async () => {
+  const { core } = stub();
+  await renderScreen(
+    <InteractionContext.Provider value={() => false}>
+      <DebugContainer core={core as unknown as Props['core']} />
+    </InteractionContext.Provider>,
+  );
+  await fireEvent.changeText(screen.getByLabelText('Phone'), '+85598765432');
+  expect(screen.getByLabelText('Phone').props.value).toBe('+85512345678');
+  await fireEvent.press(screen.getByRole('button', { name: 'Go online' }));
+  expect(core.setOnline).not.toHaveBeenCalled();
 });

@@ -37,13 +37,19 @@ const pairs = [
     })),
   ),
   { foreground: 'onPrimary', background: 'primary', minimum: 4.5 },
-  ...(['primary', 'danger', 'success', 'warning', 'border'] as const).flatMap(
-    foreground =>
-      (['background', 'surface', 'surfaceGlass'] as const).map(background => ({
-        foreground,
-        background,
-        minimum: foreground === 'border' ? 3 : 4.5,
-      })),
+  ...(['danger', 'warning', 'success'] as const).map(background => ({
+    foreground: 'onStatus' as const,
+    background,
+    minimum: 4.5,
+  })),
+  ...(
+    ['primary', 'danger', 'success', 'warning', 'border', 'brand'] as const
+  ).flatMap(foreground =>
+    (['background', 'surface', 'surfaceGlass'] as const).map(background => ({
+      foreground,
+      background,
+      minimum: foreground === 'border' || foreground === 'brand' ? 3 : 4.5,
+    })),
   ),
 ] as const;
 
@@ -99,8 +105,43 @@ test('contrast is 21 for black and white and 1 for equal colors', () => {
 });
 
 test.each(Object.entries(themes))(
+  '%s vehicle option text, selected and unselected outlines stay readable while pressed',
+  (_scheme, colors) => {
+    const surface = pressed(colors.surface);
+    for (const text of [colors.text, colors.textMuted, colors.primary]) {
+      expect(
+        contrast(pressed(text), surface, colors.background),
+      ).toBeGreaterThanOrEqual(4.5);
+    }
+    for (const outline of [colors.border, colors.primary]) {
+      expect(
+        contrast(pressed(outline), surface, colors.background),
+      ).toBeGreaterThanOrEqual(3);
+      expect(
+        contrast(pressed(outline), colors.background, colors.background),
+      ).toBeGreaterThanOrEqual(3);
+    }
+  },
+);
+
+test.each(Object.entries(themes))(
   '%s text on surfaceGlass over primary',
   (_scheme, { text, surfaceGlass, primary }) => {
     expect(contrast(text, surfaceGlass, primary)).toBeGreaterThanOrEqual(4.5);
+  },
+);
+
+test.each(Object.entries(themes))(
+  '%s map pin icons and outlines contrast with their badge backgrounds',
+  (_scheme, colors) => {
+    const badges = [
+      [colors.primary, colors.onPrimary, colors.surface],
+      [colors.surface, colors.primary, colors.primary],
+      [colors.danger, colors.onStatus, colors.surface],
+    ];
+    for (const [background, icon, border] of badges) {
+      expect(contrast(icon, background)).toBeGreaterThanOrEqual(3);
+      expect(contrast(border, background)).toBeGreaterThanOrEqual(3);
+    }
   },
 );

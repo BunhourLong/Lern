@@ -31,7 +31,7 @@ it('tracks while the server says the driver is online, and stops when offline or
   await set(null); // signed out
   await set('available');
   expect(calls).toEqual(['stop', 'start', 'stop', 'start']); // the first stop: boot cleanup
-  expect(onPermission).toHaveBeenCalledWith('always');
+  expect(onPermission).toHaveBeenCalledWith('always', true);
 
   unfollow();
   await set('offline');
@@ -100,4 +100,29 @@ it('still stops for a later offline when an older start fails after newer change
   store.getState().setAvailability('offline'); // must stop what B started
   await settle();
   expect(calls.slice(-2)).toEqual(['start', 'stop']);
+});
+
+it('reports a start that resolves after unfollow as stale', async () => {
+  const store = createDriverModeStore();
+  let deny!: () => void;
+  const location = {
+    start: jest.fn(
+      () =>
+        new Promise<'denied'>(resolve => {
+          deny = () => resolve('denied');
+        }),
+    ),
+    stop: jest.fn(async () => undefined),
+  };
+  const onStart = jest.fn();
+  const unfollow = followAvailability(store, location, onStart);
+  store.getState().setAvailability('available');
+  await settle();
+  expect(location.start).toHaveBeenCalledTimes(1);
+
+  unfollow();
+  deny();
+  await settle();
+
+  expect(onStart).toHaveBeenCalledWith('denied', false);
 });

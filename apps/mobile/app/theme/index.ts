@@ -2,6 +2,7 @@ import { StyleSheet, useColorScheme } from 'react-native';
 import { fonts } from './fonts';
 
 export { fonts } from './fonts';
+export { darkMapStyle, type MapStyleRule } from './map-style';
 
 export type Colors = {
   background: string;
@@ -15,6 +16,8 @@ export type Colors = {
   danger: string;
   success: string;
   warning: string;
+  onStatus: string;
+  brand: string;
 };
 
 export const themes = {
@@ -24,12 +27,14 @@ export const themes = {
     surfaceGlass: 'rgba(255, 255, 255, 0.78)',
     text: '#191919',
     textMuted: '#555555',
-    primary: '#354EAC',
+    primary: '#1B7339',
     onPrimary: '#FFFFFF',
     border: '#7C7C7C',
     danger: '#AB3030',
     success: '#276344',
     warning: '#80510A',
+    onStatus: '#FFFFFF',
+    brand: '#191919',
   },
   dark: {
     background: '#171717',
@@ -37,21 +42,30 @@ export const themes = {
     surfaceGlass: 'rgba(34, 34, 34, 0.78)',
     text: '#F5F5F5',
     textMuted: '#B3B3B3',
-    primary: '#A6B7FF',
+    primary: '#89F597',
     onPrimary: '#171717',
     border: '#737373',
     danger: '#FF9292',
     success: '#82D5A3',
     warning: '#F5C16C',
+    onStatus: '#171717',
+    brand: '#89F597',
   },
 } satisfies Record<'light' | 'dark', Colors>;
 
 export const spacing = { xs: 4, sm: 8, md: 16, lg: 24, xl: 32 } as const;
 export const radius = { sm: 8, md: 12, lg: 20, pill: 999 } as const;
 export const touch = { min: 44 } as const;
+export const iconSize = 24;
+export const logoSize = 120;
 export const opacity = { pressed: 0.92, disabled: 0.5 } as const;
 export const outlineWidth = 1;
 export const bannerEdgeWidth = 4;
+export const syncStatusMaxWidth = 320;
+export const mapHeight = { mini: 160, active: 240 } as const;
+export const mapPinSize = 36;
+export const mapPinIconSize = 20;
+export const mapPinBorderWidth = 2;
 
 export const type = {
   title: { fontSize: 24, lineHeight: 36, fontFamily: fonts.bold },

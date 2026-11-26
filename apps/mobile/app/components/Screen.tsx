@@ -36,5 +36,5 @@ export function Screen({
 const useStyles = makeStyles(t => ({
   screen: { flex: 1, backgroundColor: t.colors.background },
   fill: { flex: 1 },
-  content: { padding: spacing.md },
+  content: { flexGrow: 1, padding: spacing.md },
 }));

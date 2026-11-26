@@ -1,10 +1,18 @@
 import {
+  type ActiveRides,
+  type ApplyDriver,
   type CancelReason,
+  type DriverVerification,
+  driverVerificationSchema,
   type LocationPoint,
   type Me,
+  meSchema,
+  type PushData,
+  type Ride,
   rideSchema,
 } from '@lern/contracts';
 import type { io } from 'socket.io-client';
+import { createStore } from 'zustand/vanilla';
 import { ApiError, createApi } from '../services/api.service';
 import {
   createOfflineQueue,
@@ -26,6 +34,11 @@ import { createLanguageStore } from '../stores/language.store';
 import { createRawEventsStore } from '../stores/raw-events.store';
 import { createSecurityStore } from '../stores/security.store';
 import { createSessionStore } from '../stores/session.store';
+import { keepRide } from '../utils/ordering';
+
+export type NotificationTarget =
+  | { type: 'offer'; id: string }
+  | { type: 'ride'; id: string; status: Ride['status'] };
 
 export type CoreDeps = {
   baseUrl: string;
@@ -44,6 +57,25 @@ export type CoreDeps = {
 
 // MMKV (kv) is wiped on uninstall, the iOS Keychain is not: its absence marks a new install.
 const INSTALL_FLAG = 'install';
+const SESSION_CACHE_KEY = 'session-cache.v1';
+
+function readCachedSession(kv: KeyValueStore) {
+  try {
+    const cached = JSON.parse(kv.get(SESSION_CACHE_KEY) ?? 'null') as {
+      me?: unknown;
+      verification?: unknown;
+    } | null;
+    const me = meSchema.safeParse(cached?.me);
+    const verification = driverVerificationSchema
+      .nullable()
+      .safeParse(cached?.verification);
+    if (me.success && verification.success)
+      return { me: me.data, verification: verification.data };
+  } catch {
+    // A partial or corrupt cache is discarded below.
+  }
+  kv.remove(SESSION_CACHE_KEY);
+}
 
 const wait = (ms: number) =>
   new Promise<void>(resolve => setTimeout(resolve, ms));
@@ -70,6 +102,7 @@ export function createCore({
 }: CoreDeps) {
   const session = createSessionStore();
   const activeRide = createActiveRideStore();
+  const notification = createStore<NotificationTarget | null>()(() => null);
   const driverMode = createDriverModeStore();
   const rawEvents = createRawEventsStore();
   const appConfig = createAppConfigStore();
@@ -83,29 +116,53 @@ export function createCore({
     elapsed,
   });
   let socket: RealtimeSocket | undefined;
+  let verifiedPhone: string | undefined;
+  let usingCachedSession = false;
+  let pendingTap: PushData | undefined;
+  let tapVersion = 0;
   // Bumped on sign-out: an answer to a request sent before it must not land in the next user's stores
   let epoch = 0;
+  let pinAttempt = 0;
   const live = () => {
     const started = epoch;
     return () => started === epoch;
   };
 
+  function clearTap() {
+    tapVersion++;
+    pendingTap = undefined;
+    notification.setState(null, true);
+  }
+
   const forget = () => {
     epoch++;
+    clearTap();
     socket?.close();
     socket = undefined;
     connection.getState().setConnected(false); // close() fires disconnect only while connected; reset here so sign-out never relies on it
     push.stop();
     queue.clear();
-    activeRide.getState().reset();
-    driverMode.getState().setAvailability(null);
+    driverMode.setState({
+      availability: null,
+      verification: null,
+      locationPermission: null,
+      position: null,
+    });
     rawEvents.getState().reset(); // the next user on this phone must not see the last one's rides
     session.getState().signedOut();
+    activeRide.getState().reset(); // Clear the session first so resetting the ride does not read the profile.
     // The PIN belongs to who was signed in; a Keychain that refuses to clear keeps it until the next sign-out
-    pinLock.clear().catch(() => undefined);
     security.getState().update({ enabled: false, locked: false, waitMs: 0 });
+    return pinLock.clear();
   };
-  const api = createApi({ baseUrl, fetch, refreshToken, onSignedOut: forget });
+  const api = createApi({
+    baseUrl,
+    fetch,
+    refreshToken,
+    onSignedOut: () => {
+      forget().catch(() => undefined);
+    },
+  });
   const queue = createOfflineQueue({
     store: kv,
     api,
@@ -126,7 +183,70 @@ export function createCore({
     onWake: () => {
       resync();
     },
+    onOpen: tap => {
+      clearTap();
+      pendingTap = tap;
+      openPendingTap();
+    },
   });
+
+  function openPendingTap() {
+    const { status, me } = session.getState();
+    const { gate } = appConfig.getState();
+    if (status === 'signed_out' || (gate && gate.status !== 'ok')) {
+      clearTap();
+      return;
+    }
+    if (usingCachedSession || !me || gate?.status !== 'ok' || !pendingTap) return;
+    const tap = pendingTap;
+    const version = tapVersion;
+    pendingTap = undefined;
+    openTap(tap, me, () => version === tapVersion);
+  }
+
+  session.subscribe((next, previous) => {
+    if (next.status === 'signed_out') {
+      usingCachedSession = false;
+      kv.remove(SESSION_CACHE_KEY);
+    }
+    if (previous.me && previous.me.id !== next.me?.id) clearTap();
+    openPendingTap();
+  });
+  appConfig.subscribe(openPendingTap);
+
+  function cacheSession(me: Me, verification: DriverVerification | null) {
+    kv.set(SESSION_CACHE_KEY, JSON.stringify({ me, verification }));
+  }
+
+  async function openTap(tap: PushData, user: Me, current: () => boolean) {
+    const snapshot = await resync(current);
+    if (!snapshot || !current()) return;
+
+    if (tap.type === 'offer') {
+      const { offer } = activeRide.getState();
+      if (
+        user.roles.includes('driver') &&
+        snapshot.offer?.id === tap.offerId &&
+        offer?.id === tap.offerId &&
+        offer.rideId === tap.rideId &&
+        offer.status === 'pending'
+      )
+        notification.setState({ type: 'offer', id: offer.id }, true);
+      return;
+    }
+
+    const match = ({ rider, driver }: Pick<ActiveRides, 'rider' | 'driver'>) =>
+      [rider, driver].find(ride => ride?.id === tap.rideId);
+    const ride =
+      match(snapshot) ?? (await api.ride(tap.rideId).catch(() => undefined));
+    if (!current() || ride?.id !== tap.rideId) return;
+    const latest = keepRide(match(activeRide.getState()) ?? null, ride);
+    if (latest.version >= Number(tap.seq))
+      notification.setState(
+        { type: 'ride', id: latest.id, status: latest.status },
+        true,
+      );
+  }
 
   // Started, never awaited: a slow or missing /app-config must not delay session restore, and any failure (offline,
   // a 5xx, a rejected body) is ok — never lock users out when the API is down
@@ -145,25 +265,80 @@ export function createCore({
   }
 
   // After every (re)connect: what was missed is not replayed, so read the snapshot, then send what waited
-  async function resync(): Promise<void> {
-    const current = live();
+  async function resync(current = live()): Promise<ActiveRides | undefined> {
+    let snapshot: ActiveRides | undefined;
     try {
-      const snapshot = await api.activeRide();
-      if (current()) activeRide.getState().applySnapshot(snapshot);
+      snapshot = await api.activeRide();
     } catch {
       // offline again or signed out; the next connect tries again
     }
-    if (current()) await queue.flush();
+    if (!current()) return;
+    if (snapshot) activeRide.getState().applySnapshot(snapshot);
+    await queue.flush();
+    return current() ? snapshot : undefined;
   }
 
+  let availabilityRequest = 0;
+  let availabilityWrite = 0;
+  async function refreshAvailability() {
+    const user = session.getState().me;
+    if (usingCachedSession || !user?.roles.includes('driver')) return;
+    const request = ++availabilityRequest;
+    const initialWrite = availabilityWrite;
+    try {
+      const profile = await api.profile();
+      if (request === availabilityRequest && session.getState().me === user) {
+        if (driverMode.getState().verification !== profile.verification)
+          cacheSession(user, profile.verification);
+        driverMode.setState(state => ({
+          // Keep availability from a newer toggle. Verification only comes from the profile.
+          availability:
+            initialWrite === availabilityWrite
+              ? profile.availability
+              : state.availability,
+          verification: profile.verification,
+        }));
+      }
+    } catch {
+      // Keep the last known driver status. The next resume or reconnect retries.
+    }
+  }
+
+  activeRide.subscribe((next, previous) => {
+    if (
+      next.offer?.id !== previous.offer?.id ||
+      next.offer?.status !== previous.offer?.status ||
+      next.driver?.id !== previous.driver?.id ||
+      next.driver?.status !== previous.driver?.status
+    )
+      refreshAvailability();
+  });
+
   async function start(user: Me): Promise<void> {
+    const previous = session.getState().me;
+    if (previous && previous.id !== user.id) {
+      // Queue cleanup behind any old PIN write before exposing the replacement account.
+      const cleared = forget();
+      const stillReplacing = live();
+      try {
+        await cleared;
+      } catch (err) {
+        if (stillReplacing()) await api.signOut();
+        throw err;
+      }
+      if (!stillReplacing()) return;
+    }
     const current = live();
-    const availability = user.roles.includes('driver')
-      ? (await api.profile()).availability
-      : null;
+    const profile = user.roles.includes('driver') ? await api.profile() : null;
     if (!current()) return;
+    const verification = profile?.verification ?? null;
+    cacheSession(user, verification);
+    usingCachedSession = false;
     session.getState().signedIn(user);
-    driverMode.getState().setAvailability(availability);
+    driverMode.setState({
+      availability: profile?.availability ?? null,
+      verification,
+    });
     socket?.close();
     socket = connectSocket({
       url: baseUrl,
@@ -175,6 +350,7 @@ export function createCore({
         onRaw: (event, payload) => rawEvents.getState().add(event, payload),
         onConnect: () => {
           connection.getState().setConnected(true);
+          refreshAvailability();
           resync();
           push.sync();
         },
@@ -211,6 +387,7 @@ export function createCore({
     stores: {
       session,
       activeRide,
+      notification,
       driverMode,
       rawEvents,
       appConfig,
@@ -220,9 +397,11 @@ export function createCore({
     },
     api,
     queue,
-    // App start: a stored refresh token becomes a session. Offline keeps the session 'restoring' (the token stays,
-    // the queue keeps filling) and tries again with backoff; only none or refused means sign in again.
+    refreshAvailability,
+    // App start: show the cached session while restoring with backoff. Without a cache, stay 'restoring'
+    // until the server responds. Only none or refused means sign in again.
     async boot(): Promise<void> {
+      push.listenForOpens();
       checkAppConfig();
       // A reinstall can still find the old token in the iOS Keychain: drop it before any restore attempt.
       // Clear first, then set the flag, so a crash in between checks again instead of keeping the stale token.
@@ -236,6 +415,12 @@ export function createCore({
       security
         .getState()
         .update({ enabled: locked, locked, waitMs: pinLock.waitMs() });
+      const cached = readCachedSession(kv);
+      if (cached) {
+        usingCachedSession = true;
+        driverMode.setState({ verification: cached.verification });
+        session.getState().signedIn(cached.me);
+      }
       const current = live();
       for (let delay = 1000; current(); delay = Math.min(delay * 2, 60_000)) {
         // A retry after /me failed keeps the access token it got: no second refresh rotation
@@ -243,12 +428,17 @@ export function createCore({
         if (restored === 'none' || restored === 'refused') {
           session.getState().signedOut();
           // A sign-out while offline couldn't delete the token: this is its next try (refused has just done it)
-          if (restored === 'none') push.stop();
+          if (restored === 'none') {
+            if (cached) driverMode.setState({ verification: null });
+            push.stop();
+          }
           return;
         }
         if (restored === 'ok') {
           try {
-            return await start(await api.me());
+            const user = await api.me();
+            if (current()) await start(user);
+            return;
           } catch (err) {
             if (!transient(err)) throw err;
           }
@@ -256,24 +446,59 @@ export function createCore({
         await sleep(delay);
       }
     },
+    stopListeningForPush(): void {
+      clearTap();
+      push.removeListeners();
+    },
     async signIn(phone: string, code: string): Promise<void> {
-      await api.verifyOtp(phone, code);
+      // Reuse an access token only for the phone whose OTP verification completed.
+      if (phone !== verifiedPhone || !api.accessToken()) {
+        verifiedPhone = undefined;
+        await api.verifyOtp(phone, code);
+        verifiedPhone = phone;
+      }
       await start(await api.me());
     },
     signOut: () => api.signOut(),
+    async becomeDriver(input: ApplyDriver): Promise<void> {
+      const current = live();
+      try {
+        await api.applyDriver(input);
+      } catch (err) {
+        if (!(err instanceof ApiError && err.status === 409)) throw err;
+      }
+      if (!current()) return;
+      const user = await api.me();
+      if (current()) await start(user);
+    },
 
     // Optional app lock: covers the screen only, the session stays valid behind it
+    pinWaitMs: pinLock.waitMs,
+    interruptPinCheck(): void {
+      pinAttempt++;
+    },
     lock(): void {
+      pinAttempt++;
       if (security.getState().enabled)
         security.getState().update({ locked: true });
     },
-    unlock: async (pinCode: string) =>
-      pinResult(await pinLock.check(pinCode), () =>
+    async unlock(pinCode: string): Promise<PinCheck> {
+      const current = live();
+      const user = session.getState().me?.id;
+      const attempt = ++pinAttempt;
+      const result = await pinLock.check(pinCode, security.getState().enabled);
+      if (!current() || session.getState().me?.id !== user)
+        return { ok: false, waitMs: 0 };
+      if (result.ok && attempt !== pinAttempt)
+        return { ok: false, waitMs: pinLock.waitMs() };
+      return pinResult(result, () =>
         security.getState().update({ locked: false, waitMs: 0 }),
-      ),
+      );
+    },
     async enableLock(pinCode: string): Promise<void> {
+      const current = live();
       await pinLock.enable(pinCode);
-      security.getState().update({ enabled: true });
+      if (current()) security.getState().update({ enabled: true });
     },
     disableLock: async (pinCode: string) =>
       pinResult(await pinLock.disable(pinCode), () =>
@@ -310,7 +535,10 @@ export function createCore({
     setOnline: (online: boolean) =>
       command(
         () => api.setAvailability(online),
-        a => driverMode.getState().setAvailability(a.availability),
+        a => {
+          availabilityWrite++;
+          driverMode.getState().setAvailability(a.availability);
+        },
       ),
     // Trip steps survive a dead zone: queued with their key, sent now if the network allows
     async step(rideId: string, action: QueuedStep['action']): Promise<void> {
@@ -321,7 +549,10 @@ export function createCore({
     // shortcut: points queued while the socket is up but its acks fail wait for the next connect or step to be
     // flushed (bounded by the queue's 2000-point cap); flush on a timer if that shows up in practice
     async reportPosition(point: LocationPoint): Promise<void> {
-      if (!(await socket?.sendLocation(point))) queue.enqueuePoint(point);
+      const current = live();
+      driverMode.getState().applyPosition(point);
+      if (!(await socket?.sendLocation(point)) && current())
+        queue.enqueuePoint(point);
     },
   };
 }

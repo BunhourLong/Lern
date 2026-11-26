@@ -13,9 +13,10 @@ import { Banner } from '../../components/Banner';
 import { Button as SampleButton } from '../../components/Button';
 import { GlassSurface } from '../../components/GlassSurface';
 import { ListRow } from '../../components/ListRow';
+import { SyncStatusPill } from '../../components/SyncStatusToast';
 import { Text as SampleText } from '../../components/Text';
 import { TextField } from '../../components/TextField';
-import type { Language } from '../../i18n';
+import { useT, type Language } from '../../i18n';
 import type { RawEvent } from '../../stores/raw-events.store';
 
 export type DebugScreenProps = {
@@ -42,6 +43,7 @@ export type DebugScreenProps = {
 
 export default function DebugScreen(p: DebugScreenProps) {
   const insets = useSafeAreaInsets();
+  const t = useT();
   const typeStyles = useTypeStyles();
   const [pickup, setPickup] = useState('ផ្សារ');
   return (
@@ -171,6 +173,9 @@ export default function DebugScreen(p: DebugScreenProps) {
         <Banner message="Driver online · អ្នកបើកបរនៅលើបណ្តាញ" />
         <Banner message="Weak connection · ការតភ្ជាប់ខ្សោយ" tone="warning" />
         <Banner message="Connection lost · ដាច់ការតភ្ជាប់" tone="danger" />
+        <SyncStatusPill status="offline" label={t('sync.offline')} />
+        <SyncStatusPill status="reconnecting" label={t('sync.reconnecting')} />
+        <SyncStatusPill status="connected" label={t('sync.connected')} />
       </View>
       <Text style={styles.mono}>{JSON.stringify(p.state, null, 2)}</Text>
       {p.events.map((e, i) => (

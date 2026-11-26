@@ -10,5 +10,6 @@ export async function consume(redis: Redis, key: string, limit: number, windowSe
     if (err) throw err;
     return value as number;
   });
-  return count <= limit ? 0 : ttl;
+  // TTL reads 0 under a second left (-1 without an expiry), and 0 means "allowed": a blocked hit waits at least 1 s
+  return count <= limit ? 0 : Math.max(1, ttl);
 }

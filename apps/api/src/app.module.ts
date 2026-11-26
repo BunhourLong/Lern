@@ -3,6 +3,7 @@ import { APP_INTERCEPTOR, APP_PIPE } from '@nestjs/core';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { LoggerModule } from 'nestjs-pino';
 import { ZodSerializerInterceptor, ZodValidationPipe } from 'nestjs-zod';
+import { AdminModule } from './admin/admin.module';
 import { AppConfigModule } from './app-config/app-config.module';
 import { AuthModule } from './auth/auth.module';
 import { DriversModule } from './drivers/drivers.module';
@@ -40,6 +41,7 @@ export class AppModule {
         PricingModule.forRoot(config),
         RidesModule,
         RealtimeModule,
+        ...(config.ADMIN_ENABLED ? [AdminModule.forRoot(config)] : []),
       ],
       // Request DTOs are validated, and @ZodSerializerDto responses checked, against packages/contracts
       providers: [

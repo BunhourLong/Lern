@@ -24,7 +24,7 @@ it('runs every migration up, down and up again', async () => {
   const hasPostgis = async () =>
     (await ds.query<unknown[]>(`SELECT 1 FROM pg_extension WHERE extname = 'postgis'`)).length === 1;
   const tables = async () =>
-    (await ds.query<{ t: string }[]>(`SELECT to_regclass(t)::text AS t FROM unnest($1::text[]) t`, [['users', 'refresh_tokens', 'user_roles', 'drivers', 'quotes', 'rides', 'idempotency_keys', 'ride_events', 'trip_points', 'outbox_events', 'ride_offers', 'driver_availability_events', 'device_tokens', 'rate_cards', 'driver_ledger_entries', 'ratings']]))
+    (await ds.query<{ t: string }[]>(`SELECT to_regclass(t)::text AS t FROM unnest($1::text[]) t`, [['users', 'refresh_tokens', 'user_roles', 'drivers', 'quotes', 'rides', 'idempotency_keys', 'ride_events', 'trip_points', 'outbox_events', 'ride_offers', 'driver_availability_events', 'device_tokens', 'rate_cards', 'driver_ledger_entries', 'ratings', 'staff_users', 'staff_credentials', 'staff_sessions']]))
       .map((r) => r.t)
       .filter(Boolean);
 
@@ -33,7 +33,7 @@ it('runs every migration up, down and up again', async () => {
 
     await ds.runMigrations();
     expect(await hasPostgis()).toBe(true);
-    expect(await tables()).toEqual(['users', 'refresh_tokens', 'user_roles', 'drivers', 'quotes', 'rides', 'idempotency_keys', 'ride_events', 'trip_points', 'outbox_events', 'ride_offers', 'driver_availability_events', 'device_tokens', 'rate_cards', 'driver_ledger_entries', 'ratings']);
+    expect(await tables()).toEqual(['users', 'refresh_tokens', 'user_roles', 'drivers', 'quotes', 'rides', 'idempotency_keys', 'ride_events', 'trip_points', 'outbox_events', 'ride_offers', 'driver_availability_events', 'device_tokens', 'rate_cards', 'driver_ledger_entries', 'ratings', 'staff_users', 'staff_credentials', 'staff_sessions']);
 
     for (let i = 0; i < ds.migrations.length; i++) await ds.undoLastMigration();
     expect(await hasPostgis()).toBe(false);
@@ -42,6 +42,42 @@ it('runs every migration up, down and up again', async () => {
     await ds.runMigrations();
     expect(await hasPostgis()).toBe(true);
     expect(await ds.showMigrations()).toBe(false); // nothing pending
+
+    // Staff auth (M7.A1a): app users lose the admin role, staff get their own tables
+    const [{ id: roleUserId }] = await ds.query<{ id: string }[]>('INSERT INTO users (phone) VALUES ($1) RETURNING id', ['+85510000014']);
+    await expect(ds.query(`INSERT INTO user_roles (user_id, role) VALUES ($1, 'admin')`, [roleUserId])).rejects.toThrow(/user_roles_role_check/);
+    const staff = `INSERT INTO staff_users (email, display_name) VALUES ($1, 'Ops') RETURNING id`;
+    const [{ id: staffId }] = await ds.query<{ id: string }[]>(staff, ['ops@lern.example']);
+    await expect(ds.query(staff, ['Ops@lern.example'])).rejects.toThrow(/check constraint/); // not normalised
+    await expect(ds.query(staff, [' ops2@lern.example'])).rejects.toThrow(/check constraint/);
+    await expect(ds.query(staff, [''])).rejects.toThrow(/check constraint/);
+    await expect(ds.query(staff, ['ops@lern.example'])).rejects.toThrow(/staff_users_email_lower_idx/);
+    await expect(ds.query(`INSERT INTO staff_users (email, display_name) VALUES ('blank@lern.example', '  ')`)).rejects.toThrow(/check constraint/);
+    await expect(ds.query(`UPDATE staff_users SET status = 'disabled' WHERE id = $1`, [staffId])).rejects.toThrow(/check constraint/);
+    await expect(ds.query(`UPDATE staff_users SET disabled_at = now() WHERE id = $1`, [staffId])).rejects.toThrow(/check constraint/);
+    await expect(ds.query(`UPDATE staff_users SET status = 'gone', disabled_at = now() WHERE id = $1`, [staffId])).rejects.toThrow(/check constraint/);
+    await ds.query(`UPDATE staff_users SET status = 'disabled', disabled_at = now() WHERE id = $1`, [staffId]);
+    await ds.query(`INSERT INTO staff_credentials (staff_user_id, password_hash) VALUES ($1, 'h')`, [staffId]);
+    await expect(ds.query(`UPDATE staff_credentials SET failed_attempts = -1`)).rejects.toThrow(/check constraint/);
+    await ds.query(`INSERT INTO staff_sessions (staff_user_id, token_hash, csrf_token, expires_at) VALUES ($1, 't', 'c', now())`, [staffId]);
+    await expect(
+      ds.query(`INSERT INTO staff_sessions (staff_user_id, token_hash, csrf_token, expires_at) VALUES ($1, 't', 'c', now())`, [staffId]),
+    ).rejects.toThrow(/unique constraint/);
+    await expect(ds.query('DELETE FROM staff_users WHERE id = $1', [staffId])).rejects.toThrow(/staff_credentials/);
+    await ds.query('DELETE FROM staff_credentials');
+    await expect(ds.query('DELETE FROM staff_users WHERE id = $1', [staffId])).rejects.toThrow(/staff_sessions/);
+    // Undone: the staff tables go and user_roles takes 'admin' again. Redone with an 'admin' row present, the up fails its
+    // CHECK loudly and keeps the row (one transaction). The row then goes; the migration stays undone so the history
+    // indexes are the newest one for the checks after this.
+    const staffTables = () =>
+      ds.query(`SELECT to_regclass(t)::text AS t FROM unnest($1::text[]) t`, [['staff_users', 'staff_credentials', 'staff_sessions']]);
+    await ds.undoLastMigration();
+    expect(await staffTables()).toEqual([{ t: null }, { t: null }, { t: null }]);
+    await ds.query(`INSERT INTO user_roles (user_id, role) VALUES ($1, 'admin')`, [roleUserId]);
+    await expect(ds.runMigrations()).rejects.toThrow(/user_roles_role_check/);
+    expect(await ds.query(`SELECT role FROM user_roles WHERE user_id = $1`, [roleUserId])).toEqual([{ role: 'admin' }]);
+    expect(await staffTables()).toEqual([{ t: null }, { t: null }, { t: null }]);
+    await ds.query('DELETE FROM users WHERE id = $1', [roleUserId]);
 
     // The history indexes (M6.11) are the newest migration: undo it, and both are gone. Then the ratings table (M6.10),
     // left undone so the next check's undo reaches the ledger index; the runMigrations() after that check puts all back.
@@ -66,7 +102,8 @@ it('runs every migration up, down and up again', async () => {
     await ds.runMigrations();
 
     // A ride completed before the ledger owes its commission, dated at its completed event; a cancelled one owes
-    // nothing. Undo four times: history indexes, ratings, the ledger's driver index, driver_ledger_entries (each new migration adds one undo here).
+    // nothing. Undo five times: staff auth, history indexes, ratings, the ledger's driver index, driver_ledger_entries (each new migration adds one undo here).
+    await ds.undoLastMigration();
     await ds.undoLastMigration();
     await ds.undoLastMigration();
     await ds.undoLastMigration();
@@ -106,8 +143,9 @@ it('runs every migration up, down and up again', async () => {
     await expect(ds.query(entry, [ledgerDriverId, cancelledId, 'payout', 100])).rejects.toThrow(/driver_ledger_entries_kind_check/);
 
     // A ride booked before commission snapshots gets 15% of trip + surge from its quote's lines, rounded up once,
-    // plus the whole fee: (10100 + 5000) × 15% = 2265 → 2300, + 500. Cards read 1500 bp. Undo five times: history indexes,
+    // plus the whole fee: (10100 + 5000) × 15% = 2265 → 2300, + 500. Cards read 1500 bp. Undo six times: staff auth, history indexes,
     // ratings, the ledger's driver index, driver_ledger_entries, rides_commission (each new migration adds one undo here).
+    await ds.undoLastMigration();
     await ds.undoLastMigration();
     await ds.undoLastMigration();
     await ds.undoLastMigration();
@@ -162,8 +200,9 @@ it('runs every migration up, down and up again', async () => {
     await expect(ds.query(ride, ['+85510000011', cutQuoteId, 1500, 15_700])).rejects.toThrow(/check constraint/);
 
     // A quote priced before surge reads 1.0x and receipt lines from its own card's fee (500 here, so a backfill
-    // that ignored the card would show). Undo six times: history indexes, ratings, the ledger's driver index,
+    // that ignored the card would show). Undo seven times: staff auth, history indexes, ratings, the ledger's driver index,
     // driver_ledger_entries, rides_commission, quotes_surge (each new migration adds one undo here).
+    await ds.undoLastMigration();
     await ds.undoLastMigration();
     await ds.undoLastMigration();
     await ds.undoLastMigration();
@@ -186,8 +225,9 @@ it('runs every migration up, down and up again', async () => {
     ]);
 
     // A quote priced before rate cards existed points at the seeded card of its vehicle type afterwards, and
-    // reads duration 0, the duration it was priced with. Undo nine times: history indexes, ratings, the ledger's driver index,
+    // reads duration 0, the duration it was priced with. Undo ten times: staff auth, history indexes, ratings, the ledger's driver index,
     // driver_ledger_entries, rides_commission, quotes_surge, the created_at index, quotes.duration_s, then rate cards (each new migration adds one undo here).
+    await ds.undoLastMigration();
     await ds.undoLastMigration();
     await ds.undoLastMigration();
     await ds.undoLastMigration();
@@ -210,8 +250,9 @@ it('runs every migration up, down and up again', async () => {
     ]);
 
     // A phone registered before the locale column existed must read English after the migration.
-    // Undo ten times: history indexes, ratings, the ledger's driver index, driver_ledger_entries, rides_commission, quotes_surge,
+    // Undo eleven times: staff auth, history indexes, ratings, the ledger's driver index, driver_ledger_entries, rides_commission, quotes_surge,
     // the created_at index, quotes.duration_s, rate cards, then the locale column (each new migration adds one undo here).
+    await ds.undoLastMigration();
     await ds.undoLastMigration();
     await ds.undoLastMigration();
     await ds.undoLastMigration();
@@ -230,4 +271,6 @@ it('runs every migration up, down and up again', async () => {
   } finally {
     await ds.destroy();
   }
-});
+  // Builds and drops the whole schema (PostGIS included) several times, and every migration adds work: 2–5 s under
+  // full-suite load had reached Jest's 5 s default (user's call, 2026-11-18)
+}, 30_000);

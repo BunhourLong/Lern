@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useStore } from 'zustand';
 import type { Core } from '../../boot/core';
+import { useInteraction } from '../../hooks/use-interaction';
 import { useT } from '../../i18n';
 import DebugScreen from './DebugScreen';
 
@@ -18,11 +19,13 @@ export default function DebugContainer({ core }: Props) {
   const raw = useStore(rawEvents);
   const preference = useStore(language);
   const t = useT();
+  const interact = useInteraction();
   const [phone, setPhone] = useState('+85512345678');
   const [code, setCode] = useState('000000'); // the dev OTP
 
   // A failed command shows on the screen instead of an unhandled rejection
   const run = async (fn: () => Promise<unknown>) => {
+    if (!interact()) return;
     try {
       await fn();
     } catch (err) {
@@ -40,12 +43,18 @@ export default function DebugContainer({ core }: Props) {
         km: t('debug.language.km'),
         sample: `${t('common.retry')} · ${preference.language}`,
         override: preference.override,
-        setOverride: preference.setOverride,
+        setOverride: next => {
+          if (interact()) preference.setOverride(next);
+        },
       }}
       phone={phone}
       code={code}
-      onPhone={setPhone}
-      onCode={setCode}
+      onPhone={next => {
+        if (interact()) setPhone(next);
+      }}
+      onCode={next => {
+        if (interact()) setCode(next);
+      }}
       onSendCode={() => run(() => core.api.requestOtp(phone))}
       onVerify={() => run(() => core.signIn(phone, code))}
       onSignOut={() => run(() => core.signOut())}

@@ -12,9 +12,11 @@
     "migration:run": "pnpm run build && node --env-file-if-exists=.env ../../node_modules/typeorm/cli.js migration:run -d dist/shared/database/data-source.js",
     "migration:revert": "pnpm run build && node --env-file-if-exists=.env ../../node_modules/typeorm/cli.js migration:revert -d dist/shared/database/data-source.js",
     "stats": "pnpm run build && node --env-file-if-exists=.env dist/matching/matching-stats.cli.js",
+    "staff:create-super-admin": "pnpm run build && node --env-file-if-exists=.env dist/admin/create-super-admin.cli.js",
     "migration:generate": "pnpm run build && node --env-file-if-exists=.env ../../node_modules/typeorm/cli.js migration:generate -d dist/shared/database/data-source.js"
   },
   "dependencies": {
+    "@duosecurity/duo_universal": "3.1.0",
     "@lern/contracts": "workspace:*",
     "@nestjs/common": "11.2.7",
     "@nestjs/core": "11.2.7",
@@ -24,7 +26,7 @@
     "@nestjs/typeorm": "11.0.3",
     "@nestjs/websockets": "11.2.7",
     "@socket.io/redis-adapter": "8.3.0",
-    "bullmq": "6.3.15",
+    "bullmq": "6.7.10",
     "firebase-admin": "14.5.0",
     "h3-js": "4.5.0",
     "ioredis": "6.0.0",

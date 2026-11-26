@@ -37,6 +37,8 @@ it('returns typed config with defaults for a valid env', () => {
     DRIVER_DEBT_LIMIT_MINOR: 40000,
     MAINTENANCE: false,
     KHR_PER_USD: 4000,
+    ADMIN_ENABLED: false,
+    ADMIN_COOKIE_SECURE: true,
   });
 });
 
@@ -140,4 +142,71 @@ it('requires the service account path when PUSH_PROVIDER is fcm', () => {
   );
   const config = parseEnv({ ...valid, PUSH_PROVIDER: 'fcm', FIREBASE_SERVICE_ACCOUNT_PATH: '/secrets/firebase.json' });
   expect(config.FIREBASE_SERVICE_ACCOUNT_PATH).toBe('/secrets/firebase.json');
+});
+
+describe('admin (staff) auth', () => {
+  const admin = { ...valid, ADMIN_ENABLED: 'true', STAFF_MFA_PROVIDER: 'dev' };
+
+  it('is off by default, and off it needs no MFA provider even in production', () => {
+    expect(parseEnv({ ...valid, NODE_ENV: 'production' })).toMatchObject({ ADMIN_ENABLED: false, NODE_ENV: 'production' });
+    expect(parseEnv({ ...valid, ADMIN_ENABLED: 'false' }).ADMIN_ENABLED).toBe(false);
+  });
+
+  it('needs an MFA provider chosen when on, with no default', () => {
+    expect(() => parseEnv({ ...admin, STAFF_MFA_PROVIDER: undefined })).toThrow(/STAFF_MFA_PROVIDER/);
+    expect(() => parseEnv({ ...admin, STAFF_MFA_PROVIDER: 'sms' })).toThrow(/STAFF_MFA_PROVIDER/);
+    expect(parseEnv(admin)).toMatchObject({ ADMIN_ENABLED: true, STAFF_MFA_PROVIDER: 'dev', ADMIN_COOKIE_SECURE: true });
+  });
+
+  it('refuses the dev MFA provider and a non-Secure cookie in production', () => {
+    expect(() => parseEnv({ ...admin, NODE_ENV: 'production' })).toThrow(/STAFF_MFA_PROVIDER/);
+    const insecure = () => parseEnv({ ...admin, NODE_ENV: 'production', ADMIN_COOKIE_SECURE: 'false' });
+    expect(insecure).toThrow(/ADMIN_COOKIE_SECURE/);
+    expect(parseEnv({ ...admin, ADMIN_COOKIE_SECURE: 'false' }).ADMIN_COOKIE_SECURE).toBe(false);
+  });
+
+  describe('duo', () => {
+    const duoKeys = {
+      DUO_CLIENT_ID: 'DIXXXXXXXXXXXXXXXXXX',
+      DUO_CLIENT_SECRET: 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef',
+      DUO_API_HOST: 'api-12345678.duosecurity.com',
+      DUO_REDIRECT_URL: 'https://admin.lern.example/admin/mfa/callback',
+    };
+    const duo = { ...admin, STAFF_MFA_PROVIDER: 'duo', ...duoKeys };
+
+    it('accepts duo with its four keys, in dev and production', () => {
+      expect(parseEnv(duo)).toMatchObject({ STAFF_MFA_PROVIDER: 'duo', ...duoKeys });
+      expect(parseEnv({ ...duo, NODE_ENV: 'production' })).toMatchObject({ STAFF_MFA_PROVIDER: 'duo' });
+    });
+
+    it('requires each of the four keys, naming only the missing one', () => {
+      for (const key of Object.keys(duoKeys)) {
+        const run = () => parseEnv({ ...duo, [key]: undefined });
+        expect(run).toThrow(new RegExp(key));
+        for (const other of Object.keys(duoKeys).filter((k) => k !== key)) expect(run).not.toThrow(new RegExp(other));
+      }
+      // Not needed while admin is off
+      expect(parseEnv({ ...valid, STAFF_MFA_PROVIDER: 'duo' }).STAFF_MFA_PROVIDER).toBe('duo');
+    });
+
+    it('checks the client id and secret lengths, never echoing the secret', () => {
+      expect(() => parseEnv({ ...duo, DUO_CLIENT_ID: 'DI-too-short' })).toThrow(/DUO_CLIENT_ID/);
+      const run = () => parseEnv({ ...duo, DUO_CLIENT_SECRET: 'sh0rt-duo-s3cret' });
+      expect(run).toThrow(/DUO_CLIENT_SECRET/);
+      expect(run).not.toThrow(/sh0rt-duo-s3cret/);
+    });
+
+    it('takes a bare API hostname: no scheme, path, port or userinfo', () => {
+      for (const host of ['https://api-1.duosecurity.com', 'api-1.duosecurity.com/x', 'api-1.duosecurity.com:443', 'u@api-1.duosecurity.com', '', 'localhost']) {
+        expect(() => parseEnv({ ...duo, DUO_API_HOST: host })).toThrow(/DUO_API_HOST/);
+      }
+    });
+
+    it('needs an https redirect URL in production; http only for local dev', () => {
+      const http = { ...duo, DUO_REDIRECT_URL: 'http://localhost:5173/admin/mfa/callback' };
+      expect(parseEnv(http).DUO_REDIRECT_URL).toBe(http.DUO_REDIRECT_URL);
+      expect(() => parseEnv({ ...http, NODE_ENV: 'production' })).toThrow(/DUO_REDIRECT_URL/);
+      expect(() => parseEnv({ ...duo, DUO_REDIRECT_URL: 'ftp://lern.example/cb' })).toThrow(/DUO_REDIRECT_URL/);
+    });
+  });
 });

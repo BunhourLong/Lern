@@ -5,18 +5,20 @@ import { makeStyles, type } from '@theme';
 export function Text({
   role = 'body',
   tone = 'default',
+  centered = false,
   accessibilityRole,
   ...props
 }: Omit<TextProps, 'style' | 'role'> & {
   role?: keyof typeof type;
-  tone?: 'default' | 'muted' | 'danger';
+  tone?: 'default' | 'muted' | 'danger' | 'primary';
+  centered?: boolean;
 }) {
   const styles = useStyles();
   return (
     <NativeText
       {...props}
       accessibilityRole={role === 'title' ? 'header' : accessibilityRole}
-      style={[styles[role], styles[tone]]}
+      style={[styles[role], styles[tone], centered && styles.centered]}
     />
   );
 }
@@ -26,4 +28,6 @@ const useStyles = makeStyles(t => ({
   default: { color: t.colors.text },
   muted: { color: t.colors.textMuted },
   danger: { color: t.colors.danger },
+  primary: { color: t.colors.primary },
+  centered: { textAlign: 'center' },
 }));
