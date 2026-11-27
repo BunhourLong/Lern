@@ -52,13 +52,14 @@ jobs:
       - run: ./gradlew -q :app:dependencies --configuration releaseRuntimeClasspath > /dev/null
         working-directory: apps/mobile/android
       # Release runtime only: test/instrumentation classpaths carry tooling CVEs that never ship.
+      # Exclude lern-privacy so --all-projects skips its standalone build.gradle (already scanned via apps/mobile/android); package.json has 0 deps.
       # Fails on high/critical only; accepted risks go in .snyk with a reason and an expiry.
-      - run: npx --yes "$SNYK" test --all-projects --configuration-matching='^releaseRuntimeClasspath$' --severity-threshold=high
+      - run: npx --yes "$SNYK" test --all-projects --exclude=lern-privacy --configuration-matching='^releaseRuntimeClasspath$' --severity-threshold=high
         # Token only on the steps that call Snyk, not every action in the job
         env: { SNYK_TOKEN: '${{ secrets.SNYK_TOKEN }}' }
       # Snapshot main so Snyk re-checks it daily and emails when a new CVE hits a shipped dependency
       - if: github.ref == 'refs/heads/main'
-        run: npx --yes "$SNYK" monitor --all-projects --configuration-matching='^releaseRuntimeClasspath$' --target-reference=main
+        run: npx --yes "$SNYK" monitor --all-projects --exclude=lern-privacy --configuration-matching='^releaseRuntimeClasspath$' --target-reference=main
         env: { SNYK_TOKEN: '${{ secrets.SNYK_TOKEN }}' }
 
   snyk-code:
